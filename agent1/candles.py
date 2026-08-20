@@ -20,6 +20,32 @@ CANDLE_COLUMNS = ("cdl_bull_count_3", "cdl_bear_count_3")
 
 
 def _native_signals(bars: pd.DataFrame):
+    """Score every bar for bullish and bearish candlestick patterns.
+
+    Returns two integer Series aligned to ``bars.index``: how many of the five
+    bullish patterns fired on each bar, and how many bearish.  Not which ones —
+    the identity is discarded on purpose, see the module docstring.
+
+    Everything is vectorised over the whole frame at once.  ``shift(1)`` and
+    ``shift(2)`` give each row a view of the two candles before it, so a
+    three-candle formation is one boolean expression rather than a loop.  The
+    suffix convention is positional: bare ``c`` is the current bar, ``c1`` the
+    previous, ``c2`` the one before that.  Shifts are strictly backwards; a
+    negative shift here would be lookahead.
+
+    Two consequences of counting rather than classifying.  The patterns are not
+    mutually exclusive — a decisive green bar can be both ``engulfing`` and
+    ``marubozu`` and scores 2.  And ``hammer``/``shooting_star`` test shape
+    only, not colour, so a green bar can contribute to the bearish count.  Both
+    are intended: the output is a crude "how bullish does this bar look", not a
+    taxonomy.
+
+    Warm-up is longer than it looks.  ``avg_body`` needs 14 bars, so the two
+    star patterns cannot fire before row 13 — and nothing marks this, because
+    comparing against NaN yields False, not NaN.  Rows 0-12 are therefore
+    counts over four patterns wearing the costume of five.  Treat early rows as
+    unreliable rather than merely low.
+    """
     o = bars["open"].astype(float)
     h = bars["high"].astype(float)
     l = bars["low"].astype(float)
