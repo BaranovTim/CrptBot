@@ -53,8 +53,11 @@ def _double_bottom(
         sep = l2.index - l1.index
         depth = h1.price - max(l1.price, l2.price)
         if cfg.figure_min_sep <= sep <= cfg.figure_max_sep and depth > 0:
+            # how level are the two bottoms? closer together = better W.
+            # scored 0..0.7 so a confirmed-but-unbroken W never reads as done
             sym = abs(l2.price - l1.price)
             base = 0.7 * _clip01(1.0 - sym / tol) if tol > 0 else 0.0
+            # breaking the middle peak (the neckline) completes the figure
             if close > h1.price:
                 base += 0.3 * _clip01((close - h1.price) / (0.5 * atr))
             score = max(score, _clip01(base))
@@ -65,6 +68,8 @@ def _double_bottom(
         sep = t - l1.index
         depth = h1.price - l1.price
         if cfg.figure_min_sep <= sep <= cfg.figure_max_sep and depth > 0 and tol > 0:
+            # only one bottom so far. this is a guess, not a pattern, so it
+            # caps at 0.4 - the second bottom has not happened yet
             prox = abs(close - l1.price)
             score = max(score, 0.4 * _clip01(1.0 - prox / tol))
 

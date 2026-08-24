@@ -71,7 +71,9 @@ def _utc(ts: Any) -> Optional[datetime]:
     if isinstance(ts, datetime):
         return ts.astimezone(timezone.utc) if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
     if isinstance(ts, (int, float)):
-        # Same millisecond-vs-microsecond trap as the kline loader.
+        # guess the unit from the magnitude. a seconds-epoch is ~1.7e9, ms is
+        # ~1.7e12, microseconds ~1.7e15. reading ms as seconds silently gives
+        # you dates in the year 57000 without any error
         v = float(ts)
         unit = 1e6 if v > 1e14 else (1e3 if v > 1e11 else 1.0)
         return datetime.fromtimestamp(v / unit, tz=timezone.utc)
@@ -109,6 +111,9 @@ class NewsItem:
         revised timestamp is the same story, and counting it twice would
         inflate every news-volume feature.
         """
+        # hash the CONTENT only, never the timestamps. the same story
+        # republished with a revised time is still one story, and counting it
+        # twice would inflate every news-volume feature
         payload = f"{self.source}|{self.headline}|{self.body[:500]}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -124,6 +129,10 @@ class NewsItem:
         publication times. It costs a little signal and buys the guarantee
         that a revised timestamp cannot pull an item earlier than you saw it.
         """
+        # max(), not min(). if the source published at 14:00 but we only
+        # pulled it at 14:40, then 14:40 is when it became usable to us.
+        # event_time is deliberately NOT in this list - using it would mean
+        # trading on information nobody had yet
         stamps = [self.published_at]
         if self.ingested_at is not None:
             stamps.append(self.ingested_at)

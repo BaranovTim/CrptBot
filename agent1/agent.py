@@ -42,8 +42,8 @@ from .pivots import Pivot, find_pivots
 from .schema import FEATURE_COLUMNS, validate_features
 from .structure import BOS, CHOCH, SWEEP, StructureEvent, compute_structure
 from .zones import compute_zones
+from core import REQUIRED_OHLCV, check_bars
 
-REQUIRED_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
 @dataclass
@@ -71,20 +71,14 @@ class PatternOutput:
 
 
 def _validate_bars(bars: pd.DataFrame) -> pd.DataFrame:
-    missing = [c for c in REQUIRED_COLUMNS if c not in bars.columns]
-    if missing:
-        raise ValueError(f"bars is missing required columns: {missing}")
-    if not isinstance(bars.index, pd.DatetimeIndex):
-        raise TypeError(
-            "bars must be indexed by close_time as a DatetimeIndex. "
-            "Indexing by open_time makes the close of the current bar visible "
-            "at its open, which is a one-bar look into the future."
-        )
-    if not bars.index.is_monotonic_increasing:
-        raise ValueError("bars index must be sorted ascending")
-    if bars.index.has_duplicates:
-        raise ValueError("bars index contains duplicate timestamps")
-    return bars
+    """Reject input that would produce garbage features.
+
+    Shared with the other agents so all four accept and reject exactly the
+    same things. Agent 1 needs a real UTC index in particular, because its
+    session levels (Asian high/low) and previous-day levels are cut on UTC
+    calendar boundaries - a local-time index moves those windows silently.
+    """
+    return check_bars(bars, REQUIRED_OHLCV, who="Agent 1")
 
 
 class PatternAgent:

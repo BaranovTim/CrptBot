@@ -54,6 +54,9 @@ def large_print_threshold_bucket(tape: pd.DataFrame, cfg: Agent4Config) -> pd.Se
     bars strictly before t, so an unusually large print cannot raise the bar
     it is being measured against.
     """
+    # add up buy-side and sell-side print counts per size bucket.
+    # we count PRINTS here, not dollars - "large" is a percentile of trade
+    # size, and counting dollars gives a wildly different (useless) answer
     counts = tape[BUY_CNT_COLS].to_numpy() + tape[SELL_CNT_COLS].to_numpy()
     trailing = (
         pd.DataFrame(counts, index=tape.index)
@@ -68,13 +71,21 @@ def large_print_threshold_bucket(tape: pd.DataFrame, cfg: Agent4Config) -> pd.Se
 
     with np.errstate(invalid="ignore", divide="ignore"):
         # Share of PRINTS at or above each bucket.
+        # running total starting from the BIGGEST bucket downwards, so
+        # share_from_top[b] answers "what fraction of prints are at least
+        # this big?". flip -> cumsum -> flip back does that in one pass
         share_from_top = np.flip(np.nancumsum(np.flip(arr, axis=1), axis=1), axis=1)
         share_from_top = np.where(grand > 0, share_from_top / grand, np.nan)
 
     # Lowest bucket still capturing at least the target share of prints.
     # share_from_top is non-increasing, so that is the last True in each row.
+    # walk down until we have captured at least the target share of prints.
+    # share_from_top only ever decreases, so the LAST True in each row is the
+    # smallest bucket that still qualifies. argmax on the reversed row finds
+    # it, and the arithmetic turns that back into a normal index
     qualifies = share_from_top >= cfg.large_print_top_share
     last_true = qualifies.shape[1] - 1 - np.argmax(qualifies[:, ::-1], axis=1)
+    # no trailing data yet -> N_BUCKETS, which means "unknown" downstream
     idx = np.where(qualifies.any(axis=1), last_true, N_BUCKETS)
     idx = np.where(np.isnan(grand).ravel() | (grand.ravel() <= 0), N_BUCKETS, idx)
     return pd.Series(idx, index=tape.index, dtype=float)
@@ -82,6 +93,8 @@ def large_print_threshold_bucket(tape: pd.DataFrame, cfg: Agent4Config) -> pd.Se
 
 def _mask_from_bucket(bucket_idx: pd.Series) -> np.ndarray:
     """(n_bars, N_BUCKETS) boolean mask of buckets counting as large."""
+    # broadcast bucket numbers (a row) against each bar's threshold (a
+    # column) to get a per-bar True/False mask of "this bucket counts as large"
     cols = np.arange(N_BUCKETS)[None, :]
     return cols >= bucket_idx.to_numpy()[:, None]
 
@@ -93,7 +106,7 @@ def compute_tape_features(
     idx = bars.index
     buy = tape["buy_notional"].astype(float)
     sell = tape["sell_notional"].astype(float)
-    total = buy + sell
+    total = buy + sell # all aggressive volume this bar
     prints = tape["buy_prints"].astype(float) + tape["sell_prints"].astype(float)
 
     out = pd.DataFrame(index=idx)
@@ -105,10 +118,9 @@ def compute_tape_features(
     out["aggressor_imbalance"] = imbalance
     out["ofi_z"] = rolling_z(buy - sell, cfg.flow_z_window)
 
-    # Cumulative volume delta: the running sum of aggressive buying minus
-    # aggressive selling. Non-stationary by construction, so only its
-    # standardised slope is ever emitted — the same treatment OBV gets in
-    # Agent 2.
+    # cumulative volume delta: keep a running total of aggressive buying minus
+    # aggressive selling. the total drifts forever, so we only ever use its
+    # slope over the last N bars, standardised (same treatment OBV gets in Agent 2)
     cvd = (buy - sell).cumsum()
     out["cvd_slope_z"] = rolling_z(cvd.diff(cfg.cvd_slope_bars), cfg.flow_z_window)
 
@@ -122,10 +134,12 @@ def compute_tape_features(
     # --- large prints -----------------------------------------------------
     bucket_idx = large_print_threshold_bucket(tape, cfg)
     mask = _mask_from_bucket(bucket_idx)
+    # multiply the notional histogram by the mask and sum: this adds up only
+    # the dollars that came from prints big enough to count as large
     big_buy = (tape[BUY_COLS].to_numpy() * mask).sum(axis=1)
     big_sell = (tape[SELL_COLS].to_numpy() * mask).sum(axis=1)
-    big_total = big_buy + big_sell
-    unknown = bucket_idx >= N_BUCKETS          # threshold not yet estimable
+    big_total = big_buy + big_sell # volume from large prints only
+    unknown = bucket_idx >= N_BUCKETS          # not enough history to set a threshold yet
 
     with np.errstate(invalid="ignore", divide="ignore"):
         lp_imb = np.where(big_total > 0, (big_buy - big_sell) / big_total, np.nan)
@@ -142,7 +156,7 @@ def compute_tape_features(
     out["max_print_usd_z"] = rolling_z(
         tape["max_print_notional"].astype(float), cfg.large_print_z_window)
 
-    seen = (pd.Series(big_total, index=idx) > 0) & ~unknown
+    seen = (pd.Series(big_total, index=idx) > 0) & ~unknown # did a large print actually happen on this bar
     pos = pd.Series(np.arange(len(idx), dtype=float), index=idx)
     last = pos.where(seen).ffill()
     out["bars_since_large_print"] = pos - last

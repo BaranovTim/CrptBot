@@ -38,6 +38,8 @@ def compute_positioning_features(
     # --- open interest ----------------------------------------------------
     if oi is not None and not oi.empty and "open_interest" in oi.columns:
         series = pd.to_numeric(oi["open_interest"], errors="coerce")
+        # percent change, not raw change: open interest grows over the years,
+        # so a raw difference means something different in 2023 vs 2026
         change = series.pct_change(cfg.oi_change_bars)
         out["oi_change_pct"] = change.replace([np.inf, -np.inf], np.nan)
         out["oi_change_z"] = rolling_z(out["oi_change_pct"], cfg.oi_z_window)
@@ -56,8 +58,10 @@ def compute_positioning_features(
     if has_liq:
         longs = pd.to_numeric(liq["long_liquidated"], errors="coerce").fillna(0.0)
         shorts = pd.to_numeric(liq["short_liquidated"], errors="coerce").fillna(0.0)
-        total = longs + shorts
+        total = longs + shorts # all forced closures this bar
         with np.errstate(invalid="ignore", divide="ignore"):
+            # shorts minus longs, so POSITIVE means shorts are the ones being
+            # force-closed. that is forced buying, hence bullish
             imb = ((shorts - longs) / total.where(total > 0)).replace(
                 [np.inf, -np.inf], np.nan)
         out["liq_imbalance_1h"] = imb.clip(-1.0, 1.0)

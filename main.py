@@ -20,6 +20,7 @@ from pathlib import Path
 import pandas as pd
 
 import config
+from core import describe_bars_problem, feature_report
 from agent1 import Agent1Config, PatternAgent
 from agent2 import Agent2Config, IndicatorAgent
 from agent3 import Agent3Config, NewsAgent
@@ -87,6 +88,9 @@ def report(name: str, agent, bars: pd.DataFrame, groups, rows: int) -> pd.DataFr
     for group, cols in groups.items():
         filled = features[list(cols)].iloc[warm:].notna().mean().mean()
         print(f"  {group:<11} {len(cols):>2} cols   {filled:5.1%} populated")
+    health = feature_report(features, warm, name)
+    if health.dead or health.constant:
+        print("  " + str(health).split("\n", 1)[1].replace("\n", "\n  "))
     return features
 
 
@@ -163,6 +167,11 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     bars = load_bars(args)
 
+    # warn about data that is legal but produces meaningless features
+    problem = describe_bars_problem(bars)
+    if problem:
+        print(f"\n  DATA QUALITY: {problem}")
+
     import agent1.schema as a1s
     import agent2.schema as a2s
 
@@ -192,6 +201,9 @@ def main(argv=None) -> int:
         for group, cols in a3s.FEATURE_GROUPS.items():
             filled = f3[list(cols)].notna().mean().mean()
             print(f"  {group:<11} {len(cols):>2} cols   {filled:5.1%} populated")
+        h3 = feature_report(f3, a3.warmup_bars, "Agent 3")
+        if h3.dead or h3.constant:
+            print("  " + str(h3).split("\n", 1)[1].replace("\n", "\n  "))
         frames["agent3"] = f3
         warmups.append(a3.warmup_bars)
     if args.agent in ("4", "all"):
@@ -205,6 +217,9 @@ def main(argv=None) -> int:
         for group, cols in a4s.FEATURE_GROUPS.items():
             filled = f4[list(cols)].iloc[a4.warmup_bars:].notna().mean().mean()
             print(f"  {group:<12} {len(cols):>2} cols   {filled:5.1%} populated")
+        h4 = feature_report(f4, a4.warmup_bars, "Agent 4")
+        if h4.dead or h4.constant:
+            print("  " + str(h4).split("\n", 1)[1].replace("\n", "\n  "))
         frames["agent4"] = f4
         warmups.append(a4.warmup_bars)
 

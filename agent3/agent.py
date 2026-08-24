@@ -45,6 +45,7 @@ from .config import DEFAULT_CONFIG, Agent3Config
 from .features import compute_news_features
 from .schema import FEATURE_COLUMNS
 from .scorers import CachedScorer, LexiconScorer, NewsScorer
+from core import check_bars
 
 
 @dataclass
@@ -106,16 +107,11 @@ class NewsAgent:
         scores: Optional[Dict[str, NewsScore]] = None,
     ) -> pd.DataFrame:
         """News features for every bar, indexed by close_time."""
-        if not isinstance(bars.index, pd.DatetimeIndex):
-            raise TypeError("bars must be indexed by close_time as a DatetimeIndex")
-        if not bars.index.is_monotonic_increasing:
-            raise ValueError("bars index must be sorted ascending")
-        if bars.index.tz is None:
-            raise ValueError(
-                "bars index must be timezone-aware (UTC). News timestamps are "
-                "absolute; comparing them against naive local times silently "
-                "shifts every item by the UTC offset."
-            )
+        # Agent 3 only reads the bar index - it never touches OHLCV - so no
+        # price columns are required. The index itself must be exact, though:
+        # news timestamps are absolute instants, and comparing them against a
+        # naive local-time index shifts every item by the UTC offset.
+        check_bars(bars, required=(), who="Agent 3")
         if scores is None:
             scores = self.score_items(items)
         return compute_news_features(bars, items, scores, self.cfg)

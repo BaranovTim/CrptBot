@@ -64,8 +64,11 @@ def _find_order_block(
     event: StructureEvent, max_lookback: int,
 ) -> Optional[Zone]:
     """The last candle opposing the impulse, searching back from the break."""
+    # search backwards from the breaking bar toward the swing that started
+    # the move, but never further than max_lookback bars
     start = max(0, event.leg_start, event.bar - max_lookback)
     for j in range(event.bar, start - 1, -1):
+        # for an up-break we want the last RED candle before the push up
         opposing = c[j] < o[j] if event.direction == 1 else c[j] > o[j]
         if opposing:
             return Zone(
@@ -98,19 +101,19 @@ def compute_zones(
     # one column is 0-filled rather than NaN-filled.
     cols["inside_ob"] = np.zeros(n)
 
-    obs: List[Zone] = []
-    fvgs: List[Zone] = []
+    obs: List[Zone] = [] # order blocks that are still alive
+    fvgs: List[Zone] = [] # gaps that price has not filled yet
 
     for t in range(n):
         # ---- 1. retire zones this bar invalidated -------------------------
-        # A bullish order block that price closes below has failed; it is no
-        # longer support.  Merely touching it is not invalidation — being
-        # revisited is the entire premise of the zone.
+        # a bullish zone that price CLOSED below has failed - it is not
+        # support any more, so drop it. note: merely touching it is fine,
+        # price coming back to the zone is the whole point of the zone
         obs = [z for z in obs if not (
             (z.direction == 1 and c[t] < z.bottom) or
             (z.direction == -1 and c[t] > z.top)
         )]
-        # An FVG is closed once price has traded all the way back through it.
+        # a gap is "closed" once price has traded all the way back through it
         fvgs = [z for z in fvgs if not (
             (z.direction == 1 and l[t] <= z.bottom) or
             (z.direction == -1 and h[t] >= z.top)
@@ -124,8 +127,12 @@ def compute_zones(
 
         if t >= 2 and not np.isnan(a[t]) and a[t] > 0:
             min_size = cfg.fvg_min_size_atr * a[t]
+            # a fair value gap is a 3-candle hole: this bar's low is still
+            # ABOVE the high from two bars ago, so no trading happened in
+            # between. price often comes back to fill it
             if l[t] > h[t - 2] and (l[t] - h[t - 2]) >= min_size:
                 fvgs.append(Zone(float(h[t - 2]), float(l[t]), 1, t, t - 1))
+            # mirror case: this bar's high is below the low from two bars ago
             elif h[t] < l[t - 2] and (l[t - 2] - h[t]) >= min_size:
                 fvgs.append(Zone(float(h[t]), float(l[t - 2]), -1, t, t - 1))
 
@@ -135,13 +142,17 @@ def compute_zones(
             fvgs = fvgs[-cfg.max_active_zones:]
 
         # ---- 3. reduce the live lists to scalars --------------------------
-        price, atr_t = c[t], a[t]
+        price, atr_t = c[t], a[t] # this bar's close and its ATR
         if np.isnan(atr_t) or atr_t <= 0:
             continue
 
+        # THE REDUCTION: there may be 0 or 20 live zones, but the model needs
+        # a fixed number of columns. so we keep only "how far to the nearest
+        # one", "how big is it", "how old", "are we inside it"
         bull = [z for z in obs if z.direction == 1]
         bear = [z for z in obs if z.direction == -1]
         if bull:
+            # nearest = smallest absolute distance, above or below
             z = min(bull, key=lambda z: abs(z.signed_distance(price)))
             cols["dist_to_bull_ob_atr"][t] = z.signed_distance(price) / atr_t
         if bear:
@@ -149,7 +160,7 @@ def compute_zones(
             cols["dist_to_bear_ob_atr"][t] = z.signed_distance(price) / atr_t
         if obs:
             nearest = min(obs, key=lambda z: abs(z.signed_distance(price)))
-            cols["nearest_ob_age_bars"][t] = t - nearest.created_at
+            cols["nearest_ob_age_bars"][t] = t - nearest.created_at # how long ago we learned about it
             # Overlapping zones of both kinds: the newer one wins, since it
             # was drawn by the more recent break.
             inside = [z for z in obs if z.contains(price)]

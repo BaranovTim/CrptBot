@@ -44,6 +44,7 @@ from .netflow import NetflowProvider, NullNetflowProvider, compute_netflow_featu
 from .positioning import compute_positioning_features
 from .schema import COVERAGE_COLUMNS, FEATURE_COLUMNS, validate_features
 from .tape import compute_tape_features, kline_flow_fallback
+from core import REQUIRED_OHLCV, check_bars
 
 
 @dataclass
@@ -91,10 +92,10 @@ class FlowAgent:
         netflow: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Flow features for every bar, indexed by close_time."""
-        if not isinstance(bars.index, pd.DatetimeIndex):
-            raise TypeError("bars must be indexed by close_time as a DatetimeIndex")
-        if not bars.index.is_monotonic_increasing:
-            raise ValueError("bars index must be sorted ascending")
+        # Same check as the other agents. Volume and the taker-buy column are
+        # what the kline fallback runs on, so a frame without them would
+        # quietly produce an all-NaN flow block instead of failing.
+        check_bars(bars, REQUIRED_OHLCV, who="Agent 4")
 
         have_tape = tape is not None and not tape.empty
         aligned = align_tape(tape, bars.index) if have_tape \

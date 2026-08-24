@@ -108,13 +108,18 @@ def _aggregate_chunk(df: pd.DataFrame, bars_index: pd.DatetimeIndex) -> pd.DataF
     notional = price * qty
     ts = _to_utc(df["transact_time"])
 
-    # m == True  ->  buyer was the maker  ->  the SELLER aggressed.
     maker_buy = df["is_buyer_maker"].astype(str).str.lower().isin(("true", "1"))
+    # THE FLIP. if the buyer was the maker, their bid was just sitting there
+    # and the SELLER crossed the spread to hit it - so this is a market sell.
+    # the ~ is what makes the whole project's flow direction correct
     is_aggressive_buy = ~maker_buy
 
     ok = notional.notna() & ts.notna()
+    # find the first bar whose close_time is at or after each print.
+    # searching the real bar index instead of rounding to the hour avoids the
+    # off-by-one-millisecond trap in Binance's close_time convention
     slot = np.searchsorted(bars_index.values, ts[ok].values, side="left")
-    inside = slot < len(bars_index)
+    inside = slot < len(bars_index)      # prints past the last bar are not ours yet
     frame = pd.DataFrame({
         "bar": pd.DatetimeIndex(bars_index[np.clip(slot, 0, len(bars_index) - 1)]),
         "notional": notional[ok],
@@ -143,6 +148,8 @@ def _aggregate_chunk(df: pd.DataFrame, bars_index: pd.DatetimeIndex) -> pd.DataF
 
     # One histogram column per (side, bucket), built with a pivot rather than
     # a per-group loop — this runs over millions of prints per day.
+    # give each (side, size-bucket) pair its own column number: buys land in
+    # 0..13, sells in 14..27. one pivot then fills the whole histogram
     frame["hcol"] = frame["bucket"] + np.where(frame["buy"], 0, N_BUCKETS)
     notional_hist = (
         frame.pivot_table(index="bar", columns="hcol", values="notional",

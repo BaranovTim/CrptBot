@@ -56,22 +56,36 @@ def find_pivots(
     if confirm_bars < right:
         raise ValueError("confirm_bars must be >= right")
 
+    # work with plain 0..n-1 positions, not timestamps, so "3 bars back" is
+    # just index-3 and never depends on the calendar
     h = high.reset_index(drop=True).astype(float)
     l = low.reset_index(drop=True).astype(float)
     n = len(h)
 
+    # highest high in the `left` bars BEFORE this one.
+    # shift(1) is what makes it "before" instead of "including"
     left_max = h.rolling(left, min_periods=left).max().shift(1)
+    # highest high in the `right` bars AFTER this one
     right_max = rolling_max_forward(h, right)
+    # same two windows for lows
     left_min = l.rolling(left, min_periods=left).min().shift(1)
     right_min = rolling_min_forward(l, right)
 
+    # a swing high = taller than everything on its left, and at least as tall
+    # as everything on its right.
+    # strict `>` on the left and loose `>=` on the right is the tie-break rule:
+    # if five bars share the same high, only the FIRST one becomes the pivot
     is_high = (h > left_max) & (h >= right_max)
     is_low = (l < left_min) & (l <= right_min)
 
     pivots: List[Pivot] = []
+    # np.flatnonzero gives the bar numbers where the test came out True.
+    # na_value=False means "not enough bars yet" counts as not-a-pivot
     for i in np.flatnonzero(is_high.to_numpy(na_value=False)):
         i = int(i)
-        c = i + confirm_bars
+        c = i + confirm_bars      # the bar where we are ALLOWED to know this
+        # if confirmation would land past the end of the data we never learned
+        # about it in time, so we must not use it at all
         if c < n:
             pivots.append(Pivot(index=i, confirmed_at=c, price=float(h.iat[i]), kind=HIGH))
     for i in np.flatnonzero(is_low.to_numpy(na_value=False)):
@@ -80,7 +94,8 @@ def find_pivots(
         if c < n:
             pivots.append(Pivot(index=i, confirmed_at=c, price=float(l.iat[i]), kind=LOW))
 
-    # Sort by the bar we learn about them, then by the bar they happened on.
+    # sort by the bar we LEARN about them, not the bar they happened on -
+    # that is the order a live system would receive them in
     pivots.sort(key=lambda p: (p.confirmed_at, p.index, -p.kind))
     return pivots
 

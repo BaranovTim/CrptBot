@@ -73,5 +73,7 @@ def compute_netflow_features(
     # Inflow is bearish, so the bullish-positive direction is the NEGATIVE of
     # the flow's sign. Getting this backwards makes the model read incoming
     # supply as a buy signal.
+    # minus sign on purpose. coins moving ONTO an exchange is supply arriving
+    # somewhere it can be sold = bearish, so bullish-positive is the negative
     out["exchange_netflow_direction"] = -np.sign(flow).replace(0.0, np.nan)
     return out

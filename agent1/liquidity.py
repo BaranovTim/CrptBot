@@ -29,6 +29,8 @@ LIQUIDITY_COLUMNS = (
 
 
 def _owning_day(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    # step back 1 nanosecond before flooring. a bar that closes at exactly
+    # 00:00:00 belongs to the day that just ENDED, not the one starting
     return (index - pd.Timedelta(nanoseconds=1)).floor("D")
 
 
@@ -38,6 +40,8 @@ def _owning_hour(index: pd.DatetimeIndex) -> np.ndarray:
 
 def _equal_level(prices: List[float], tol: float, ref: float) -> Optional[float]:
     """Nearest cluster of >=2 swings sitting within ``tol`` of each other."""
+    # try each swing as the centre and see how many others sit near it.
+    # 2+ swings at almost the same price = a shelf of stop orders resting there
     best = None
     for anchor in prices:
         cluster = [p for p in prices if abs(p - anchor) <= tol]
@@ -52,6 +56,8 @@ def _previous_day_levels(bars: pd.DataFrame) -> pd.DataFrame:
     day = _owning_day(bars.index)
     daily = pd.DataFrame({"high": bars["high"].to_numpy(), "low": bars["low"].to_numpy()},
                          index=day).groupby(level=0).agg({"high": "max", "low": "min"})
+    # shift(1) so today only ever sees YESTERDAY's finished high/low,
+    # never today's own still-forming range
     prev = daily.shift(1)            # yesterday's completed range
     return pd.DataFrame(
         {"pdh": prev["high"].reindex(day).to_numpy(),

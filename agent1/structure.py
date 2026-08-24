@@ -78,15 +78,17 @@ def compute_structure(
     active_sl: Optional[Pivot] = None
     range_sh: Optional[Pivot] = None    # newest swing high, broken or not
     range_sl: Optional[Pivot] = None
-    trend = 0
+    trend = 0 # 0 = no trend yet, +1 = up, -1 = down
     last_bos: Optional[int] = None
     last_choch: Optional[int] = None
-    consec_bos = 0
+    consec_bos = 0 # how many continuations in a row without a reversal
     last_sweep: Optional[int] = None
     last_sweep_dir = 0
 
+    # walk forward one bar at a time, exactly like a live system would
     for t in range(n):
         # ---- 1. ingest pivots that become usable on this bar --------------
+        # only pivots whose confirmed_at == t. anything later is still unknown
         for p in pending.get(t, []):
             if p.kind == HIGH:
                 range_sh = p
@@ -102,13 +104,17 @@ def compute_structure(
                     active_sl = p
 
         # ---- 2. did this bar take out a level? ----------------------------
-        up_probe = c[t] if break_mode == "close" else h[t]
+        # "close" mode = the level only counts as broken if the bar CLOSED
+        # beyond it. "wick" mode = any trade beyond it counts. close is
+        # quieter, wick catches stop-hunts
+        up_probe = c[t] if break_mode == "close" else h[t] # what price we test the level against
         dn_probe = c[t] if break_mode == "close" else l[t]
         broke_up = active_sh is not None and up_probe > active_sh.price
         broke_dn = active_sl is not None and dn_probe < active_sl.price
 
-        # An outside bar can take out both sides.  Let the bar's own body
-        # decide which break is the real one, rather than list order.
+        # a huge bar can poke through both sides. let the candle's own body
+        # decide which break was the real one - green bar means the up-break
+        # is the story, red bar means the down-break is
         if broke_up and broke_dn:
             if c[t] >= o[t]:
                 broke_dn = False
@@ -116,6 +122,9 @@ def compute_structure(
                 broke_up = False
 
         if broke_up:
+            # THIS is the only difference between BOS and CHoCH: the same
+            # break is a continuation if we were already going up, and a
+            # change-of-character if we were going down
             kind = BOS if trend == 1 else CHOCH
             if kind == BOS:
                 consec_bos += 1
@@ -123,7 +132,7 @@ def compute_structure(
             else:
                 consec_bos = 0
                 last_choch = t
-            trend = 1
+            trend = 1      # we are now officially in an uptrend
             events.append(
                 StructureEvent(
                     bar=t,
@@ -134,7 +143,9 @@ def compute_structure(
                     leg_start=active_sl.index if active_sl is not None else max(0, t - 1),
                 )
             )
-            active_sh = None
+            # the level has been used up. we wait for a NEW confirmed swing
+            # high before there is anything to break again
+            active_sh = None # level used up, wait for a new swing high
         elif broke_dn:
             kind = BOS if trend == -1 else CHOCH
             if kind == BOS:
@@ -154,7 +165,7 @@ def compute_structure(
                     leg_start=active_sh.index if active_sh is not None else max(0, t - 1),
                 )
             )
-            active_sl = None
+            active_sl = None # level used up, wait for a new swing low
         else:
             # ---- 3. no break: was liquidity taken and rejected? -----------
             # Wick through the level, close back inside.  Stops above the
@@ -172,16 +183,22 @@ def compute_structure(
                 )
 
         # ---- 4. emit this bar's row ---------------------------------------
+        # before the first break we have no trend at all. leave those bars
+        # NaN rather than guessing a direction
         if trend != 0:
             trend_arr[t] = trend
             consec_arr[t] = consec_bos
-        if last_bos is not None:
-            since_bos[t] = t - last_bos
+        if last_bos is not None: # only fill this in once a BOS has actually happened
+            since_bos[t] = t - last_bos # how many bars ago, in bars not hours
         if last_choch is not None:
             since_choch[t] = t - last_choch
         if last_sweep is not None:
             since_sweep[t] = t - last_sweep
             sweep_dir_arr[t] = last_sweep_dir
+        # where price sits between the newest swing low and swing high.
+        # 0 = at the low (discount), 1 = at the high (premium).
+        # deliberately NOT clipped: >1 means price broke out above the range,
+        # which is real information that clipping would erase
         if range_sh is not None and range_sl is not None:
             hi, lo = range_sh.price, range_sl.price
             if hi > lo:

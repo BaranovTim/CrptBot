@@ -66,6 +66,8 @@ def compute_fib(bars: pd.DataFrame, pivots: List[Pivot], atr: pd.Series) -> pd.D
         pos[t] = (c[t] - lo) / span # Calculate the position of the current price within the leg, normalized to [0, 1]
         leg_dir[t] = 1.0 if up_leg else -1.0 # Куда шла нога: 1.0 вверх (закончилась вершиной), -1.0 вниз (закончилась дном)
         # Retracement measured back from where the leg ended.
+        # retracement is measured BACK from where the leg ended.
+        # up-leg: come down 61.8% from the high. down-leg: come up from the low
         level = hi - GOLDEN * span if up_leg else lo + GOLDEN * span # Calculate the 0.618 Fibonacci retracement level based on the leg direction
         d618[t] = (level - c[t]) / atr_t # Calculate the distance from the current price to the 0.618 Fibonacci level, normalized by ATR
 

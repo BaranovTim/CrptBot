@@ -46,6 +46,8 @@ def _relevant(item: NewsItem, cfg: Agent3Config) -> bool:
     ticker but moves everything. An item tagged only for other assets is
     dropped, so ETH news does not quietly drive BTC features.
     """
+    # no ticker on the item = treat it as market-wide and keep it.
+    # "Fed hikes 50bp" mentions no coin but moves every coin
     if not item.assets:
         return cfg.include_untagged
     return cfg.asset.upper() in {a.upper() for a in item.assets}
@@ -53,7 +55,12 @@ def _relevant(item: NewsItem, cfg: Agent3Config) -> bool:
 
 def _weight(age_h: float, score: NewsScore, cfg: Agent3Config) -> float:
     """Credibility x exponential decay on the item's own horizon."""
+    # each item fades on its OWN scored horizon, not a single global speed.
+    # a regulatory ruling scored at 720h barely fades over a day; a
+    # liquidation headline scored at 1h is gone within the session
     half_life = max(cfg.min_half_life_hours, score.horizon_hours / 2.0)
+    # every half_life hours, the weight halves. multiply by how much we trust
+    # the source, so a rumour counts less than a regulator filing
     return score.credibility * (0.5 ** (age_h / half_life))
 
 
@@ -73,7 +80,7 @@ def compute_news_features(
     """One row per bar, indexed by close_time."""
     idx = bars.index
     n = len(idx)
-    lag = timedelta(seconds=cfg.safety_lag_seconds)
+    lag = timedelta(seconds=cfg.safety_lag_seconds) # extra delay in case the source revised its timestamp
 
     # Sort by the only clock we trust. bisect over this list is what enforces
     # "nothing visible before observable_at".
@@ -81,8 +88,11 @@ def compute_news_features(
     for item in items:
         if not _relevant(item, cfg):
             continue
+        # observable_at, NOT when the event happened. this single choice is
+        # the whole lookahead defence for Agent 3
         usable.append((item.observable_at(lag).timestamp(), item,
                        scores.get(item.id)))
+    # sorted by that timestamp so we can binary-search it below
     usable.sort(key=lambda r: r[0])
     obs_ts = [r[0] for r in usable]
 
@@ -100,11 +110,14 @@ def compute_news_features(
 
     for t in range(n):
         now = bar_ts[t]
-        # bisect_right => strictly "observable at or before this bar's close".
+        # bisect_right finds the cut-off position for "observable at or before
+        # this bar closed". everything from hi onwards is still in the future
+        # as far as this bar is concerned
         hi = bisect.bisect_right(obs_ts, now)
-        if hi == 0:
-            continue
+        if hi == 0: # nothing was knowable yet at this bar
+            continue      # nothing was knowable yet
 
+        # and the other end of the window: 24h before now
         lo_l = bisect.bisect_left(obs_ts, now - win_l)
         window_l = usable[lo_l:hi]
         if not window_l and last_seen_bar is not None:
@@ -116,8 +129,8 @@ def compute_news_features(
         last_seen_bar = t
         cols["bars_since_news"][t] = 0.0
 
-        lo_m = bisect.bisect_left(obs_ts, now - win_m)
-        lo_s = bisect.bisect_left(obs_ts, now - win_s)
+        lo_m = bisect.bisect_left(obs_ts, now - win_m) # 6h window start
+        lo_s = bisect.bisect_left(obs_ts, now - win_s) # 1h window start
 
         def stats(rows):
             vals, wts, dirs = [], [], []
@@ -158,6 +171,10 @@ def compute_news_features(
             # is saying the same thing — which, given that almost all crypto
             # coverage is bullish, is the common case and therefore weak
             # evidence. Disagreement is the informative state.
+            # how much the sources disagree. near 0 means they all say the
+            # same thing - which is the usual case, since nearly all crypto
+            # coverage is bullish, so agreement is weak evidence.
+            # disagreement is the interesting state
             cols["news_sentiment_dispersion_24h"][t] = min(
                 1.0, float(np.std(d_l)) if len(d_l) > 1 else 0.0
             )
@@ -182,6 +199,8 @@ def compute_news_features(
     # Unusual news volume, standardised against a ROLLING baseline. A
     # full-sample mean here would leak the whole future into every row —
     # the same normalisation trap as Agent 2, in a different file.
+    # is the current news volume unusual for this coin? compare the 24h count
+    # against its own recent history
     c24 = out["news_count_24h"]
     w = cfg.baseline_bars
     mp = min(w, max(24, w // 4))     # min_periods may never exceed the window

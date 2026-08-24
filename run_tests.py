@@ -26,6 +26,7 @@ MODULES = [
     "tests.test_agent4_tape",
     "tests.test_agent4_no_lookahead",
     "tests.test_agent4_schema",
+    "tests.test_robustness",
 ]
 
 

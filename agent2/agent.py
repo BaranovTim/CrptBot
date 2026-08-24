@@ -37,8 +37,8 @@ from . import indicators as ind
 from .config import DEFAULT_CONFIG, Agent2Config
 from .htf import compute_htf
 from .schema import FEATURE_COLUMNS, validate_features
+from core import REQUIRED_OHLCV, check_bars
 
-REQUIRED_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
 @dataclass
@@ -65,19 +65,12 @@ class IndicatorOutput:
 
 
 def _validate_bars(bars: pd.DataFrame) -> pd.DataFrame:
-    missing = [c for c in REQUIRED_COLUMNS if c not in bars.columns]
-    if missing:
-        raise ValueError(f"bars is missing required columns: {missing}")
-    if not isinstance(bars.index, pd.DatetimeIndex):
-        raise TypeError(
-            "bars must be indexed by close_time as a DatetimeIndex. Indexing by "
-            "open_time makes the bar's own close visible at its open."
-        )
-    if not bars.index.is_monotonic_increasing:
-        raise ValueError("bars index must be sorted ascending")
-    if bars.index.has_duplicates:
-        raise ValueError("bars index contains duplicate timestamps")
-    return bars
+    """Reject input that would produce garbage features.
+
+    Volume is genuinely required here, not decorative: MFI, CMF and OBV all
+    read it, and without it those three columns would be silently all-NaN.
+    """
+    return check_bars(bars, REQUIRED_OHLCV, who="Agent 2")
 
 
 class IndicatorAgent:
