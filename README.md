@@ -1,8 +1,8 @@
 # TradingBot — detector agents
 
-**Agent 1** (patterns / smart money), **Agent 2** (indicators), **Agent 3** (news).
-All three measure. None of them judges — that is Agent 5's job, and it is the
-only block that learns.
+**Agent 1** (patterns / smart money), **Agent 2** (indicators), **Agent 3**
+(news), **Agent 4** (order flow). All four measure. None of them judges — that
+is Agent 5's job, and it is the only block that learns.
 
 ## Agent 1 — patterns & smart money
 
@@ -36,12 +36,13 @@ weights *are* Agent 5.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py            # 70 tests, no network needed
+python3 run_tests.py            # 97 tests, no network needed
 python3 run_tests.py --real     # + leak checks on live Binance data
 python3 main.py --offline       # synthetic bars
 python3 main.py                 # real BTCUSDT 1h perps, both agents
 python3 main.py --agent 2       # indicators only
 python3 main.py --agent 3 --offline   # news, synthetic headlines
+python3 main.py --agent 4 --tape      # order flow (downloads aggTrades)
 ```
 
 ```python
@@ -401,6 +402,152 @@ and the most likely to add nothing.
 
 ---
 
+---
+
+# Agent 4 — order flow & positioning
+
+```python
+from agent4 import FlowAgent
+from marketdata.aggtrades import load_tape_bars
+from marketdata.derivatives import load_open_interest, resample_to_bars
+
+tape = load_tape_bars(bars.index, "BTCUSDT", start="2026-05-01")
+oi   = resample_to_bars(load_open_interest("BTCUSDT", "2026-05-01"), bars.index)
+
+agent = FlowAgent()
+features = agent.compute(bars, tape=tape, open_interest=oi)   # 22 columns
+```
+
+Agents 1 and 2 read price. Order flow is the **cause** of which price is the
+effect, so this is the first block reading something upstream of the thing it
+predicts. That's the reason to expect more from it than from chart geometry —
+a hypothesis to measure, not a promise.
+
+## The three tiers, and why netflow isn't bundled
+
+The plan calls this *"a data-buying problem, not a modelling one"*, so the
+inputs are split by what they cost:
+
+| Tier | Inputs | Status |
+|---|---|---|
+| free, already downloaded | `taker_buy_ratio`, trade counts, avg fill size | ride inside every kline |
+| free, needs downloading | aggTrades (the tape), open-interest metrics | `--tape` / `load_open_interest` |
+| paid | exchange netflow (Glassnode / Nansen / Arkham) | **not bundled** |
+
+Agents 1 and 2 were deliberately kept away from the kline order-flow columns
+so this block could claim them in the ablation — if something upstream had
+quietly consumed them, no ablation could attribute their contribution.
+
+**No paid client ships here on purpose.** Buying a netflow feed before the
+harness can measure whether Agent 4 contributes anything is spending money to
+answer a question the ablation answers for free. Implement `NetflowProvider`
+against whichever vendor you pick; nothing else changes.
+
+There is also **no wallet-following path**, and that's deliberate. Named-whale
+tracking is lagging by construction — you see the transfer after it lands —
+and it's actively gamed by people who know they're watched. Large prints and
+netflow are the two whale signals that hold up.
+
+## `is_buyer_maker` — the flag everyone inverts
+
+Every aggTrade carries it, and it is the single most commonly flipped field in
+crypto quant work:
+
+```
+m == True    the BUYER was the maker  ->  the SELLER crossed  ->  aggressive SELL
+m == False   the buyer was the taker  ->  the BUYER crossed   ->  aggressive BUY
+```
+
+Invert it and every flow feature in the project flips sign — silently. No
+exception, plausible magnitudes, and the model dutifully learns that
+aggressive selling precedes rallies. Pinned against hand-built cases in
+`tests/test_agent4_tape.py`, and verified to fire when planted.
+
+It also has an **independent cross-check on real data**, which is stronger
+than any unit test: `taker_buy_ratio` comes from Binance's own
+`taker_buy_base_volume` kline field, while `aggressor_imbalance` comes from
+our own aggTrades parsing. Two unrelated paths, and on real BTCUSDT bars they
+correlate **+1.000** with 100% sign agreement. If the flag were inverted the
+correlation would be −1.
+
+Two more sign traps, both tested: a liquidation with `side=SELL` means a
+**long** was force-closed (bearish), and exchange **inflow** is supply
+arriving to be sold (bearish), so the bullish-positive direction is the
+negative of the flow.
+
+## The histogram trick
+
+Per-bar totals throw away the size distribution, which is exactly what
+large-print detection needs — but a day of BTCUSDT aggTrades is hundreds of
+megabytes, so keeping raw prints is impractical.
+
+Each bar therefore stores a **log-spaced histogram of trade notionals and
+counts**, split by aggressor side. Fixed width, and — the useful part — it
+makes the expensive tape pass **independent of the large-print threshold**.
+Re-tune what counts as "large" and you recompute from disk in milliseconds
+instead of re-downloading. Real throughput: 2M prints (a realistic BTCUSDT
+day) reduce to bars in ~0.9s.
+
+## Defining "large" — measured, not guessed
+
+A fixed dollar threshold drifts: $500k was a whale in 2020 and is ordinary
+now, so it silently changes meaning across a training window — the same
+non-stationarity trap as feeding a raw MACD to Agent 2.
+
+The threshold is a percentile of the print-size distribution **by count**, from
+a trailing window that excludes the bar being classified. Both halves of that
+were bugs I hit while building:
+
+- **By count, not by volume.** Defining "large" as the bucket holding the top
+  5% of *dollar volume* collapses onto a single bucket on a heavy tail — 7
+  detections in 375 bars. By count it fires every bar.
+- **Excluding the current bar.** Otherwise an unusual burst raises its own
+  threshold and can classify itself as ordinary, hiding exactly the events the
+  feature exists to find.
+
+The default (`0.005`, top 0.5% of prints) came from sweeping the value and
+reading the feature distribution — at `0.05` large prints capture ~85% of bar
+volume and discriminate almost nothing; at `0.005` they capture ~50% with the
+highest variance. Tune it on distribution shape if you like, but **never on
+trading outcomes** — a threshold chosen because it made money is a fitted
+parameter, and fitted parameters belong to Agent 5.
+
+## Missing feeds are the normal case
+
+Every feed is independently optional, so "missing" is routine, not an edge
+case. Each one degrades to NaN — never a confident zero, which would read as
+"no whales were active" instead of "we cannot see whether they were" — and two
+coverage columns say which case you're in:
+
+```
+tape coverage 0% over 24h — no aggTrades loaded; running on kline order flow only
+liquidation feed present, but none in this bar
+no exchange netflow (paid feed; not configured)
+```
+
+Without the tape, Agent 4 falls back to kline order flow rather than failing:
+reduced resolution, not nothing.
+
+## Boundary
+
+Reads tape, open interest, liquidations, netflow, and the order-flow columns
+inside klines. Not candle geometry (Agent 1), not classic indicators (Agent 2),
+not news (Agent 3) — and **not** funding rate or realized-vol percentile, which
+belong to the regime block even though they sit next to order flow
+conceptually. `avg_trade_size_usd_z` and `trade_count_z` are here because they
+describe the *character* of flow (few large fills vs many small), a different
+question from "is volume high right now".
+
+## Known ceiling
+
+`aggTrades` collapses same-price, same-direction fills at the same instant into
+one row — right for flow analysis, wrong if you're counting individual orders.
+A "print" here is one aggregated fill. And there is no order-book depth: this
+block sees what traded, not what was resting, so "was the book thin before the
+move?" stays unanswered.
+
+---
+
 ## Layout
 
 ```
@@ -436,7 +583,17 @@ newsfeed/
   events.py          NewsItem, NewsScore, observable_at   <- read first
   store.py           append-only JSONL store + PIT queries
   sources.py         Binance announcements, JSONL replay
-marketdata/binance.py
+agent4/              order flow & positioning (22 cols)
+  config.py          Agent4Config — thresholds, windows
+  schema.py          the 22-column contract
+  tape.py            histogram -> flow, large prints, size distribution
+  positioning.py     open interest, liquidations
+  netflow.py         provider protocol; no paid client bundled
+  agent.py           FlowAgent, FlowOutput
+marketdata/
+  binance.py         klines
+  aggtrades.py       trade tape -> per-bar size histograms   <- read first
+  derivatives.py     open interest, liquidations
 tests/
 ```
 
@@ -458,13 +615,13 @@ why Agent 4 reads `aggTrades` directly.
 ## Next
 
 1. The evaluation harness — triple-barrier labels, purged CV with embargo,
-   uniqueness weights. Until it exists you cannot tell whether any of these 78
+   uniqueness weights. Until it exists you cannot tell whether any of these 100
    columns is worth keeping.
 2. Agent 5, block by block: regime only → +agent 2 → +agent 1 → +agent 4 →
    +agent 3. Each step is one full run through the harness. That sequence *is*
    the ablation, and it is how you get `N, W, P, I`.
 
-Start with 10–15 features, not all 78. After uniqueness weighting your
-effective sample size is a few thousand independent observations, and 78
+Start with 10–15 features, not all 100. After uniqueness weighting your
+effective sample size is a few thousand independent observations, and 100
 features on 3,000 effective samples will confidently find patterns that are
 not there.

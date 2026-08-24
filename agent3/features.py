@@ -184,8 +184,9 @@ def compute_news_features(
     # the same normalisation trap as Agent 2, in a different file.
     c24 = out["news_count_24h"]
     w = cfg.baseline_bars
-    mu = c24.rolling(w, min_periods=max(24, w // 4)).mean()
-    sd = c24.rolling(w, min_periods=max(24, w // 4)).std(ddof=0)
+    mp = min(w, max(24, w // 4))     # min_periods may never exceed the window
+    mu = c24.rolling(w, min_periods=mp).mean()
+    sd = c24.rolling(w, min_periods=mp).std(ddof=0)
     out["news_count_z_24h"] = ((c24 - mu) / sd.where(sd > 1e-9)).replace(
         [np.inf, -np.inf], np.nan
     )

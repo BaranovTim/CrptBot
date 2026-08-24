@@ -1,9 +1,10 @@
-"""Detector runner — Agents 1 (patterns), 2 (indicators), 3 (news).
+"""Detector runner — Agents 1 (patterns), 2 (indicators), 3 (news), 4 (flow).
 
     python3 main.py --offline                 # synthetic bars, no network
     python3 main.py                           # BTCUSDT 1h from Binance
     python3 main.py --agent 2                 # indicators only
     python3 main.py --agent 3 --offline       # news, with synthetic headlines
+    python3 main.py --agent 4 --tape          # order flow, downloads aggTrades
     python3 main.py --symbol ETHUSDT --start 2024-06-01 --out features.parquet
 
 Prints a human-readable read of the most recent bar per agent, then the
@@ -22,15 +23,18 @@ import config
 from agent1 import Agent1Config, PatternAgent
 from agent2 import Agent2Config, IndicatorAgent
 from agent3 import Agent3Config, NewsAgent
+from agent4 import Agent4Config, FlowAgent
 
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Run the detector agents over candles.")
-    p.add_argument("--agent", default="all", choices=("1", "2", "3", "all"),
+    p.add_argument("--agent", default="all", choices=("1", "2", "3", "4", "all"),
                    help="which detector(s) to run (default: all)")
     p.add_argument("--asset", default="BTC", help="asset symbol for news scoping")
     p.add_argument("--news-jsonl", default=None,
                    help="replay a stored news corpus instead of the local store")
+    p.add_argument("--tape", action="store_true",
+                   help="download aggTrades for Agent 4 (large files; off by default)")
     p.add_argument("--symbol", default=config.SYMBOL)
     p.add_argument("--interval", default=config.INTERVAL)
     p.add_argument("--start", default=config.HISTORY_START)
@@ -112,6 +116,49 @@ def load_news(args, bars):
     return items
 
 
+def load_flow(args, bars):
+    """Tape, open interest, liquidations and netflow for the bar range.
+
+    Every feed is optional and independently missing — Agent 4 reports
+    coverage rather than pretending. aggTrades is behind --tape because the
+    files are large; without it Agent 4 runs on the order-flow columns
+    already inside every kline.
+    """
+    if args.offline:
+        from tests.synthetic_tape import (make_liquidations, make_netflow,
+                                          make_open_interest, make_tape)
+        return dict(tape=make_tape(bars, per_bar=150) if args.tape else None,
+                    open_interest=make_open_interest(bars),
+                    liquidations=make_liquidations(bars),
+                    netflow=make_netflow(bars))
+
+    import config as _cfg
+    from marketdata.derivatives import (load_liquidations, load_open_interest,
+                                        resample_to_bars)
+    start = str(bars.index[0].date())
+    end = str(bars.index[-1].date())
+    oi = load_open_interest(args.symbol, start, end, _cfg.DATA_CACHE)
+    liq = load_liquidations(args.symbol, start, end, _cfg.DATA_CACHE)
+
+    tape = None
+    if args.tape:
+        from marketdata.aggtrades import load_tape_bars
+        print("  downloading aggTrades (this is the slow part) ...")
+        tape = load_tape_bars(bars.index, args.symbol, start, end,
+                              cache_dir=_cfg.DATA_CACHE)
+    else:
+        print("  --tape not set: running on kline order flow only "
+              "(no large-print features)")
+
+    return dict(
+        tape=tape,
+        open_interest=resample_to_bars(oi, bars.index) if not oi.empty else None,
+        liquidations=resample_to_bars(liq, bars.index, how="sum")
+        if not liq.empty else None,
+        netflow=None,          # paid feed; see agent4/netflow.py
+    )
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     bars = load_bars(args)
@@ -147,6 +194,19 @@ def main(argv=None) -> int:
             print(f"  {group:<11} {len(cols):>2} cols   {filled:5.1%} populated")
         frames["agent3"] = f3
         warmups.append(a3.warmup_bars)
+    if args.agent in ("4", "all"):
+        import agent4.schema as a4s
+        a4 = FlowAgent(Agent4Config())
+        feeds = load_flow(args, bars)
+        f4 = a4.compute(bars, **feeds)
+        print()
+        print(a4.latest(bars, **feeds))
+        print(f"\nAgent 4 (flow): {f4.shape[0]:,} rows x {f4.shape[1]} columns")
+        for group, cols in a4s.FEATURE_GROUPS.items():
+            filled = f4[list(cols)].iloc[a4.warmup_bars:].notna().mean().mean()
+            print(f"  {group:<12} {len(cols):>2} cols   {filled:5.1%} populated")
+        frames["agent4"] = f4
+        warmups.append(a4.warmup_bars)
 
     combined = pd.concat(frames.values(), axis=1)
     warm = min(max(warmups, default=0), max(0, len(combined) - 1))

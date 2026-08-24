@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -64,23 +66,38 @@ def _to_utc(series: pd.Series) -> pd.Series:
     return pd.to_datetime(v, unit=unit, utc=True)
 
 
-def _download(url: str, dest: Path, retries: int = 3) -> bool:
+def _download(url: str, dest: Path, retries: int = 3, timeout: int = 60) -> bool:
+    """Fetch to ``dest``, streaming through a .part file.
+
+    Streaming rather than ``r.read()`` matters once aggTrades enter the
+    picture: a daily tape archive is hundreds of megabytes, and reading it
+    whole both wastes memory and makes the socket timeout apply to the entire
+    transfer instead of to each chunk.
+
+    The .part rename is what keeps the cache trustworthy — an interrupted
+    download leaves no file, so a later run retries cleanly instead of
+    parsing a truncated zip.
+    """
     if dest.exists() and dest.stat().st_size > 0:
         return True
     dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(url, timeout=60) as r:
-                payload = r.read()
-            dest.write_bytes(payload)
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                with tmp.open("wb") as fh:
+                    shutil.copyfileobj(r, fh, length=1 << 20)
+            tmp.replace(dest)
             return True
         except urllib.error.HTTPError as e:
+            tmp.unlink(missing_ok=True)
             if e.code == 404:
-                return False          # month not published (yet) — expected
+                return False          # not published (yet) — expected
             if attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
-        except urllib.error.URLError:
+        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError):
+            tmp.unlink(missing_ok=True)
             if attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
