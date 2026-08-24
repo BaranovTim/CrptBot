@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run every Agent 1 test. No pytest required.
+"""Run every detector test (Agents 1 and 2). No pytest required.
 
     python3 run_tests.py
     python3 run_tests.py --real     # also check for lookahead on live Binance data
@@ -13,7 +13,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-MODULES = ["tests.test_pivots", "tests.test_schema", "tests.test_no_lookahead"]
+MODULES = [
+    "tests.test_pivots",
+    "tests.test_schema",
+    "tests.test_no_lookahead",
+    "tests.test_agent2_indicators",
+    "tests.test_agent2_schema",
+    "tests.test_agent2_no_lookahead",
+]
 
 
 def run_module(name: str) -> tuple:
@@ -47,17 +54,19 @@ def main() -> int:
         total_f += f
 
     if args.real:
-        print("\ntests.test_no_lookahead (real Binance data)")
+        print("\nreal Binance data")
         try:
             import config
             from marketdata import load_klines
-            from tests.test_no_lookahead import test_no_lookahead
+            from tests.test_no_lookahead import test_no_lookahead as a1_leak
+            from tests.test_agent2_no_lookahead import test_no_lookahead as a2_leak
 
             bars = load_klines("BTCUSDT", "1h", start="2026-05-01", end="2026-07-31",
                                cache_dir=config.DATA_CACHE)
-            test_no_lookahead(bars=bars, t_range=range(1200, 1400), horizon=200)
-            print(f"  PASS  no lookahead over {len(bars):,} real BTCUSDT bars")
-            total_p += 1
+            for label, fn in (("Agent 1", a1_leak), ("Agent 2", a2_leak)):
+                fn(bars=bars, t_range=range(1300, 1500), horizon=200)
+                print(f"  PASS  {label}: no lookahead over {len(bars):,} real bars")
+                total_p += 1
         except Exception:
             traceback.print_exc()
             total_f += 1
