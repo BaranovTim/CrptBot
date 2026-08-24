@@ -7,7 +7,11 @@ Two rules govern every column here, and breaking either one is a bug:
      ``(level - close) / atr`` — positive means the level sits ABOVE the
      current price.  One rule, no exceptions, so a sign flip is visible.
 
-  2. MISSING.  When a thing does not exist (no unfilled FVG, no equal highs),
+  2. RANGE.  ``position_in_range`` is deliberately NOT clipped to [0, 1].
+     Above 1 means price has broken out above the dealing range, below 0
+     below it, and both are informative states that clipping would erase.
+
+  3. MISSING.  When a thing does not exist (no unfilled FVG, no equal highs),
      the value is NaN — never 0, never -999.  Zero means "price is standing
      exactly on it", which is the opposite of "it isn't there".  LightGBM
      handles NaN natively and learns which branch to send it down.

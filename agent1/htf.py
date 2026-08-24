@@ -24,13 +24,13 @@ from .structure import compute_structure
 HTF_COLUMNS = ("trend_direction_4h", "position_in_range_4h")
 
 
-def infer_interval(index: pd.DatetimeIndex) -> pd.Timedelta:
+def infer_interval(index: pd.DatetimeIndex) -> pd.Timedelta: # Определить таймфрейм
     if len(index) < 3:
         return pd.Timedelta(0)
     return pd.Timedelta(np.median(np.diff(index.values)))
 
 
-def resample_bars(bars: pd.DataFrame, rule: str) -> pd.DataFrame:
+def resample_bars(bars: pd.DataFrame, rule: str) -> pd.DataFrame: # Return a new DataFrame of bars resampled to the given rule, aligned to the close of each period.
     """Aggregate to ``rule``, keeping only periods that have actually closed."""
     interval = infer_interval(bars.index)
     open_time = bars.index - interval

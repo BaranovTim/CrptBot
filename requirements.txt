@@ -1,0 +1,17 @@
+# Agent 1 needs only these two. That is the point — the detectors are
+# geometry, not machine learning, so there is nothing heavy to install.
+pandas>=2.0
+numpy>=1.24
+
+# Optional: the 62 native candlestick patterns.
+# Enable with Agent1Config(use_pandas_ta_classic=True).
+# The original `pandas-ta` is effectively unmaintained; this is the community
+# fork, and it does not need TA-Lib.
+# pandas-ta-classic>=0.4
+
+# Optional: parquet output from main.py --out features.parquet
+# pyarrow>=14
+
+# Arrives with Agent 5, not before:
+# scikit-learn>=1.3
+# lightgbm>=4.0

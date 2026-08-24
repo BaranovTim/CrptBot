@@ -1,14 +1,3 @@
-"""Candlestick patterns, aggregated to two counts.
-
-Low expected value, near-zero cost — which is the only reason they are here.
-
-Two deliberate choices.  First, native vectorised patterns rather than a
-TA-Lib dependency: ``pandas_ta`` is effectively unmaintained and most of its
-CDL patterns need a C library that is painful to install.  Set
-``use_pandas_ta_classic=True`` to switch to that fork's 62 patterns if you
-install it.  Second, the output is two counts, not 62 columns.  Sixty-two
-sparse booleans on a few thousand effective samples is a gift to overfitting.
-"""
 from __future__ import annotations
 
 import numpy as np
@@ -18,33 +7,23 @@ from .config import Agent1Config
 
 CANDLE_COLUMNS = ("cdl_bull_count_3", "cdl_bear_count_3")
 
-
-def _native_signals(bars: pd.DataFrame):
-    """Score every bar for bullish and bearish candlestick patterns.
+"""
+    Score every bar for bullish and bearish candlestick patterns.
+    Ts function checks 10 patterns: 5 for bullish ; 5 for bearish signals
 
     Returns two integer Series aligned to ``bars.index``: how many of the five
     bullish patterns fired on each bar, and how many bearish.  Not which ones —
     the identity is discarded on purpose, see the module docstring.
 
-    Everything is vectorised over the whole frame at once.  ``shift(1)`` and
-    ``shift(2)`` give each row a view of the two candles before it, so a
-    three-candle formation is one boolean expression rather than a loop.  The
-    suffix convention is positional: bare ``c`` is the current bar, ``c1`` the
-    previous, ``c2`` the one before that.  Shifts are strictly backwards; a
-    negative shift here would be lookahead.
+"""
+def _native_signals(bars: pd.DataFrame):
+    """
+    Score every bar for bullish and bearish candlestick patterns.
 
-    Two consequences of counting rather than classifying.  The patterns are not
-    mutually exclusive — a decisive green bar can be both ``engulfing`` and
-    ``marubozu`` and scores 2.  And ``hammer``/``shooting_star`` test shape
-    only, not colour, so a green bar can contribute to the bearish count.  Both
-    are intended: the output is a crude "how bullish does this bar look", not a
-    taxonomy.
+    Returns two integer Series aligned to ``bars.index``: how many of the five
+    bullish patterns fired on each bar, and how many bearish.  Not which ones —
+    the identity is discarded on purpose, see the module docstring.
 
-    Warm-up is longer than it looks.  ``avg_body`` needs 14 bars, so the two
-    star patterns cannot fire before row 13 — and nothing marks this, because
-    comparing against NaN yields False, not NaN.  Rows 0-12 are therefore
-    counts over four patterns wearing the costume of five.  Treat early rows as
-    unreliable rather than merely low.
     """
     o = bars["open"].astype(float)
     h = bars["high"].astype(float)
@@ -52,26 +31,26 @@ def _native_signals(bars: pd.DataFrame):
     c = bars["close"].astype(float)
 
     body = (c - o).abs()
-    rng = (h - l).replace(0.0, np.nan)
-    upper = h - c.combine(o, max)
-    lower = c.combine(o, min) - l
+    rng = (h - l).replace(0.0, np.nan) #replaces zero range with NaN to avoid division by zero
+    upper = h - c.combine(o, max) # c is combined with o to get the max: finds the upper shadow length
+    lower = c.combine(o, min) - l # finds the lower shadow length
     bull_bar = c > o
     bear_bar = c < o
 
-    o1, c1, h1, l1 = o.shift(1), c.shift(1), h.shift(1), l.shift(1)
+    o1, c1, h1, l1 = o.shift(1), c.shift(1), h.shift(1), l.shift(1) # На одну свечу назад
     body1 = (c1 - o1).abs()
-    o2, c2 = o.shift(2), c.shift(2)
+    o2, c2 = o.shift(2), c.shift(2) # На две свечи назад
     body2 = (c2 - o2).abs()
     mid2 = (o2 + c2) / 2.0
-    avg_body = body.rolling(14, min_periods=14).mean()
+    avg_body = body.rolling(14, min_periods=14).mean() # Скользящее среднее тела свечи за последние 14 свечей
 
     bull = {
-        "engulfing": (c1 < o1) & bull_bar & (c >= o1) & (o <= c1),
-        "hammer": (lower >= 2 * body) & (upper <= body) & (body > 0),
-        "piercing": (c1 < o1) & bull_bar & (o < c1) & (c > (o1 + c1) / 2) & (c < o1),
+        "engulfing": (c1 < o1) & bull_bar & (c >= o1) & (o <= c1), # Зелёная свеча полностью «съедает» тело предыдущей красной
+        "hammer": (lower >= 2 * body) & (upper <= body) & (body > 0), # Молот — длинная нижняя тень, маленькое тело, верхняя тень почти отсутствует
+        "piercing": (c1 < o1) & bull_bar & (o < c1) & (c > (o1 + c1) / 2) & (c < o1), # Смысл: тот же сюжет, что и в поглощении, но слабее
         "morning_star": (c2 < o2) & (body2 > avg_body) & (body1 < body2 * 0.5)
-                        & bull_bar & (c > mid2),
-        "marubozu": bull_bar & (body >= 0.9 * rng),
+                        & bull_bar & (c > mid2), # Утренняя звезда — три свечи: красная, маленькая (звезда), зелёная, закрытие которой выше середины красной свечи
+        "marubozu": bull_bar & (body >= 0.9 * rng), # тело = 90%+ всего диапазона
     }
     bear = {
         "engulfing": (c1 > o1) & bear_bar & (c <= o1) & (o >= c1),
@@ -81,11 +60,17 @@ def _native_signals(bars: pd.DataFrame):
                         & bear_bar & (c < mid2),
         "marubozu": bear_bar & (body >= 0.9 * rng),
     }
-    bull_hits = sum(s.fillna(False).astype(int) for s in bull.values())
-    bear_hits = sum(s.fillna(False).astype(int) for s in bear.values())
+    bull_hits = sum(s.fillna(False).astype(int) for s in bull.values()) # Out of 5 parameters how many showed a bullish signal
+    bear_hits = sum(s.fillna(False).astype(int) for s in bear.values()) # Out of 5 parameters how many showed a bearish signal
     return bull_hits, bear_hits
 
 
+
+'''
+Это та же самая фунция что и _native_signals, но использует библиотеку pandas_ta_classic, которая умеет распознавать больше паттернов.
+Однако эта функция не используется в основном коде, так как библиотека является не надежной и не поддерживается. 
+Она оставлена здесь для справки и для тех, кто хочет использовать больше паттернов.
+'''
 def _pandas_ta_classic_signals(bars: pd.DataFrame):
     import pandas_ta_classic as ta  # noqa: F401  (optional dependency)
 
@@ -97,6 +82,9 @@ def _pandas_ta_classic_signals(bars: pd.DataFrame):
     return bull_hits, bear_hits
 
 
+
+# Фунция решает какую из двух функций использовать для распознавания паттернов. 
+# Если cfg.use_pandas_ta_classic = True, то используется библиотека pandas_ta_classic, иначе используется нативная функция _native_signals.
 def compute_candles(bars: pd.DataFrame, cfg: Agent1Config) -> pd.DataFrame:
     if cfg.use_pandas_ta_classic:
         try:
@@ -109,9 +97,9 @@ def compute_candles(bars: pd.DataFrame, cfg: Agent1Config) -> pd.DataFrame:
     w = cfg.candle_window
     out = pd.DataFrame(
         {
-            "cdl_bull_count_3": bull_hits.rolling(w, min_periods=w).sum(),
+            "cdl_bull_count_3": bull_hits.rolling(w, min_periods=w).sum(), # Берет количество сигналов за последние w свечей и суммирует их для более стабильного результата. Если сигналов меньше чем w, то суммирует сколько есть.
             "cdl_bear_count_3": bear_hits.rolling(w, min_periods=w).sum(),
         },
-        index=bars.index,
+        index=bars.index, # Индекс это время свечей, чтобы можно было сопоставить сигналы с конкретными свечами.
     )
     return out.astype(float)

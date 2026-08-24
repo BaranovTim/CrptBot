@@ -31,11 +31,12 @@ from .pivots import HIGH, LOW, Pivot
 FIGURE_COLUMNS = ("w_completion", "m_completion", "hs_completion", "hs_direction")
 
 
-def _clip01(x: float) -> float:
+def _clip01(x: float) -> float: # Clip a float to the range [0.0, 1.0].  Used to convert a raw score into a completion fraction
     return float(min(1.0, max(0.0, x)))
 
 
-def _kinds(pivs: Sequence[Pivot]) -> tuple:
+def _kinds(pivs: Sequence[Pivot]) -> tuple: # Return a tuple of the kinds of the pivots in the input sequence.  
+    #Used to check for specific patterns of highs and lows that correspond to classical chart figures.
     return tuple(p.kind for p in pivs)
 
 
