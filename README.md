@@ -1,7 +1,8 @@
 # TradingBot — detector agents
 
-**Agent 1** (patterns / smart money) and **Agent 2** (indicators). Both measure.
-Neither judges — that is Agent 5's job, and it is the only block that learns.
+**Agent 1** (patterns / smart money), **Agent 2** (indicators), **Agent 3** (news).
+All three measure. None of them judges — that is Agent 5's job, and it is the
+only block that learns.
 
 ## Agent 1 — patterns & smart money
 
@@ -35,11 +36,12 @@ weights *are* Agent 5.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py            # 46 tests, no network needed
+python3 run_tests.py            # 70 tests, no network needed
 python3 run_tests.py --real     # + leak checks on live Binance data
 python3 main.py --offline       # synthetic bars
 python3 main.py                 # real BTCUSDT 1h perps, both agents
 python3 main.py --agent 2       # indicators only
+python3 main.py --agent 3 --offline   # news, synthetic headlines
 ```
 
 ```python
@@ -255,6 +257,150 @@ window sizing. Short windows fail to NaN, never to a plausible wrong number.
 
 ---
 
+---
+
+# Agent 3 — news
+
+```python
+from agent3 import NewsAgent, ClaudeScorer
+from newsfeed import JSONLNewsStore
+
+store  = JSONLNewsStore()
+agent  = NewsAgent(scorer=ClaudeScorer())      # LexiconScorer by default
+scores = agent.score_items(items)              # slow, offline, once per item
+feats  = agent.compute(bars, items, scores)    # fast, pure arithmetic
+```
+
+19 columns: `sentiment` (5), `salience` (5), `volume` (4), `category` (4),
+`quality` (1). Same contract as the others — pure, untrained, blind to the
+future, opinionless. "Untrained" still holds even though it calls an LLM: the
+model is a fixed pretrained instrument, and nothing here is fitted to trading
+outcomes. Change the prompt or the model and you have changed the instrument —
+re-score the whole corpus rather than mixing old and new scores in one dataset.
+
+Agents 1 and 2 read candles: closed, numeric, exchange-timestamped, and nobody
+can write to the feed. Agent 3 reads text off the public internet. That
+introduces two problems the others do not have.
+
+## Problem 1: the timestamp is the weak link
+
+Price data is microsecond-accurate and honest. A news timestamp is a *claim*,
+sometimes revised after the fact. Every item carries three clocks:
+
+```
+event_time    when the thing actually happened   (often unknown)
+published_at  when the source published it
+ingested_at   when WE first saw it
+```
+
+`observable_at` is the **latest** of the ones we trust, plus a safety margin —
+never `event_time`. An event at 14:00, published 14:20, ingested 14:40 becomes
+usable at 14:40. Keying on 14:00 hands the backtest 40 minutes of free
+foresight *on every item*, and news lands precisely on the moves you are trying
+to predict, so that foresight is worth a lot and will never reproduce live.
+
+This is the direct analogue of Agent 1's `confirmed_at`, and it is the quietest
+of the three leaks: every row still has a plausible timestamp and nothing
+raises. `tests/test_agent3_pit.py` catches it two ways — extending the bar index
+must not change earlier rows, and adding one item must not move any bar that
+closed before it was observable. Both have been verified to fire on planted
+bugs (gate on `event_time`: 6-hour drift; gate on `published_at`: 3 contaminated
+bars).
+
+The `safety_lag_seconds` default of 60 costs a minute of signal and buys the
+guarantee that a revised publication time cannot pull an item earlier than you
+saw it.
+
+## Problem 2: the input is adversarial
+
+Anyone can publish a headline, and a headline written to steer a bot known to
+be reading it is a cheap, repeatable attack that has already happened in real
+markets. Four defences, in order of how much they matter:
+
+1. **Structure, not persuasion.** The scorer's output schema is bounded numbers
+   plus a closed category enum, with `additionalProperties: false`. There is no
+   action field, no `should_buy`, nothing an injected instruction could express
+   itself through. A fully successful attack moves a number inside its valid
+   range — the same failure mode as an honest mis-score, which the calibration
+   layer already assumes.
+2. **Validation on the way out.** Every field clamped and type-checked. The
+   model is never trusted to respect its own schema.
+3. **Delimited, labelled input.** The tag is stripped from the content first so
+   a payload cannot close the block early.
+4. **Detection.** `looks_like_injection` flags known patterns so attack volume
+   is a number, not a hunch. Monitoring, never a filter.
+
+Asking the model nicely to ignore instructions is in the prompt because it
+helps at the margin, but it is the weakest layer and nothing depends on it.
+
+The strongest test assumes the model is **fully compromised** — an attacker
+choosing every value it returns — and asserts the feature frame still respects
+every bound. It does, because the clamp sits between the model and the
+features.
+
+## Why an LLM rather than FinBERT / CryptoBERT
+
+Because sentiment is the part that doesn't matter. Those models answer "is this
+bullish?", and nearly everything published about a coin is bullish — so
+sentiment alone separates almost nothing. What's needed is **novelty**
+(did the market already know?), magnitude, and which asset. That needs
+something that can reason about whether a scheduled event happening on schedule
+is news. It isn't.
+
+Two features exist specifically because of this:
+`news_sentiment_dispersion_24h` (near 0 = everyone agrees, which is the common
+case and therefore weak evidence) and `news_novelty_max_6h`.
+
+Fine-tuning later is cheaper than it sounds, because the labels are free: take
+each historical headline, look up the forward return in your own price data,
+and label by what actually happened. No manual annotation. That's a later
+phase, not now.
+
+## Latency: scoring is offline, always
+
+LLM inference takes seconds. A trading decision has to be arithmetic. So every
+model call happens at **ingest** time, cached by content hash, and the per-bar
+feature computation reads frozen numbers off disk. No model call ever sits
+between a bar closing and a decision being made.
+
+For historical backfill, `ClaudeScorer.batch_requests()` builds Batch API
+requests — same work at half price, and nothing about a backfill is
+latency-sensitive. The system prompt is cached (`cache_control: ephemeral`);
+keep it frozen, since interpolating an asset name or timestamp into it would
+invalidate the cache on every request.
+
+Thinking is left **on at low effort** rather than disabled. Disabling looks
+cheaper but has a documented failure mode where internal `<thinking>` tags leak
+into the visible response — which, for a JSON extraction task, is a parse
+failure.
+
+## The NaN rule is sharpest here
+
+`news_sentiment_6h == 0` means news exists and reads neutral. `NaN` means there
+was **no news at all**. Different market states; a 0-fill would teach the model
+that silence is neutrality. Counts are the mirror — a 24h count of 0 is an
+observed fact, so those are 0-filled.
+
+A failed score returns magnitude 0, so a broken scorer degrades the features
+toward "no news" rather than toward fabricated signal — and
+`news_scored_fraction_24h` reports the degradation to Agent 5 instead of hiding
+it.
+
+## Model choice
+
+Defaults to `claude-opus-5`. Model, effort, and `max_tokens` are all in
+`ClaudeScorer.__init__`, so trading cost against scoring quality is your call,
+not a default made silently on your behalf.
+
+## Ablation position
+
+Agent 3 is **fifth and last** in the plan's ablation order — regime → +agent 2
+→ +agent 1 → +agent 4 → +agent 3 — and there is a real chance you never reach
+it. That ordering is worth respecting: it is the most expensive block to run
+and the most likely to add nothing.
+
+---
+
 ## Layout
 
 ```
@@ -279,6 +425,17 @@ agent2/              indicators (26 cols)
   indicators.py      RSI, MACD, ADX, Bollinger, Keltner, MFI, CMF, OBV
   htf.py             4h context (own copy, so the agents stay separable)
   agent.py           IndicatorAgent, IndicatorOutput
+agent3/              news (19 cols)
+  config.py          Agent3Config — windows, decay, safety lag
+  schema.py          the 19-column contract
+  prompt.py          extraction prompt + JSON schema + injection hardening
+  scorers.py         ClaudeScorer / LexiconScorer / CachedScorer
+  features.py        point-in-time decay-weighted aggregation
+  agent.py           NewsAgent, NewsOutput
+newsfeed/
+  events.py          NewsItem, NewsScore, observable_at   <- read first
+  store.py           append-only JSONL store + PIT queries
+  sources.py         Binance announcements, JSONL replay
 marketdata/binance.py
 tests/
 ```
@@ -301,13 +458,13 @@ why Agent 4 reads `aggTrades` directly.
 ## Next
 
 1. The evaluation harness — triple-barrier labels, purged CV with embargo,
-   uniqueness weights. Until it exists you cannot tell whether any of these 59
+   uniqueness weights. Until it exists you cannot tell whether any of these 78
    columns is worth keeping.
 2. Agent 5, block by block: regime only → +agent 2 → +agent 1 → +agent 4 →
    +agent 3. Each step is one full run through the harness. That sequence *is*
    the ablation, and it is how you get `N, W, P, I`.
 
-Start with 10–15 features, not all 59. After uniqueness weighting your
-effective sample size is a few thousand independent observations, and 59
+Start with 10–15 features, not all 78. After uniqueness weighting your
+effective sample size is a few thousand independent observations, and 78
 features on 3,000 effective samples will confidently find patterns that are
 not there.

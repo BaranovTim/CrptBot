@@ -1,8 +1,9 @@
-"""Detector runner — Agent 1 (patterns) and Agent 2 (indicators).
+"""Detector runner — Agents 1 (patterns), 2 (indicators), 3 (news).
 
     python3 main.py --offline                 # synthetic bars, no network
     python3 main.py                           # BTCUSDT 1h from Binance
     python3 main.py --agent 2                 # indicators only
+    python3 main.py --agent 3 --offline       # news, with synthetic headlines
     python3 main.py --symbol ETHUSDT --start 2024-06-01 --out features.parquet
 
 Prints a human-readable read of the most recent bar per agent, then the
@@ -20,12 +21,16 @@ import pandas as pd
 import config
 from agent1 import Agent1Config, PatternAgent
 from agent2 import Agent2Config, IndicatorAgent
+from agent3 import Agent3Config, NewsAgent
 
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Run the detector agents over candles.")
-    p.add_argument("--agent", default="both", choices=("1", "2", "both"),
-                   help="which detector(s) to run (default: both)")
+    p.add_argument("--agent", default="all", choices=("1", "2", "3", "all"),
+                   help="which detector(s) to run (default: all)")
+    p.add_argument("--asset", default="BTC", help="asset symbol for news scoping")
+    p.add_argument("--news-jsonl", default=None,
+                   help="replay a stored news corpus instead of the local store")
     p.add_argument("--symbol", default=config.SYMBOL)
     p.add_argument("--interval", default=config.INTERVAL)
     p.add_argument("--start", default=config.HISTORY_START)
@@ -81,6 +86,32 @@ def report(name: str, agent, bars: pd.DataFrame, groups, rows: int) -> pd.DataFr
     return features
 
 
+def load_news(args, bars):
+    """News items for the bar range.
+
+    Offline mode generates deterministic synthetic headlines. Otherwise the
+    local store is read; an empty store is a normal, well-defined state
+    (Agent 3 emits zero counts and NaN sentiment), not an error.
+    """
+    if args.news_jsonl:
+        from newsfeed import JSONLReplay
+        return JSONLReplay(Path(args.news_jsonl)).fetch()
+    if args.offline:
+        from tests.synthetic_news import make_news
+        return make_news(bars, n=max(20, len(bars) // 20))
+
+    import config as _cfg
+    from newsfeed import JSONLNewsStore
+    items = JSONLNewsStore(_cfg.DATA_CACHE / "news").load_items()
+    if not items:
+        print("  no stored news items — Agent 3 will report zero counts.\n"
+              "  Collect some first, e.g.:\n"
+              "    python3 -c \"from newsfeed import BinanceAnnouncements, JSONLNewsStore; \\\n"
+              "      import config; s=JSONLNewsStore(config.DATA_CACHE/'news'); \\\n"
+              "      print(s.append_items(BinanceAnnouncements(pages=2).fetch()), 'added')\"")
+    return items
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     bars = load_bars(args)
@@ -90,19 +121,35 @@ def main(argv=None) -> int:
 
     frames = {}
     warmups = []
-    if args.agent in ("1", "both"):
+    if args.agent in ("1", "all"):
         a1 = PatternAgent(Agent1Config(htf_rule=args.htf, break_mode=args.break_mode))
         frames["agent1"] = report("Agent 1 (patterns)", a1, bars,
                                   a1s.FEATURE_GROUPS, args.rows)
         warmups.append(a1.warmup_bars)
-    if args.agent in ("2", "both"):
+    if args.agent in ("2", "all"):
         a2 = IndicatorAgent(Agent2Config(htf_rule=args.htf))
         frames["agent2"] = report("Agent 2 (indicators)", a2, bars,
                                   a2s.FEATURE_GROUPS, args.rows)
         warmups.append(a2.required_bars(bars))
+    if args.agent in ("3", "all"):
+        import agent3.schema as a3s
+        items = load_news(args, bars)
+        a3 = NewsAgent(Agent3Config(asset=args.asset))
+        scores = a3.score_items(items)
+        print(f"\n{len(items)} news items, {len(scores)} scored "
+              f"({a3.scorer.name})")
+        f3 = a3.compute(bars, items, scores)
+        print()
+        print(a3.latest(bars, items, scores))
+        print(f"\nAgent 3 (news): {f3.shape[0]:,} rows x {f3.shape[1]} columns")
+        for group, cols in a3s.FEATURE_GROUPS.items():
+            filled = f3[list(cols)].notna().mean().mean()
+            print(f"  {group:<11} {len(cols):>2} cols   {filled:5.1%} populated")
+        frames["agent3"] = f3
+        warmups.append(a3.warmup_bars)
 
     combined = pd.concat(frames.values(), axis=1)
-    warm = min(max(warmups), max(0, len(combined) - 1))
+    warm = min(max(warmups, default=0), max(0, len(combined) - 1))
     usable = combined.iloc[warm:]
 
     print(f"\nCombined: {combined.shape[1]} columns, "
