@@ -161,6 +161,61 @@ ablation is for.
 
 ---
 
+---
+
+## Agent 5 — the judge
+
+**Remember: it is the only agent that learns, and the only one allowed to.**
+Every constant in Agents 1-4 is a definition. Agent 5's coefficients are
+fitted from history, which is exactly why every number it produces goes
+through purged cross-validation first.
+
+**Remember: `fit()` and `predict_proba()` are separate on purpose.**
+`predict_proba()` raises if nothing has been fitted. Predicting is real-time;
+training is batch, offline, on a schedule. A model that updates on every tick
+is chasing noise.
+
+**Remember: read the folds, not the mean.** `0.61 / 0.49 / 0.58 / 0.51 / 0.57`
+averages to 0.55 and is noise. The `spread` column is the one that tells you
+whether you found anything.
+
+**Remember: your sample is far smaller than it looks.** 1,760 samples became
+287 independent observations on a real run. Overlapping labels are not
+independent. The report warns when the effective count is too small for the
+feature count - believe it, and start with 10-15 features rather than 100.
+
+**Hidden problem - it is long only, and inverting `p` will not give you
+shorts.** `k_up=2, k_dn=1` asks about a long. A low `p` does not mean a
+profitable short, because for a short those barriers sit the wrong way round.
+Shorting needs a second model fitted on mirrored labels.
+
+**Hidden problem - the ambiguous bar.** When one bar touches both barriers,
+OHLC cannot say which came first, and it is counted as a **loss**. Your win
+rate is therefore slightly pessimistic by construction. That is the intended
+direction of the error.
+
+**Hidden problem - `simulate()` is not a backtest.** It reuses the label
+outcome as the trade result, assuming perfect fills at the barrier. It ignores
+overlapping positions, funding, partial fills and exchange downtime. Treat any
+number from it as an upper bound, never as expected performance.
+
+**Hidden problem - the model is frozen with a column ORDER.** `predict_proba`
+rejects a frame missing any fitted column, but you must also keep the order
+stable. Feed the agents in a different order one day and values land on the
+wrong features with nothing raising.
+
+**Hidden problem - LightGBM is optional and silently substituted.** With
+`model="auto"` the agent falls back to logistic if LightGBM will not import
+(on macOS this is usually `brew install libomp`). The report prints which one
+ran - check it, because the two have very different overfitting behaviour.
+
+**Re-run the shuffle test after adding any new data source.** Leakage arrives
+with new *data*, not with new models. Anything meaningfully above 0.50 there
+means information is reaching the model through a path other than the
+features.
+
+---
+
 ## The one thing that still cannot be checked
 
 None of this tells you whether any feature *predicts* anything. Every test in
@@ -170,3 +225,9 @@ evaluation harness and Agent 5 can answer, and neither exists yet.
 
 100 columns that are all correctly computed and all useless is a completely
 possible outcome, and the tests here would still pass.
+
+Agent 5 narrows this considerably - it is the harness that can finally
+*answer* the question - but it does not remove it. On the real BTCUSDT run
+above the answer came back "this feature set predicts nothing", and the
+correct response to that is not to tune until the number improves. It is to
+change the features, lengthen the history, or accept the answer.

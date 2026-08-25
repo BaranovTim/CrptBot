@@ -25,6 +25,7 @@ from agent1 import Agent1Config, PatternAgent
 from agent2 import Agent2Config, IndicatorAgent
 from agent3 import Agent3Config, NewsAgent
 from agent4 import Agent4Config, FlowAgent
+from agent5 import Agent5Config, JudgeAgent
 
 
 def parse_args(argv=None):
@@ -34,6 +35,12 @@ def parse_args(argv=None):
     p.add_argument("--asset", default="BTC", help="asset symbol for news scoping")
     p.add_argument("--news-jsonl", default=None,
                    help="replay a stored news corpus instead of the local store")
+    p.add_argument("--judge", action="store_true",
+                   help="train Agent 5 on the assembled features and report")
+    p.add_argument("--ablation", action="store_true",
+                   help="with --judge: run the block-by-block ablation")
+    p.add_argument("--save-model", default=None,
+                   help="with --judge: freeze the fitted model to this path")
     p.add_argument("--tape", action="store_true",
                    help="download aggTrades for Agent 4 (large files; off by default)")
     p.add_argument("--symbol", default=config.SYMBOL)
@@ -238,6 +245,26 @@ def main(argv=None) -> int:
     with pd.option_context("display.width", 200, "display.max_columns", 10):
         print(f"\nLast {args.rows} rows (first 8 columns):")
         print(usable.iloc[-args.rows:, :8].round(3))
+
+    if args.judge:
+        print("\n" + "=" * 66)
+        cfg5 = Agent5Config()
+        judge = JudgeAgent(cfg5)
+        ds = judge.build(bars, warmup=warm,
+                         **{k: v for k, v in frames.items()
+                            if k in ("agent1", "agent2", "agent3", "agent4")})
+        # named training_report, not report: main.py already has a module
+        # level report() helper, and shadowing it makes every earlier call in
+        # this function an UnboundLocalError
+        training_report = judge.fit(ds, with_shuffle=True,
+                                    with_ablation=args.ablation,
+                                    with_importance=True)
+        print(training_report)
+        print()
+        print(judge.latest(bars, ds.X))
+        if args.save_model:
+            judge.save(args.save_model)
+            print(f"\nfrozen model written to {args.save_model}")
 
     if args.out:
         out = Path(args.out)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run every detector test (Agents 1-4). No pytest required.
+"""Run every detector test (Agents 1-5). No pytest required.
 
     python3 run_tests.py
     python3 run_tests.py --real     # also check for lookahead on live Binance data
@@ -27,6 +27,9 @@ MODULES = [
     "tests.test_agent4_no_lookahead",
     "tests.test_agent4_schema",
     "tests.test_robustness",
+    "tests.test_agent5_labels",
+    "tests.test_agent5_splits",
+    "tests.test_agent5_pipeline",
 ]
 
 

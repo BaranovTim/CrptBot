@@ -36,13 +36,14 @@ weights *are* Agent 5.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py            # 97 tests, no network needed
+python3 run_tests.py            # 135 tests, no network needed
 python3 run_tests.py --real     # + leak checks on live Binance data
 python3 main.py --offline       # synthetic bars
 python3 main.py                 # real BTCUSDT 1h perps, both agents
 python3 main.py --agent 2       # indicators only
 python3 main.py --agent 3 --offline   # news, synthetic headlines
 python3 main.py --agent 4 --tape      # order flow (downloads aggTrades)
+python3 main.py --judge --ablation    # train Agent 5 and run the ablation
 ```
 
 ```python
@@ -548,6 +549,154 @@ move?" stays unanswered.
 
 ---
 
+---
+
+# Agent 5 — the judge
+
+```python
+from agent5 import JudgeAgent
+
+judge = JudgeAgent()
+ds = judge.build(bars, warmup=400, agent1=f1, agent2=f2, agent3=f3, agent4=f4)
+print(judge.fit(ds, with_ablation=True))     # cross-validate, calibrate, report
+print(judge.latest(bars, ds.X))              # probability -> EV -> position size
+judge.save("output/judge.pkl")
+```
+
+Agents 1–4 are thermometers. This is the doctor — and there is exactly one of
+it. Delete any detector and the system still works, slightly better or worse,
+and you *measure* which. Delete Agent 5 and you have a pile of numbers and no
+way to turn them into a decision.
+
+## Two formulas, deliberately separate
+
+Keeping these apart is what makes the whole design tractable. The original `S`
+formula was trying to be both at once, which is why it felt slippery.
+
+**Stage 1–3 — data → probability. FITTED.**
+Features → model → `p_raw` → isotonic calibration → `p_calibrated`.
+The model's coefficients *are* the `N / W / P / I` weights. You don't compute
+them from anything; they're fitted from history. That was the direct answer to
+"AI or code?" — it's `LogisticRegression().fit(X, y)`, one line, no AI.
+
+**Stage 4–5 — probability → trade. WRITTEN BY HAND.**
+```
+EV   = p·TP − (1−p)·SL − costs
+f*   = (p·b − (1−p)) / b        b = TP/SL
+size = 0.25 · f* · equity       then clamped by hard risk limits
+```
+Nothing here is learned. The worked example from the plan, reproduced exactly
+by `tests/test_agent5_pipeline.py`:
+
+| p | barriers | EV after 0.1% costs | decision |
+|---|---|---|---|
+| 61% | +2% / −1% | **+0.73%** | long, quarter-Kelly 10.375% |
+| 61% | +0.5% / −1% | **−0.185%** | flat |
+
+Same confidence, opposite decision. This is why probability alone can never be
+the entry rule.
+
+## The label decides what the model learns
+
+Triple barrier: from bar `t`'s close, does price travel `+2 ATR` before
+`−1 ATR`, within 24 bars? The payoff is baked into the label, so the model
+predicts *"would this trade have won"* rather than an abstract direction.
+
+Three decisions worth knowing:
+
+- **The ambiguous bar counts as a loss.** One bar can touch both barriers, and
+  OHLC can't say which came first. Assuming the friendly answer is how
+  backtests get confident and accounts get empty. Dropping those samples would
+  be worse — it selectively deletes the most volatile moments.
+- **Tail bars get no label at all**, never a partial one. A window that peeked
+  at "the data so far" would systematically favour whatever the final bars did.
+- **Long only.** `k_up=2, k_dn=1` is the payoff geometry of a *long*. A low `p`
+  does **not** imply a profitable short — for a short those barriers are the
+  wrong way round. Shorting needs its own model on mirrored labels.
+
+## The scoreboard is the product
+
+`PurgedKFold` is the single most important file here, because every number the
+project will ever produce flows through it.
+
+- **Purge** — a sample taken 10 bars before the test period resolves *inside*
+  it. Training on it means memorising part of the test outcome.
+- **Embargo** — features are autocorrelated, so a sample just *after* the test
+  block is a near-duplicate even when no label overlaps.
+
+`tests/test_agent5_splits.py` proves this is load-bearing, not decoration. On
+data built to contain **zero** real signal, shuffled K-fold (the sklearn
+tutorial default) with kNN scores **AUC > 0.75** — it's copying temporal
+neighbours out of the training fold. `PurgedKFold` on the same data collapses
+to a coin flip. Same data, same model; the only difference is the scoreboard.
+
+## Reading a training report
+
+```
+samples 1,760 (287 effective) win rate 32.5%
+AUC 0.430  folds [0.515 0.456 0.453 0.505]  spread 0.028
+overfit gap (train - oof) +0.304
+Brier 0.2273 -> 0.2208 after calibration
+calibration error 0.096 -> 0.045
+shuffle test AUC 0.523 (0.50 = clean)
+  WARNING: train AUC exceeds out-of-fold by 0.30 ...
+  WARNING: only 287 independent observations ... too few for 88 features
+  WARNING: AUC 0.430 is at chance - this feature set predicts nothing
+```
+
+That is a real run on three months of BTCUSDT, and it is the harness working
+correctly. Read it in this order:
+
+1. **Folds, not the mean.** `0.61 / 0.49 / 0.58 / 0.51 / 0.57` averages to a
+   respectable 0.55 and is noise. Stable `0.54 / 0.53 / 0.55` is worth far more.
+2. **Shuffle test.** Labels shuffled → anything above ~0.50 is leakage, not
+   skill. Re-run it after adding any new data source; leakage arrives with new
+   *data*, not new models.
+3. **Effective sample size.** 1,760 samples became **287** independent
+   observations after uniqueness weighting. Overlapping labels are not
+   independent, and pretending otherwise inflates your data ~6×.
+4. **Overfit gap.** Train AUC 0.30 above out-of-fold → raise
+   `min_data_in_leaf`, lower `num_leaves`. On this problem a *training* AUC
+   near 0.60 is healthier than one near 0.90.
+
+## The ablation answers the N/W/P/I question
+
+You don't compute those weights — you measure what breaks when a block is
+removed:
+
+```
+added     feats     AUC  spread   delta
+regime        7  0.4235  0.0478
+agent2       33  0.4194  0.0290 -0.0041
+agent1       66  0.4666  0.0418 +0.0473
+agent4       88  0.4304  0.0279 -0.0362
+```
+
+A block that doesn't move out-of-fold AUC hasn't earned its complexity, its
+runtime, or — for Agents 3 and 4 — its data bill.
+
+## Calibration is what makes a percentage publishable
+
+Raw model output is a score, not a probability. Isotonic regression on
+out-of-fold predictions learns `0.72 → 0.61`, and 0.61 is what gets shown. The
+property purchased: **every time it says 61%, roughly 61% of those trades
+should win.** That's the entire justification for putting a number on a screen
+— and given the plan's legal notes about advertising accuracy, the only
+defensible way to publish one.
+
+Measured on the real run: calibration error **0.096 → 0.045**, Brier
+**0.2273 → 0.2208**.
+
+## Training is batch. Predicting is real-time.
+
+`fit()` and `predict_proba()` are separate, and `predict_proba()` raises if no
+model has been frozen. A model that updates its weights on every incoming tick
+is a model chasing noise — that's the failure mode behind "learn from errors"
+in the original notes. Inference is arithmetic on frozen coefficients:
+microseconds.
+
+---
+
 ## Layout
 
 ```
@@ -583,6 +732,17 @@ newsfeed/
   events.py          NewsItem, NewsScore, observable_at   <- read first
   store.py           append-only JSONL store + PIT queries
   sources.py         Binance announcements, JSONL replay
+agent5/              the judge - the only block that learns
+  config.py          barriers, CV geometry, costs, risk limits
+  labels.py          triple barrier + uniqueness weights   <- read first
+  splits.py          PurgedKFold: purge + embargo
+  dataset.py         assemble blocks -> X, y, weights
+  model.py           logistic + LightGBM, out-of-fold predictions
+  calibration.py     isotonic: score -> defensible probability
+  decision.py        EV + fractional Kelly + hard risk caps
+  metrics.py         evaluation, shuffle test, warnings
+  ablation.py        does each block earn its place?
+  agent.py           JudgeAgent
 agent4/              order flow & positioning (22 cols)
   config.py          Agent4Config — thresholds, windows
   schema.py          the 22-column contract
