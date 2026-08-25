@@ -25,3 +25,9 @@ joblib>=1.3                # freezing the fitted model to disk (ships with sklea
 # Agent 5 falls back to the logistic model automatically if it is absent.
 # On macOS this needs libomp too:  brew install libomp
 lightgbm>=4.0
+
+# Live collector (collect.py). The REST 'poll' transport needs nothing extra -
+# stdlib urllib only, and for 1h bars it costs ~24 requests a day against a
+# 2400/min weight budget. Install this only for the websocket transport,
+# which matters for 1s/1m bars or many symbols at once.
+# websockets>=12

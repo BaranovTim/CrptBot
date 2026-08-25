@@ -13,7 +13,8 @@ from .validation import (
     REQUIRED_OHLCV,
     check_bars,
     describe_bars_problem,
+    utc_now,
 )
 
 __all__ = ["check_bars", "describe_bars_problem", "REQUIRED_OHLCV",
-           "feature_report", "FeatureHealth"]
+           "feature_report", "FeatureHealth", "utc_now"]

@@ -216,6 +216,35 @@ features.
 
 ---
 
+## The live collector
+
+**Remember: it records, it does not trade.** Run it as its own process. It has
+to be running *before* forward paper trading, because you cannot forward-test
+on data you never captured.
+
+**Remember: `poll` is the default and is almost certainly what you want.**
+For 1h bars it costs about 24 requests a day and measured weight 2 per cycle
+against a 2400/min budget. Use `stream` only for 1s/1m bars or many symbols.
+
+**Remember: run `--status` occasionally.** It reports gaps. A collector that
+is silently failing is worse than one that is loudly down.
+
+**Hidden problem - the forming bar is the whole reason this exists.** Any feed
+hands you the candle currently being built. Storing it makes live features
+differ from backtest features with nothing raising. The store refuses it, but
+if you ever write your own persistence path, `drop_unclosed()` is not optional.
+
+**Hidden problem - `ingested_at` cannot be recovered later.** If you backfill
+news instead of collecting it live, every item was "ingested" on the day you
+downloaded it, and Agent 3 loses the only clock that cannot be revised out from
+under it.
+
+**Hidden problem - a dropped websocket is normal, not an error.** Roughly once
+a day. What matters is that the reconnect triggers a backfill. If you swap the
+transport, keep that behaviour.
+
+---
+
 ## The one thing that still cannot be checked
 
 None of this tells you whether any feature *predicts* anything. Every test in

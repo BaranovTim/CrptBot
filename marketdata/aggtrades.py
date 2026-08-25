@@ -58,6 +58,8 @@ from typing import Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from core import utc_now
+
 from .binance import DEFAULT_CACHE, VISION_BASE, _days, _download, _to_utc
 
 AGG_COLUMNS = ["agg_trade_id", "price", "quantity", "first_trade_id",
@@ -186,7 +188,7 @@ def load_tape_bars(
     tractable on a laptop.
     """
     start_ts = pd.Timestamp(start, tz="UTC")
-    end_ts = pd.Timestamp(end, tz="UTC") if end else pd.Timestamp.utcnow().tz_localize("UTC")
+    end_ts = pd.Timestamp(end, tz="UTC") if end else utc_now()
     sym = symbol.upper()
     frames: List[pd.DataFrame] = []
 

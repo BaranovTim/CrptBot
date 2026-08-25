@@ -151,3 +151,18 @@ def describe_bars_problem(bars: pd.DataFrame) -> Optional[str]:
                 )
 
     return "; ".join(notes) if notes else None
+
+
+def utc_now() -> pd.Timestamp:
+    """Current time as a tz-aware UTC Timestamp.
+
+    Exists because `pd.Timestamp.utcnow()` changed: in pandas 2.x it already
+    returns a tz-aware value, so the once-idiomatic
+    `pd.Timestamp.utcnow().tz_localize("UTC")` now raises TypeError.
+
+    That bug sat in five files and never fired, because every call site that
+    used it was only reached when an explicit end date was NOT given - and
+    every test happened to pass one. One helper, used everywhere, so the next
+    pandas change is a single edit.
+    """
+    return pd.Timestamp.now(tz="UTC")

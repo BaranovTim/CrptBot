@@ -25,6 +25,8 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
+from core import utc_now
+
 from .binance import DEFAULT_CACHE, VISION_BASE, _days, _download, _to_utc
 
 METRIC_COLUMNS = [
@@ -62,7 +64,7 @@ def load_open_interest(
     ``open_interest_usd`` (notional). Empty when nothing is published.
     """
     start_ts = pd.Timestamp(start, tz="UTC")
-    end_ts = pd.Timestamp(end, tz="UTC") if end else pd.Timestamp.utcnow().tz_localize("UTC")
+    end_ts = pd.Timestamp(end, tz="UTC") if end else utc_now()
     sym = symbol.upper()
     frames = []
 
@@ -103,7 +105,7 @@ def load_liquidations(
     says so, rather than a zero that reads as "no liquidations happened".
     """
     start_ts = pd.Timestamp(start, tz="UTC")
-    end_ts = pd.Timestamp(end, tz="UTC") if end else pd.Timestamp.utcnow().tz_localize("UTC")
+    end_ts = pd.Timestamp(end, tz="UTC") if end else utc_now()
     sym = symbol.upper()
     names = ["time", "symbol", "side", "order_type", "time_in_force",
              "original_quantity", "price", "average_price", "order_status",

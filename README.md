@@ -36,7 +36,7 @@ weights *are* Agent 5.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py            # 135 tests, no network needed
+python3 run_tests.py            # 149 tests, no network needed
 python3 run_tests.py --real     # + leak checks on live Binance data
 python3 main.py --offline       # synthetic bars
 python3 main.py                 # real BTCUSDT 1h perps, both agents
@@ -44,6 +44,7 @@ python3 main.py --agent 2       # indicators only
 python3 main.py --agent 3 --offline   # news, synthetic headlines
 python3 main.py --agent 4 --tape      # order flow (downloads aggTrades)
 python3 main.py --judge --ablation    # train Agent 5 and run the ablation
+python3 collect.py                    # start recording live data
 ```
 
 ```python
@@ -697,6 +698,70 @@ microseconds.
 
 ---
 
+---
+
+# The live collector
+
+```bash
+python3 collect.py                     # BTCUSDT 1h + news, poll transport
+python3 collect.py --once              # one cycle, then exit (good for cron)
+python3 collect.py --status            # what is stored, and any gaps
+python3 collect.py --repair            # re-fetch missing bars
+python3 collect.py --interval 1m --transport stream
+```
+
+Records closed bars into `data_cache/live/` and news into `data_cache/news/`.
+**It does not trade.** Collection is kept separate from decision-making so you
+can restart it without touching a strategy — and it has to run *before* forward
+paper trading, because you cannot forward-test on data you never captured.
+
+## Three silent failures it exists to prevent
+
+**The forming bar.** In live mode the last row off any feed is the candle
+currently being built — its `close` is just the current price and keeps
+changing. A backtest never sees such a row, so storing it makes every derived
+feature differ live, with nothing raising. `drop_unclosed()` sat in the
+codebase unused for weeks; `BarStore.append` now refuses the write rather than
+trusting the caller. Verified against live Binance: REST returned the 14:59 bar
+at 14:30 and the store rejected it.
+
+**The invisible gap.** A Binance websocket drops roughly once every 24 hours —
+documented behaviour, not a failure. Reconnecting without backfilling leaves
+one hole per day, and nothing surfaces it: the frame still loads, the agents
+still run, and every `bars_since_*` feature quietly understates elapsed time.
+So every reconnect triggers a REST backfill, and `find_gaps()` reports holes
+that slipped through.
+
+**The lost clock.** Agent 3's entire point-in-time defence rests on
+`ingested_at` — when *we* saw an item, not when it claims to have happened. A
+backfilled corpus can never recover it: download three years of headlines today
+and every one was "ingested" today. Running this collector from now on is what
+makes future news research honest, even though it does nothing for the past.
+
+## Two transports
+
+| | |
+|---|---|
+| **poll** (default) | REST on a timer. Zero extra dependencies. For 1h bars: ~24 requests a day against a 2400/min weight budget — measured weight of **2** per cycle. Cannot silently half-work. |
+| **stream** | Websocket. Push, sub-second latency, right answer for 1s/1m bars or many symbols. Needs `pip install websockets`. |
+
+Both reconcile against REST after every cycle, so the guarantee is identical.
+Rate limiting is **weight-based, not request-count** — the collector reads
+`X-MBX-USED-WEIGHT-1M` from every response and throttles itself before Binance
+does it with a 429 and then an escalating IP ban.
+
+## Feeding it back into the agents
+
+```python
+from livefeed import BarStore
+bars = BarStore("BTCUSDT", "1h").load()     # same shape the agents expect
+```
+
+Store is append-only and monthly-partitioned CSV, so a month is easy to
+inspect, delete or re-fetch. Restarting the process loses nothing.
+
+---
+
 ## Layout
 
 ```
@@ -732,6 +797,11 @@ newsfeed/
   events.py          NewsItem, NewsScore, observable_at   <- read first
   store.py           append-only JSONL store + PIT queries
   sources.py         Binance announcements, JSONL replay
+livefeed/            live data collection (does not trade)
+  store.py           append-only bar store; refuses forming bars
+  klines.py          poll/stream + mandatory REST gap-fill
+  news.py            scheduled news poll, stamps ingested_at
+  collector.py       supervisor: threads, signals, restart-on-crash
 agent5/              the judge - the only block that learns
   config.py          barriers, CV geometry, costs, risk limits
   labels.py          triple barrier + uniqueness weights   <- read first

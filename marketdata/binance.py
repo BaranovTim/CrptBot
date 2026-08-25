@@ -43,6 +43,8 @@ from typing import Iterable, List, Optional
 import numpy as np
 import pandas as pd
 
+from core import utc_now
+
 VISION_BASE = "https://data.binance.vision/data"
 FAPI_BASE = "https://fapi.binance.com"
 
@@ -146,7 +148,7 @@ def load_klines(
     Returns a frame indexed by ``close_time`` (UTC).
     """
     start_ts = pd.Timestamp(start, tz="UTC")
-    end_ts = pd.Timestamp(end, tz="UTC") if end else pd.Timestamp.utcnow().tz_localize("UTC")
+    end_ts = pd.Timestamp(end, tz="UTC") if end else utc_now()
     cache_dir = Path(cache_dir)
     sym = symbol.upper()
     frames: List[pd.DataFrame] = []
@@ -257,5 +259,5 @@ def drop_unclosed(df: pd.DataFrame, now: Optional[pd.Timestamp] = None) -> pd.Da
     current price and will keep changing. A backtest never sees such a bar,
     so reading it live is a direct source of backtest/live divergence.
     """
-    now = now or pd.Timestamp.utcnow().tz_localize("UTC")
+    now = now or utc_now()
     return df[df.index <= now]
