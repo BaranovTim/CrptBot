@@ -318,6 +318,49 @@ def test_seed_store_is_idempotent():
     return True
 
 
+def test_monitor_refreshes_the_store_itself():
+    """The monitor must not silently depend on collect.py running elsewhere.
+
+    It used to only READ the store. With no collector running, no new bar
+    ever appeared and the screen sat unchanged for hours - looking broken
+    while behaving exactly as written. Now it pulls the bar itself.
+    """
+    import tempfile
+
+    import pandas as pd
+
+    from livefeed import BarStore, KlineCollector
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = BarStore("BTCUSDT", "1h", Path(tmp))
+        bars = make_bars(40)
+        store.append(bars.iloc[:-5], now=bars.index[-1])
+        assert store.count() == 35
+
+        # a collector wired to a fake REST layer, exactly as the monitor uses it
+        class FakeREST(KlineCollector):
+            def _rest_klines(self, start_ms=None, end_ms=None, limit=1500):
+                return bars
+
+        written = FakeREST("BTCUSDT", "1h", store=store).poll_once(
+            now=bars.index[-1])
+        assert written == 5, f"self-refresh wrote {written} bars, expected 5"
+        assert store.last_close_time() == bars.index[-1], \
+            "the monitor did not catch the store up"
+    return True
+
+
+def test_no_fetch_flag_exists_for_collector_users():
+    """Running collect.py separately should be able to opt out of fetching."""
+    from monitor import parse_args
+
+    default = parse_args([])
+    assert default.no_fetch is False, "fetching must be ON by default"
+    opted_out = parse_args(["--no-fetch"])
+    assert opted_out.no_fetch is True
+    return True
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

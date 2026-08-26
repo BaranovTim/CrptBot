@@ -37,6 +37,7 @@ Any tool that claims to know a better price is coming is guessing.
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -113,6 +114,111 @@ def news_verdict(direction: float, magnitude: float) -> Tuple[str, str]:
     if direction < -0.15:
         return "BEARISH", "SELL"
     return "SMALL IMPACT", "NO ACTION"
+
+
+# -------------------------------------------------------------- whales
+@dataclass
+class WhaleWatcher:
+    """Watches SEC filings for insiders and treasuries actually trading.
+
+    Polled on a slow timer in a background thread. Filings are not a
+    high-frequency feed - a few per day across the whole watchlist - and an
+    8-second EDGAR sweep must not stall the bar countdown.
+    """
+
+    min_proximity: float = 0.55
+    min_usd: float = 100_000.0
+    poll_seconds: int = 900
+    store: object = None
+    _seen: set = field(default_factory=set)
+    _primed: bool = False
+    _pending: list = field(default_factory=list)
+    _lock: object = None
+    _thread: object = None
+    _stop: bool = False
+
+    def start(self) -> None:
+        """Begin polling in the background. Safe to call once."""
+        import threading
+
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        import time as _t
+        while not self._stop:
+            try:
+                found = self._fetch()
+                if found:
+                    with self._lock:
+                        self._pending.extend(found)
+            except Exception:            # noqa: BLE001 - never kill the monitor
+                pass
+            for _ in range(self.poll_seconds):
+                if self._stop:
+                    return
+                _t.sleep(1)
+
+    def _fetch(self) -> List:
+        from whalefeed import EdgarSource, WhaleStore, entities
+
+        src = EdgarSource(entities=entities(min_proximity=self.min_proximity),
+                          since_days=14, max_filings_per_entity=3)
+        events = src.fetch()
+        store = self.store if self.store is not None else WhaleStore()
+        store.append(events)
+
+        fresh = [e for e in events if e.id not in self._seen]
+        for e in events:
+            self._seen.add(e.id)
+
+        # first sweep only learns what already exists - announcing a filing
+        # from last week as if it just happened would be nonsense
+        if not self._primed:
+            self._primed = True
+            return []
+        # size floor: a $900 award is technically a transaction and is noise
+        return [e for e in fresh if e.amount_usd >= self.min_usd]
+
+    def drain(self) -> List:
+        """Take whatever the background thread has found since last call."""
+        if self._lock is None:
+            return []
+        with self._lock:
+            out, self._pending = self._pending, []
+        return out
+
+    def stop(self) -> None:
+        self._stop = True
+
+
+def whale_verdict(event) -> Tuple[str, str]:
+    """(impact label, side) for one insider or treasury transaction.
+
+    Two things have to be true before this counts as a signal at all:
+
+      CONVICTION  the transaction code must reflect a decision. An option
+                  exercise or a tax withholding is mechanical - the largest
+                  filing in a typical week is usually code F, which is
+                  shares sold automatically to cover tax on vesting and
+                  says nothing whatsoever about anyone's view.
+
+      PROXIMITY   the entity's trading must bear on CRYPTO. A Coinbase
+                  officer selling COIN is a statement about COIN equity,
+                  not about bitcoin.
+    """
+    conviction = event.conviction
+    proximity = float(event.meta.get("crypto_proximity", 0.5))
+
+    if conviction <= 0.05:
+        return "MECHANICAL - NOT A VIEW", "NO ACTION"
+    weight = conviction * proximity
+    if weight < 0.25 or event.amount_usd < 250_000:
+        return "SMALL IMPACT", "NO ACTION"
+    if event.action == "BUY":
+        return ("STRONG BULLISH" if weight >= 0.5 else "BULLISH"), "BUY"
+    return ("STRONG BEARISH" if weight >= 0.5 else "BEARISH"), "SELL"
 
 
 # ----------------------------------------------------------- analysis
@@ -306,7 +412,8 @@ class Monitor:
 
     # -- one screen ----------------------------------------------------
     def screen(self, bars: pd.DataFrame, news_items: List[dict],
-               now: Optional[pd.Timestamp] = None) -> str:
+               now: Optional[pd.Timestamp] = None,
+               whale_events: Optional[List] = None) -> str:
         now = now or utc_now()
         last_close = bars.index[-1]
         price = float(bars["close"].iloc[-1])
@@ -330,6 +437,28 @@ class Monitor:
             L.append("    start it:  python3 collect.py")
 
         restarted = False
+
+        # whales first: a filing is evidence about an actor, and it should be
+        # on screen before the odds it might inform
+        for e in (whale_events or []):
+            impact, side = whale_verdict(e)
+            if impact.startswith("MECHANICAL"):
+                continue                    # not worth a headline
+            L.append("")
+            L.append(" *** WHALE ACTIVITY DETECTED ***")
+            L.append(f"   {e.describe()}")
+            L.append(f"   whale move is {impact}")
+            L.append(f"   {side}")
+            lag = ""
+            if e.event_time is not None:
+                hrs = (e.published_at - e.event_time).total_seconds() / 3600
+                lag = f", disclosed {hrs:.0f}h later"
+            L.append(f"   (traded {e.event_time:%Y-%m-%d}{lag}  "
+                     f"code {e.transaction_code}  "
+                     f"conviction {e.conviction:.2f})")
+            L.append("   NOTE: filings are lagging evidence, not a trigger - "
+                     "the analyses below are unchanged")
+
         if news_items:
             L.append("")
             L.append(" *** NEWS RELEASED, updating information for both analysis ***")
@@ -411,11 +540,30 @@ def parse_args(argv=None):
                    help="replay the last N stored bars, one screen each")
     p.add_argument("--poll", type=int, default=20,
                    help="seconds between checks for a new bar or news")
+    p.add_argument("--no-fetch", action="store_true",
+                   help="do not fetch bars; rely on collect.py to update the "
+                        "store. only useful if you run the collector separately")
+    p.add_argument("--market", default=project_config.MARKET,
+                   help="futures/um (default) or spot")
+    p.add_argument("--no-whales", action="store_true",
+                   help="do not watch SEC filings for insider/treasury trades")
+    p.add_argument("--whale-every", type=int, default=900,
+                   help="seconds between SEC sweeps (default 900). filings are "
+                        "not a fast feed - a few a day across the whole list")
+    p.add_argument("--whale-min-usd", type=float, default=100_000.0,
+                   help="ignore transactions smaller than this")
+    p.add_argument("--watchlist", action="store_true",
+                   help="print the tracked entities and exit")
     return p.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+
+    if args.watchlist:
+        from whalefeed import describe
+        print(describe())
+        return 0
     for path, label in ((Path(args.h1), "--h1"), (Path(args.h2), "--h2")):
         if not path.exists():
             raise SystemExit(
@@ -438,25 +586,81 @@ def main(argv=None) -> int:
             print()
         return 0
 
+    whales = None
+    if not args.no_whales:
+        whales = WhaleWatcher(min_usd=args.whale_min_usd,
+                              poll_seconds=args.whale_every)
+        whales.start()
+
     mon.news.poll()                       # prime, so old items are not "breaking"
     print(mon.screen(bars, []))
     if args.once:
         return 0
 
     last_seen = bars.index[-1]
+
+    # THE MONITOR FETCHES ITS OWN BARS.
+    #
+    # It used to only read the store, which meant it silently depended on
+    # collect.py running in another terminal. Without that, no new bar ever
+    # appeared and the screen sat unchanged forever - looking broken while
+    # behaving exactly as written.
+    #
+    # Now it pulls the closed bar itself. The store dedupes, so running
+    # collect.py alongside is still fine - they just both write the same
+    # bar and the second write is a no-op.
+    refresher = None
+    if not args.history and not args.no_fetch:
+        from livefeed import KlineCollector
+        refresher = KlineCollector(args.symbol, args.interval,
+                                   market=args.market)
+
+    interval_seconds = self_delta = mon.delta.total_seconds()
+    tty = sys.stdout.isatty()
     print(f"\nwatching {args.symbol} {args.interval} - Ctrl-C to stop")
+    if refresher is None and not args.history:
+        print("  (--no-fetch: relying on collect.py to update the store)")
+
     try:
         while True:
-            time.sleep(args.poll)
+            now = utc_now()
+            # the next bar closes one interval after the newest stored one
+            next_close = last_seen + mon.delta
+            due = (now - next_close).total_seconds()
+
+            # only hit the API once the bar we are waiting for has closed.
+            # polling every 20s would work too, but this is one request per
+            # bar instead of 180, and the exchange needs a moment to finalise
+            if refresher is not None and due >= 2:
+                refresher.poll_once()
+
             fresh_news = mon.news.poll()
+            fresh_whales = whales.drain() if whales else []
             bars = load_bars(args)
             new_bar = bars.index[-1] > last_seen
-            if new_bar or fresh_news:
+
+            if new_bar or fresh_news or fresh_whales:
+                if tty:
+                    print("\r" + " " * 78 + "\r", end="")   # clear countdown
                 last_seen = bars.index[-1]
                 print()
-                print(mon.screen(bars, fresh_news))
+                print(mon.screen(bars, fresh_news, whale_events=fresh_whales))
+            elif tty:
+                # a visible heartbeat. without it the process looks hung for
+                # a full hour, which is indistinguishable from a crash
+                wait = max(0, -due)
+                mm, ss = divmod(int(wait), 60)
+                watching = "news + filings" if whales else "news"
+                print(f"\r  next bar closes in {mm:02d}:{ss:02d}  "
+                      f"(last {last_seen:%H:%M} UTC)  watching {watching}...",
+                      end="", flush=True)
+
+            time.sleep(args.poll)
     except KeyboardInterrupt:
         print("\nstopped")
+    finally:
+        if whales:
+            whales.stop()
     return 0
 
 

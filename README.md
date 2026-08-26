@@ -36,7 +36,7 @@ weights *are* Agent 5.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py            # 164 tests, no network needed
+python3 run_tests.py            # 182 tests, no network needed
 python3 run_tests.py --real     # + leak checks on live Binance data
 python3 main.py --offline       # synthetic bars
 python3 main.py                 # real BTCUSDT 1h perps, both agents
@@ -45,8 +45,8 @@ python3 main.py --agent 3 --offline   # news, synthetic headlines
 python3 main.py --agent 4 --tape      # order flow (downloads aggTrades)
 python3 main.py --judge --ablation    # train Agent 5 and run the ablation
 python3 collect.py --seed 2024-01-01  # ONCE: fill the live store from history
-python3 collect.py                    # start recording live data (prints no signal)
 python3 monitor.py                    # <- the rolling two-bar screen
+                                      #    (fetches its own bars; collect.py optional)
 python3 predict.py --history          # <- the percentage, right now
 ```
 
@@ -815,6 +815,82 @@ why the output shows the arithmetic rather than just a number.
 
 ---
 
+---
+
+# Whale & insider tracking
+
+```bash
+python3 monitor.py --watchlist      # who is tracked, and why
+python3 monitor.py                  # alerts appear alongside news
+```
+
+Alerts use the same shape as the news block:
+
+```
+ *** WHALE ACTIVITY DETECTED ***
+   Werner Ryan D. (SVP, CAO) SELL $778,751 of RIOT
+   whale move is BEARISH
+   SELL
+   (traded 2026-08-05, disclosed 69h later  code S  conviction 0.50)
+   NOTE: filings are lagging evidence, not a trigger
+```
+
+## Source: SEC EDGAR — free, official, exact
+
+Form 4 gives the officer's name, exact share count, exact price, exact date,
+filed under legal obligation. It is the best "important person traded" data
+available at zero cost. No API key. 17 entities, every CIK resolved from
+SEC's own ticker map rather than typed from memory — a wrong CIK doesn't
+error, it silently returns another company's filings forever.
+
+Ranked by `crypto_proximity`: how much an entity's own trading says about
+**crypto** rather than about its own share price. MSTR 0.95, MARA 0.80,
+COIN 0.55, BLK 0.30.
+
+## Size is not conviction
+
+The single most common way this data is misread. In a real week, the two
+largest transactions on the watchlist were both **code F** — shares withheld
+automatically to pay tax on vesting:
+
+```
+$2,995,245 RIOT SELL   code F  conviction 0.00  ->  MECHANICAL - NOT A VIEW
+$1,412,051 XYZ  SELL   code F  conviction 0.00  ->  MECHANICAL - NOT A VIEW
+$  778,751 RIOT SELL   code S  conviction 0.50  ->  BEARISH
+```
+
+A naive tracker headlines the first as *"RIOT EXECUTIVE DUMPS $3M"*. Nobody
+decided anything. `conviction` encodes the transaction code:
+
+| code | meaning | conviction |
+|---|---|---|
+| P | open-market purchase | 1.00 — they chose to buy |
+| S | open-market sale | 0.50 — often a scheduled 10b5-1 plan |
+| M | option exercise | 0.00 — mechanical |
+| A / F / G | award, tax withholding, gift | 0.00 — no view |
+
+## Two limits that cannot be engineered away
+
+**It lags.** Form 4 is due within two business days; measured lag on real
+filings was 24–120 hours. 13F is 45 days stale by law. You see the transfer
+after it lands.
+
+**It is gamed.** Anyone who knows their wallet is watched can move funds to
+manufacture a signal. Named wallets are the most-watched objects in crypto.
+
+Which is why alerts say *"lagging evidence, not a trigger"* and the analyses
+below them are **unchanged** by a filing. It is reported, not traded on.
+
+## What is deliberately absent
+
+No X/Twitter (API pricing out of reach, scraping breaches ToS), no
+TradingView ideas (no API, scraping breaches ToS), no anonymous wallet
+labels (needs paid Arkham/Nansen, and the labels are guesses that get gamed).
+Whale Alert returns 401 without a paid key — the adapter is there if you buy
+one.
+
+---
+
 ## Layout
 
 ```
@@ -851,6 +927,10 @@ newsfeed/
   store.py           append-only JSONL store + PIT queries
   sources.py         Binance announcements, JSONL replay
 predict.py           read the current signal from a frozen model
+whalefeed/           SEC insider & treasury tracking
+  watchlist.py       the tracked entities, CIKs verified
+  edgar.py           Form 4 -> who bought/sold and how much
+  events.py          WhaleEvent + conviction + PIT clocks
 livefeed/            live data collection (does not trade)
   store.py           append-only bar store; refuses forming bars
   klines.py          poll/stream + mandatory REST gap-fill
