@@ -17,7 +17,7 @@ import argparse
 import logging
 import sys
 
-from livefeed import BarStore, build_collector, interval_delta
+from livefeed import BarStore, build_collector, interval_delta, seed_store
 
 
 def parse_args(argv=None):
@@ -39,6 +39,11 @@ def parse_args(argv=None):
                    help="print what is stored, including gaps, then exit")
     p.add_argument("--repair", action="store_true",
                    help="re-fetch any missing bars, then exit")
+    p.add_argument("--seed", metavar="DATE", default=None,
+                   help="bulk-load history into the live store from this date "
+                        "(e.g. 2024-01-01), then exit. do this once before "
+                        "using monitor.py - the detectors need several hundred "
+                        "bars and collecting them live would take days")
     p.add_argument("--quiet", action="store_true")
     return p.parse_args(argv)
 
@@ -65,6 +70,20 @@ def main(argv=None) -> int:
                                 transport=args.transport,
                                 market=args.market,
                                 news_interval=args.news_interval)
+
+    if args.seed:
+        import config as project_config
+        for s_ in symbols:
+            for i in intervals:
+                store = BarStore(s_, i)
+                before = store.count()
+                added = seed_store(s_, i, start=args.seed, store=store,
+                                   market=args.market,
+                                   cache_dir=project_config.DATA_CACHE)
+                print(f"{s_} {i}: {before:,} -> {store.count():,} bars "
+                      f"(+{added:,})")
+                print(store.status(interval_delta(i)))
+        return 0
 
     if args.repair:
         for kc in collector.klines:

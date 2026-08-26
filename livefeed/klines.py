@@ -348,3 +348,34 @@ class KlineCollector:
             if stop and stop():
                 return
             time.sleep(min(1.0, deadline - time.time()))
+
+
+def seed_store(symbol: str = "BTCUSDT", interval: str = "1h",
+               start: str = "2024-01-01", store: Optional[BarStore] = None,
+               market: str = "futures/um", cache_dir=None) -> int:
+    """Bulk-load history into the live store so it is usable immediately.
+
+    A freshly started collector holds only the last hundred bars, and the
+    detectors need several hundred before they produce anything - Agent 4
+    alone wants 356. Waiting for that to accumulate live means days of a
+    monitor that cannot run.
+
+    This uses the monthly archive path rather than REST pagination: 3 years
+    of hourly bars arrive in about 30 seconds as a handful of zip files,
+    versus a thousand paginated REST calls against a weight budget.
+
+    Safe to re-run. The store dedupes, so seeding twice adds nothing, and
+    the forming-bar guard still applies to whatever the archive returns.
+    """
+    from marketdata import load_klines
+
+    store = store or BarStore(symbol, interval)
+    kwargs = {"market": market}
+    if cache_dir is not None:
+        kwargs["cache_dir"] = cache_dir
+    bars = load_klines(symbol, interval, start=start, end=None, **kwargs)
+    if bars.empty:
+        return 0
+    written = store.append(bars)
+    log.info("seeded %d bars for %s %s", written, symbol, interval)
+    return written

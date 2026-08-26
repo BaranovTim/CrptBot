@@ -41,6 +41,16 @@ def parse_args(argv=None):
                    help="with --judge: run the block-by-block ablation")
     p.add_argument("--save-model", default=None,
                    help="with --judge: freeze the fitted model to this path")
+    p.add_argument("--hold", type=int, default=None,
+                   help="with --judge: label horizon in bars (max_hold_bars). "
+                        "the model answers 'within THIS many bars' - a model "
+                        "trained at 24 cannot be read as a 2-bar forecast")
+    p.add_argument("--k-up", type=float, default=None,
+                   help="take-profit distance in ATRs")
+    p.add_argument("--k-dn", type=float, default=None,
+                   help="stop distance in ATRs. equal to --k-up makes the "
+                        "barriers SYMMETRIC, which is what makes 1-p a "
+                        "truthful 'chance of going down'")
     p.add_argument("--tape", action="store_true",
                    help="download aggTrades for Agent 4 (large files; off by default)")
     p.add_argument("--symbol", default=config.SYMBOL)
@@ -248,7 +258,17 @@ def main(argv=None) -> int:
 
     if args.judge:
         print("\n" + "=" * 66)
-        cfg5 = Agent5Config()
+        overrides = {}
+        if args.hold is not None:
+            overrides["max_hold_bars"] = args.hold
+        if args.k_up is not None:
+            overrides["k_up"] = args.k_up
+        if args.k_dn is not None:
+            overrides["k_dn"] = args.k_dn
+        cfg5 = Agent5Config(**overrides)
+        print(f"labels: +{cfg5.k_up} / -{cfg5.k_dn} ATR within "
+              f"{cfg5.max_hold_bars} bars"
+              + ("  (symmetric)" if cfg5.k_up == cfg5.k_dn else "  (asymmetric)"))
         judge = JudgeAgent(cfg5)
         ds = judge.build(bars, warmup=warm,
                          **{k: v for k, v in frames.items()

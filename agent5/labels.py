@@ -109,11 +109,21 @@ def triple_barrier(bars: pd.DataFrame, cfg: Agent5Config) -> LabelResult:
     upper = close + cfg.k_up * atr        # per-sample barrier levels
     lower = close - cfg.k_dn * atr
 
-    # a bar is labellable only if its ATR exists and its FULL window fits
-    # inside the data. samples near the end get no label at all - a partial
-    # window would bias labels toward whatever the last bars did
-    can = (~np.isnan(atr)) & (atr > 0)
-    can &= np.arange(n) + cfg.max_hold_bars < n
+    # TWO different conditions, and conflating them was a real bug.
+    #
+    # has_atr  - enough history to measure volatility. this is all the
+    #            BARRIER DISTANCES need: k_up * ATR / close is arithmetic on
+    #            the current bar and looks at no future whatsoever.
+    #
+    # can      - additionally, the full label window fits inside the data.
+    #            only the LABEL needs this; a partial window would bias
+    #            labels toward whatever the final bars happened to do.
+    #
+    # gating the distances on `can` too left the newest max_hold bars with
+    # NaN barriers - including the live bar, the only one you can actually
+    # trade - so EV was NaN and the system could never produce a decision.
+    has_atr = (~np.isnan(atr)) & (atr > 0)
+    can = has_atr & (np.arange(n) + cfg.max_hold_bars < n)
 
     # resolve all samples together, one horizon step at a time: at step h we
     # look at bar t+h for every still-pending sample. max_hold iterations of
@@ -159,8 +169,10 @@ def triple_barrier(bars: pd.DataFrame, cfg: Agent5Config) -> LabelResult:
     weight = _uniqueness_weights(y, t1, n)
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        tp_pct = np.where(can, 100.0 * cfg.k_up * atr / close, np.nan)
-        sl_pct = np.where(can, 100.0 * cfg.k_dn * atr / close, np.nan)
+        # has_atr, NOT can - see the note above. the live bar must have
+        # barriers even though it can never have a label
+        tp_pct = np.where(has_atr, 100.0 * cfg.k_up * atr / close, np.nan)
+        sl_pct = np.where(has_atr, 100.0 * cfg.k_dn * atr / close, np.nan)
 
     ix = bars.index
     return LabelResult(

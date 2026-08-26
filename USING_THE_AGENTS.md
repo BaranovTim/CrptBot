@@ -218,6 +218,17 @@ features.
 
 ## The live collector
 
+**Seed the store before anything else.** A fresh collector holds ~100 bars;
+the detectors need about 356. Collecting that live takes days.
+
+```bash
+python3 collect.py --seed 2024-01-01     # once, ~30s for 3 years
+python3 collect.py                       # then keep it current
+```
+
+Seeding uses the monthly archives, not REST pagination - 23,000 bars in about
+thirty seconds. Safe to re-run: the store dedupes.
+
 **Remember: it records, it does not trade.** Run it as its own process. It has
 to be running *before* forward paper trading, because you cannot forward-test
 on data you never captured.

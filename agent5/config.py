@@ -95,8 +95,14 @@ class Agent5Config:
     def __post_init__(self) -> None:
         if self.k_up <= 0 or self.k_dn <= 0:
             raise ValueError("barrier multiples must be positive")
-        if self.max_hold_bars < 2:
-            raise ValueError("max_hold_bars must be at least 2")
+        if self.max_hold_bars < 1:
+            raise ValueError("max_hold_bars must be at least 1")
+        # 1 is legal and useful: it asks "does the very next bar touch a
+        # barrier, and if not, did it close up or down". that is the right
+        # question for a window with one bar left to run. most labels then
+        # resolve by timeout rather than by touch, because a full ATR inside
+        # a single bar is a large move - which is fine, it is still a real
+        # forward-looking outcome.
         if self.n_splits < 2:
             raise ValueError("n_splits must be at least 2")
         if not 0 < self.kelly_fraction <= 1:

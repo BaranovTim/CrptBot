@@ -139,6 +139,31 @@ def test_labels_use_only_the_future():
     return True
 
 
+def test_live_bar_has_barriers_but_no_label():
+    """The bar you actually trade must have TP/SL even with no label.
+
+    Barrier distances are k * ATR / close - arithmetic on the current bar,
+    needing no future. Labels need the full window. Gating both on the label
+    condition left the newest bars with NaN barriers, so EV was NaN and the
+    pipeline could never emit a live decision.
+    """
+    bars = make_bars(400)
+    res = triple_barrier(bars, Agent5Config(max_hold_bars=24, atr_period=14))
+
+    tail = slice(-24, None)                       # unlabellable by construction
+    assert res.y.iloc[tail].isna().all(), "tail bars should carry no label"
+    assert res.tp_pct.iloc[tail].notna().all(), \
+        "the live bar has no take-profit distance - EV cannot be computed"
+    assert res.sl_pct.iloc[tail].notna().all(), \
+        "the live bar has no stop distance"
+    assert (res.tp_pct.iloc[tail] > 0).all()
+
+    # and the ratio still matches the configured payoff
+    ratio = (res.tp_pct.iloc[-1] / res.sl_pct.iloc[-1])
+    assert abs(ratio - 2.0) < 1e-9, f"payoff ratio {ratio:.3f}, expected 2.0"
+    return True
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

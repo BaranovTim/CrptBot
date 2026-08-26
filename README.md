@@ -36,7 +36,7 @@ weights *are* Agent 5.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py            # 149 tests, no network needed
+python3 run_tests.py            # 164 tests, no network needed
 python3 run_tests.py --real     # + leak checks on live Binance data
 python3 main.py --offline       # synthetic bars
 python3 main.py                 # real BTCUSDT 1h perps, both agents
@@ -44,7 +44,10 @@ python3 main.py --agent 2       # indicators only
 python3 main.py --agent 3 --offline   # news, synthetic headlines
 python3 main.py --agent 4 --tape      # order flow (downloads aggTrades)
 python3 main.py --judge --ablation    # train Agent 5 and run the ablation
-python3 collect.py                    # start recording live data
+python3 collect.py --seed 2024-01-01  # ONCE: fill the live store from history
+python3 collect.py                    # start recording live data (prints no signal)
+python3 monitor.py                    # <- the rolling two-bar screen
+python3 predict.py --history          # <- the percentage, right now
 ```
 
 ```python
@@ -762,6 +765,56 @@ inspect, delete or re-fetch. Restarting the process loses nothing.
 
 ---
 
+---
+
+# Getting the percentage
+
+Three commands, three different jobs. `collect.py` never prints a signal —
+that is not what it is for.
+
+| command | what it does | how long |
+|---|---|---|
+| `collect.py` | records closed bars, forever | runs until stopped |
+| `main.py --judge --save-model ...` | trains and freezes a model | minutes, once |
+| `predict.py` | reads the probability | milliseconds |
+
+```bash
+# 1. train once on downloaded history (the live store will not have
+#    enough bars for weeks)
+python3 main.py --judge --save-model output/judge.joblib --start 2024-01-01
+
+# 2. read the signal
+python3 predict.py --history
+python3 predict.py --watch          # re-read as each bar closes
+```
+
+```
+[2026-08-25 23:59:59.999+00:00] Agent 5
+  calibrated probability 30.2%
+  barriers  TP +1.69%  SL -0.84%
+  EV after costs -0.178%  (threshold +0.05%)
+  full Kelly 0.000 -> 0.25 Kelly = 0.00% of equity
+  DECISION: FLAT - EV below threshold after costs
+```
+
+**Training and prediction are separate commands on purpose.** Training is
+batch and offline; prediction is arithmetic on a frozen function. A model that
+refits on every incoming bar is a model chasing noise — the plan is explicit
+that "training and predicting in real time" is the wrong shape.
+
+## What the percentage actually means
+
+Not "chance BTC goes up". It is: **the probability that a long entered at this
+bar's close reaches +k_up ATR before −k_dn ATR, within max_hold bars.** Tied to
+specific barriers and a specific holding period, which is why they are printed
+next to it. The same 30% against different barriers is a different statement.
+
+And the probability is *not* the decision. A 61% chance with a good payoff is a
+trade; the same 61% with a bad one is not. EV after costs decides — which is
+why the output shows the arithmetic rather than just a number.
+
+---
+
 ## Layout
 
 ```
@@ -797,6 +850,7 @@ newsfeed/
   events.py          NewsItem, NewsScore, observable_at   <- read first
   store.py           append-only JSONL store + PIT queries
   sources.py         Binance announcements, JSONL replay
+predict.py           read the current signal from a frozen model
 livefeed/            live data collection (does not trade)
   store.py           append-only bar store; refuses forming bars
   klines.py          poll/stream + mandatory REST gap-fill

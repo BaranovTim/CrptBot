@@ -97,6 +97,7 @@ def load_liquidations(
     start: str = "2026-05-01",
     end: Optional[str] = None,
     cache_dir: Path = DEFAULT_CACHE,
+    give_up_after: int = 14,
 ) -> pd.DataFrame:
     """Forced liquidations. Best-effort — the historical feed is restricted.
 
@@ -112,12 +113,28 @@ def load_liquidations(
              "last_fill_quantity", "accumulated_fill_quantity"]
     frames = []
 
+    # Binance restricted this feed, so on most ranges EVERY day 404s. Without
+    # an early exit that is ~1300 pointless HTTP round trips for a three-year
+    # range - measured at over ten minutes of a training run spent waiting for
+    # a feed that returns nothing. If the first `give_up_after` consecutive
+    # days are all missing, the feed is not published for this range; stop.
+    misses = 0
     for day in _days(start_ts, end_ts):
         stem = f"{sym}-liquidationSnapshot-{day:%Y-%m-%d}"
         url = f"{VISION_BASE}/futures/um/daily/liquidationSnapshot/{sym}/{stem}.zip"
         dest = Path(cache_dir) / "futures/um" / "liquidations" / sym / f"{stem}.zip"
         if not _download(url, dest):
+            misses += 1
+            if misses >= give_up_after and not frames:
+                # nothing has ever downloaded and the streak is long: the feed
+                # is not available here. an empty frame is the honest answer,
+                # and Agent 4 reports it as missing rather than as "no
+                # liquidations happened"
+                return pd.DataFrame(
+                    columns=["long_liquidated", "short_liquidated"],
+                    index=pd.DatetimeIndex([], tz="UTC", name="time"))
             continue
+        misses = 0
         df = _read_csv_zip(dest, names)
         if df is None or "side" not in df.columns:
             continue
