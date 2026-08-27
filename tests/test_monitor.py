@@ -361,6 +361,67 @@ def test_no_fetch_flag_exists_for_collector_users():
     return True
 
 
+# ------------------------------------------------------ connectivity
+def test_network_failure_does_not_kill_the_monitor():
+    """A dropped wifi connection must be survivable, not fatal.
+
+    urllib reports DNS failure as "nodename nor servname provided, or not
+    known" - which reads like a bug in this program rather than a laptop
+    losing its connection.
+    """
+    import tempfile
+    import urllib.error
+
+    from livefeed import BarStore, KlineCollector
+
+    bars = make_bars(40)
+    with tempfile.TemporaryDirectory() as tmp:
+        store = BarStore("BTCUSDT", "1h", Path(tmp))
+        store.append(bars.iloc[:30], now=bars.index[29])
+
+        class Flaky(KlineCollector):
+            mode = "down"
+
+            def _rest_klines(self, start_ms=None, end_ms=None, limit=1500):
+                if self.mode == "down":
+                    raise urllib.error.URLError(
+                        "[Errno 8] nodename nor servname provided, or not known")
+                return bars
+
+        c = Flaky("BTCUSDT", "1h", store=store)
+        for _ in range(3):
+            assert c.poll_once(now=bars.index[-1]) == 0
+        assert c.stats.errors == 3, "failures were not counted"
+        assert store.count() == 30, "the store was corrupted by a failed poll"
+
+        # and when the network returns, everything missed is recovered
+        c.mode = "up"
+        before = c.stats.errors
+        written = c.poll_once(now=bars.index[-1])
+        assert written == 10, f"recovery wrote {written} bars, expected 10"
+        assert c.stats.errors == before, "a successful poll counted an error"
+        assert store.find_gaps(HOUR) == [], "the outage left a permanent hole"
+    return True
+
+
+def test_connection_hint_is_plain_language():
+    """The status line must not show a raw OS errno string."""
+    from monitor import connection_hint
+    from core import utc_now
+
+    assert connection_hint(0, utc_now()) == "", "a healthy link reported a problem"
+
+    msg = connection_hint(3, utc_now() - pd.Timedelta("7min"))
+    assert "OFFLINE" in msg and "3 failed polls" in msg
+    assert "7m ago" in msg
+    # the cryptic form must not leak through
+    assert "nodename" not in msg and "Errno" not in msg
+
+    one = connection_hint(1, utc_now())
+    assert "1 failed poll" in one and "polls" not in one, "plural not handled"
+    return True
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

@@ -234,6 +234,13 @@ itself, once per bar. Run the collector alongside it only if you also want
 news collection or a second symbol recorded - the store dedupes, so both
 writing the same bar is harmless.
 
+**Network drops are survivable, and normal.** A laptop sleeping or wifi
+dropping produces `[Errno 8] nodename nor servname provided` - a DNS failure
+that reads like a crash but isn't. The monitor keeps running, shows
+`OFFLINE - no network (N failed polls)` in the status line, and backfills
+every missed bar the moment the connection returns. Verified: 10 bars missed
+during an outage, all recovered, zero gaps.
+
 **Remember: it records, it does not trade.** Run it as its own process. It has
 to be running *before* forward paper trading, because you cannot forward-test
 on data you never captured.

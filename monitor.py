@@ -221,6 +221,22 @@ def whale_verdict(event) -> Tuple[str, str]:
     return ("STRONG BEARISH" if weight >= 0.5 else "BEARISH"), "SELL"
 
 
+def connection_hint(errors: int, last_ok) -> str:
+    """Plain words for what is otherwise a cryptic OS error.
+
+    urllib surfaces a DNS failure as "nodename nor servname provided, or not
+    known", which reads like a bug in this program. It is almost always the
+    laptop's wifi dropping or the machine waking from sleep.
+    """
+    if errors <= 0:
+        return ""
+    since = ""
+    if last_ok is not None:
+        mins = int((utc_now() - last_ok).total_seconds() // 60)
+        since = f", last success {mins}m ago"
+    return f"OFFLINE - no network ({errors} failed poll{'s' if errors > 1 else ''}{since})"
+
+
 # ----------------------------------------------------------- analysis
 @dataclass
 class Analysis:
@@ -586,6 +602,13 @@ def main(argv=None) -> int:
             print()
         return 0
 
+    # the collector logs "poll failed: <urlopen error ...>" straight to
+    # stderr, which lands on top of the \r countdown and reads like a crash.
+    # the monitor shows connection state itself, so silence the raw stream
+    import logging
+    logging.getLogger("livefeed").setLevel(logging.ERROR)
+    logging.getLogger("whalefeed").setLevel(logging.ERROR)
+
     whales = None
     if not args.no_whales:
         whales = WhaleWatcher(min_usd=args.whale_min_usd,
@@ -617,6 +640,8 @@ def main(argv=None) -> int:
 
     interval_seconds = self_delta = mon.delta.total_seconds()
     tty = sys.stdout.isatty()
+    net_fails = 0
+    last_net_ok = utc_now()
     print(f"\nwatching {args.symbol} {args.interval} - Ctrl-C to stop")
     if refresher is None and not args.history:
         print("  (--no-fetch: relying on collect.py to update the store)")
@@ -632,7 +657,18 @@ def main(argv=None) -> int:
             # polling every 20s would work too, but this is one request per
             # bar instead of 180, and the exchange needs a moment to finalise
             if refresher is not None and due >= 2:
+                before_err = refresher.stats.errors
                 refresher.poll_once()
+                if refresher.stats.errors > before_err:
+                    net_fails += 1
+                else:
+                    if net_fails:
+                        if tty:
+                            print("\r" + " " * 78 + "\r", end="")
+                        print(f"  network recovered at {utc_now():%H:%M:%S} UTC "
+                              f"- any bars missed while offline were backfilled")
+                    net_fails = 0
+                    last_net_ok = utc_now()
 
             fresh_news = mon.news.poll()
             fresh_whales = whales.drain() if whales else []
@@ -651,9 +687,14 @@ def main(argv=None) -> int:
                 wait = max(0, -due)
                 mm, ss = divmod(int(wait), 60)
                 watching = "news + filings" if whales else "news"
-                print(f"\r  next bar closes in {mm:02d}:{ss:02d}  "
-                      f"(last {last_seen:%H:%M} UTC)  watching {watching}...",
-                      end="", flush=True)
+                offline = connection_hint(net_fails, last_net_ok)
+                if offline:
+                    line = (f"  next bar closes in {mm:02d}:{ss:02d}  "
+                            f"{offline} - retrying")
+                else:
+                    line = (f"  next bar closes in {mm:02d}:{ss:02d}  "
+                            f"(last {last_seen:%H:%M} UTC)  watching {watching}...")
+                print("\r" + line.ljust(78)[:78], end="", flush=True)
 
             time.sleep(args.poll)
     except KeyboardInterrupt:
