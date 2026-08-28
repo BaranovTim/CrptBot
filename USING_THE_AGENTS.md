@@ -268,6 +268,57 @@ transport, keep that behaviour.
 
 ---
 
+## The intra-bar watch
+
+**Remember: the provisional number is not calibrated, and it never becomes
+calibrated.** It is produced by feeding the forming bar to models fitted on
+closed bars. At minute 10 of an hour that bar's ATR, RSI and structure are
+computed over ten minutes of data, and the isotonic map that makes a
+percentage mean anything was fitted on whole bars. Read it as "the anchored
+read has drifted", never as "the odds are now X". It is not stored and not
+counted in any statistic, deliberately.
+
+**Remember: RESOLVED is the strong statement, not the percentage.** If price
+touched a barrier, the window is decided and no model was consulted to say
+so. That line is worth more than any probability printed above it.
+
+**Remember: it records nothing.** Like the collector, the intra-bar watch is
+read-only. A spike that fires and scrolls past is gone — there is still no
+prediction journal, so none of this accumulates into a track record.
+
+**Hidden problem — `--spike-atr` at or above the barrier makes the alert a
+post-mortem.** The trained barriers are 1.0 ATR. A spike threshold of 1.0
+fires exactly when the barrier is touched, which is after the window is
+already decided. The default is 0.75 for that reason, and `monitor.py` checks
+the two against each other at startup — but it only *warns*, it does not
+refuse, so read that line if you have retrained.
+
+**Hidden problem — the volume pace assumes volume arrives evenly.** It does
+not: there is a real lull mid-bar and a rush around the close, so the pace
+reads slightly hot early and slightly cold late. The threshold sits well above
+that distortion, and the number is a smoke alarm rather than an instrument.
+Below 5% elapsed it reports NaN instead of dividing by a tiny number.
+
+**Hidden problem — the re-arm can hide a reversal that returns to the
+anchor.** Re-arming is keyed on distance travelled from the last alert, so a
+move out to 1.5 ATR and back to 0.0 does alert again (1.5 ATR of travel). But
+a slow drift back inside the re-arm window will not. The bar close re-reads
+everything anyway, which is the backstop.
+
+**Hidden problem — `provisional_features` must never write the feature
+cache.** `features()` caches the CLOSED-bar frame keyed on its last
+timestamp. If a provisional call replaced it, every later screen would quote
+a partial bar with nothing raising. `test_provisional_features_do_not_poison_the_closed_bar_cache`
+asserts the cached object is unchanged by identity.
+
+**Hidden problem — appending a forming bar must change exactly ONE row.** If
+an earlier feature row moves when a bar is appended, some detector is reading
+forward, and the provisional read is contaminated in a way no threshold would
+reveal. `test_appending_a_forming_bar_does_not_rewrite_history` is the
+`test_no_lookahead` idea aimed at the merge path. It passes today.
+
+---
+
 ## The one thing that still cannot be checked
 
 None of this tells you whether any feature *predicts* anything. Every test in

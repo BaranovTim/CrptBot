@@ -37,6 +37,7 @@ Any tool that claims to know a better price is coming is guessing.
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -238,6 +239,77 @@ def connection_hint(errors: int, last_ok) -> str:
 
 
 # ----------------------------------------------------------- analysis
+LIVE_READOUT_COLUMNS = ("rsi_14", "atr_pct", "trend_direction",
+                        "trend_direction_4h", "vol_pctile",
+                        "volume_vs_baseline", "taker_buy_ratio")
+
+
+def indicator_snapshot(X: Optional[pd.DataFrame]) -> Dict[str, float]:
+    """The closed-bar indicator values worth showing beside a live price.
+
+    Read straight out of the CACHED feature frame, so they cost nothing and
+    change once per bar. They describe the last CLOSED bar, never the
+    forming one - which is the only honest thing to put next to a moving
+    price, and the reason the status line labels the two halves apart.
+    """
+    if X is None or len(X) == 0:
+        return {}
+    row = X.iloc[-1]
+    return {c: float(row[c]) for c in LIVE_READOUT_COLUMNS if c in X.columns}
+
+
+def atr_price_estimate(bars: pd.DataFrame, X: Optional[pd.DataFrame],
+                       period: int = 14) -> float:
+    """ATR in price units for the newest closed bar.
+
+    Prefers Agent 2's `atr_pct`, which is already computed and cached. Falls
+    back to computing it here because a model trained WITHOUT the Agent 2
+    block does not carry that column, and then every intra-bar threshold
+    would divide by NaN and the watch would silently never fire. A feature
+    that quietly does nothing is worse than one that is switched off.
+    """
+    if X is not None and "atr_pct" in X.columns:
+        v = float(X["atr_pct"].iloc[-1])
+        if np.isfinite(v) and v > 0:
+            return v * float(bars["close"].iloc[-1])
+    prev = bars["close"].shift(1)
+    tr = pd.concat([bars["high"] - bars["low"],
+                    (bars["high"] - prev).abs(),
+                    (bars["low"] - prev).abs()], axis=1).max(axis=1)
+    v = float(tr.tail(period).mean())
+    return v if np.isfinite(v) and v > 0 else float("nan")
+
+
+def heartbeat(remaining_s: float, reading, snap: Dict[str, float],
+              last_seen: pd.Timestamp, watching: str, offline: str) -> str:
+    """The one-line live readout between bar closes.
+
+    Everything from `reading` describes the FORMING bar and moves second to
+    second. Everything from `snap` describes the last CLOSED bar and is
+    frozen until the next close. Keeping them distinguishable matters: an
+    RSI printed next to a live price invites you to read it as current, and
+    it is not - it is the RSI of a bar that finished some time ago.
+    """
+    mm, ss = divmod(max(0, int(remaining_s)), 60)
+    parts = [f"  {mm:02d}:{ss:02d} to close"]
+    if reading is not None:
+        parts.append(f"{reading.price:,.2f}")
+        parts.append(f"{reading.move_pct:+.2f}%")
+        parts.append(f"{reading.move_atr:+.2f}atr")
+        if np.isfinite(reading.volume_pace):
+            parts.append(f"vol {reading.volume_pace:.1f}x")
+        if np.isfinite(reading.taker_buy_ratio):
+            parts.append(f"tkr {reading.taker_buy_ratio:.2f}")
+    else:
+        parts.append(f"(last {last_seen:%H:%M} UTC)")
+    if np.isfinite(snap.get("rsi_14", np.nan)):
+        parts.append(f"rsi {snap['rsi_14']:.0f}")     # last CLOSED bar
+    if np.isfinite(snap.get("trend_direction_4h", np.nan)):
+        parts.append("4h " + ("up" if snap["trend_direction_4h"] > 0 else "dn"))
+    parts.append(f"{offline} - retrying" if offline else f"watching {watching}...")
+    return "   ".join(parts)
+
+
 @dataclass
 class Analysis:
     """One two-bar window, re-read as each of its bars closes."""
@@ -257,9 +329,50 @@ class Analysis:
     reason: str = ""
     size_pct: float = 0.0
 
+    # the barriers BEFORE the short flip, so resolution() does not have to
+    # know which way round the trade is, and "" when no side was proposed
+    upper: float = float("nan")
+    lower: float = float("nan")
+    side: str = ""
+
     @property
     def p_down(self) -> float:
         return 1.0 - self.p_up
+
+    def resolution(self, high: float, low: float) -> Tuple[str, str]:
+        """What price has ALREADY done to this window's barriers.
+
+        An observation, not a forecast. It reads the extremes actually
+        reached since the anchor close - no model, no features, no forming
+        bar fed to anything. This is the honest half of an intra-bar update:
+        whatever the odds were, if the level is gone the window is decided.
+        """
+        if not (np.isfinite(self.upper) and np.isfinite(self.lower)):
+            return "OPEN", ""
+        hit_up = bool(np.isfinite(high) and high >= self.upper)
+        hit_dn = bool(np.isfinite(low) and low <= self.lower)
+
+        if hit_up and hit_dn:
+            # the ambiguous bar. OHLC cannot say which barrier came first,
+            # and Agent 5's labeller resolves that tie as a LOSS. This
+            # reports it the same way rather than inventing the kinder
+            # answer - if the live screen were more generous than the
+            # training labels, every statistic gathered here would flatter
+            # the model against its own data
+            return "BOTH", ("both barriers touched - OHLC cannot say which "
+                            "came first, counted a LOSS (the labeller's "
+                            "convention)")
+        if hit_up:
+            verdict = {"LONG": "WIN", "SHORT": "LOSS"}.get(self.side, "")
+            tail = (f" - a {verdict} for the {self.side}" if verdict
+                    else " - no position was proposed in this window")
+            return "UPPER", f"upper barrier {self.upper:,.2f} touched{tail}"
+        if hit_dn:
+            verdict = {"LONG": "LOSS", "SHORT": "WIN"}.get(self.side, "")
+            tail = (f" - a {verdict} for the {self.side}" if verdict
+                    else " - no position was proposed in this window")
+            return "LOWER", f"lower barrier {self.lower:,.2f} touched{tail}"
+        return "OPEN", ""
 
     def render(self, now: pd.Timestamp, interval: pd.Timedelta) -> str:
         remaining = self.ends_at - now
@@ -308,6 +421,8 @@ def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
     # symmetric barriers, so the same distance serves both directions
     a.tp_price = entry * (1 + tp_pct / 100.0)
     a.sl_price = entry * (1 - sl_pct / 100.0)
+    a.upper = entry * (1 + tp_pct / 100.0)
+    a.lower = entry * (1 - sl_pct / 100.0)
 
     # a short is the mirror image, and only because the barriers are
     # symmetric. with a 2:1 payoff this arithmetic would be wrong
@@ -325,6 +440,7 @@ def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
         a.size_pct = min(cfg.kelly_fraction * f * 100.0, cfg.max_position_pct)
         if a.size_pct > 0:
             a.action = f"ENTER {side} NOW"
+            a.side = side
             a.reason = (f"EV {best_ev:+.3f}% clears the "
                         f"{cfg.ev_threshold_pct:+.2f}% threshold after costs")
             if side == "SHORT":
@@ -356,11 +472,48 @@ class Monitor:
 
     # -- features ------------------------------------------------------
     def features(self, bars: pd.DataFrame) -> pd.DataFrame:
-        """Detector features for these bars, cached per closing bar."""
+        """Detector features for these CLOSED bars, cached per closing bar."""
         stamp = bars.index[-1]
         if self._features_cache and self._features_cache[0] == stamp:
             return self._features_cache[1]
+        X = self._compute_features(bars)
+        self._features_cache = (stamp, X)
+        return X
 
+    def provisional_features(self, bars: pd.DataFrame, forming) -> pd.DataFrame:
+        """Features with the FORMING bar appended as though it had closed.
+
+        READ THIS BEFORE USING THE OUTPUT.
+
+        Both models were fitted on closed bars, and every closed bar spans a
+        full interval. This frame's last row does not: at minute 10 of an
+        hour its high, low and volume describe ten minutes, and the ATR,
+        RSI and structure computed over it are all shifted accordingly. A
+        probability read from this row is therefore NOT calibrated - the
+        isotonic map that makes "61%" mean "61 times in 100" was fitted on
+        out-of-fold predictions over closed bars only.
+
+        So this exists for exactly one purpose: to show how far the anchored
+        read has drifted since its bar closed. It is a staleness warning
+        with a number attached, not a better forecast. It is never stored,
+        never journalled, and never counted in any accuracy statistic.
+
+        The distortion shrinks as the bar fills - at minute 55 of 60 this is
+        nearly the closed bar - which is why every caller prints the elapsed
+        fraction next to the number.
+        """
+        return self._compute_features(self._merge_forming(bars, forming))
+
+    def _merge_forming(self, bars: pd.DataFrame, forming) -> pd.DataFrame:
+        """Closed bars plus the forming one, as a single frame."""
+        row = forming.as_row().reindex(columns=bars.columns)
+        merged = pd.concat([bars, row])
+        # a forming bar shares no close_time with a stored one, but a race at
+        # the boundary could duplicate it. keep the later (live) copy
+        return merged[~merged.index.duplicated(keep="last")].sort_index()
+
+    def _compute_features(self, bars: pd.DataFrame) -> pd.DataFrame:
+        """The detector pipeline. No caching, no opinion about closedness."""
         from agent1 import PatternAgent
         from agent2 import IndicatorAgent
         from agent3 import Agent3Config, NewsAgent
@@ -423,7 +576,6 @@ class Monitor:
                 f"  then keep it current:\n"
                 f"    python3 collect.py")
 
-        self._features_cache = (stamp, ds.X)
         return ds.X
 
     # -- one screen ----------------------------------------------------
@@ -522,6 +674,133 @@ class Monitor:
         L.append(BOX)
         return "\n".join(L)
 
+    # -- intra-bar ------------------------------------------------------
+    def spike_screen(self, bars: pd.DataFrame, forming, spike,
+                     now: Optional[pd.Timestamp] = None,
+                     p_delta: float = 0.10,
+                     provisional: bool = True) -> str:
+        """What a mid-bar move did to the two live windows.
+
+        Two different kinds of statement come out of here, and they are kept
+        visually apart because one is far stronger than the other:
+
+          RESOLVED     price reached a barrier. An observation. No model
+                       involved, and it does not care what the odds said.
+          provisional  the model re-read with the forming bar treated as
+                       closed. Uncalibrated, never recorded - a staleness
+                       warning, not a replacement forecast.
+        """
+        now = now or utc_now()
+        last_close = bars.index[-1]
+        way = "UP" if spike.direction > 0 else "DOWN"
+
+        L = [BOX,
+             f" *** SPIKE: {self.symbol} {way} {spike.move_pct:+.2f}% "
+             f"inside the forming bar ***",
+             f" {now:%Y-%m-%d %H:%M:%S} UTC   bar closes "
+             f"{forming.close_time:%H:%M} UTC",
+             BOX]
+        L.extend(spike.describe())
+
+        X = self.features(bars)                     # cached, closed bars only
+        pairs = [
+            (evaluate(self.h1, bars, X, "ANALYSIS A",
+                      opened_at=last_close - self.delta,
+                      ends_at=last_close + self.delta, bars_left=1), self.h1),
+            (evaluate(self.h2, bars, X, "ANALYSIS B",
+                      opened_at=last_close,
+                      ends_at=last_close + 2 * self.delta, bars_left=2), self.h2),
+        ]
+
+        merged = prov_X = None
+        prov_failed = ""
+
+        def provisional_frame():
+            """The provisional feature frame, computed at most once and only
+            if some window is still open enough to need it.
+
+            This is the expensive half - ~1.7s over 23,000 bars - and a spike
+            violent enough to resolve BOTH windows has nothing left to
+            re-read. Doing it lazily means the worst case (a real
+            dislocation) is also the cheapest.
+            """
+            nonlocal merged, prov_X, prov_failed
+            if prov_X is None and not prov_failed:
+                try:
+                    merged = self._merge_forming(bars, forming)
+                    prov_X = self.provisional_features(bars, forming)
+                except Exception as e:      # never let a re-read kill the loop
+                    prov_failed = str(e)
+            return prov_X
+
+        any_resolved = False
+        showed_provisional = False
+        for a, model in pairs:
+            L.append("")
+            L.append(f" {a.name}   window {a.opened_at:%H:%M} -> "
+                     f"{a.ends_at:%H:%M} UTC   ({a.bars_left} bar"
+                     f"{'s' if a.bars_left != 1 else ''} left)")
+            if np.isnan(a.p_up):
+                L.append("   not enough history to read this window")
+                continue
+
+            L.append(f"   anchored UP {a.p_up:6.1%}   entry {a.entry:,.2f}   "
+                     f"upper {a.upper:,.2f}   lower {a.lower:,.2f}")
+
+            state, detail = a.resolution(forming.high, forming.low)
+            if state != "OPEN":
+                any_resolved = True
+                L.append(f"   RESOLVED: {detail}")
+                L.append("   this window is decided - the percentage above is "
+                         "history, not a forecast")
+                continue
+
+            if not provisional or provisional_frame() is None:
+                continue
+            prov = evaluate(model, merged, prov_X, a.name,
+                            opened_at=a.opened_at, ends_at=a.ends_at,
+                            bars_left=a.bars_left)
+            if np.isnan(prov.p_up):
+                continue
+            showed_provisional = True
+            shift = prov.p_up - a.p_up
+            material = abs(shift) >= p_delta
+            verdict = (f"MATERIAL, past the {p_delta:.0%} threshold" if material
+                       else "within noise - the anchored read stands")
+            L.append(f"   provisional UP {prov.p_up:6.1%}   "
+                     f"({shift * 100:+.1f} points - {verdict})")
+            if material:
+                L.append(f"   at the live price its barriers would be "
+                         f"{prov.upper:,.2f} / {prov.lower:,.2f}, "
+                         f"EV long {prov.ev_long:+.3f}%  short {prov.ev_short:+.3f}%")
+
+        if prov_failed:
+            L.append("")
+            L.append(f"   (provisional re-read unavailable: {prov_failed})")
+        if showed_provisional:
+            L.append("")
+            L.append("   PROVISIONAL means the forming bar was treated as closed.")
+            L.append(f"   It is {forming.elapsed_fraction(now):.0%} of the way "
+                     f"through, so its ATR, RSI and structure are all computed")
+            L.append("   over a partial interval. Both models were fitted on "
+                     "whole ones, so this number")
+            L.append("   is NOT calibrated and is not recorded anywhere. It "
+                     "says the anchored read has")
+            L.append("   drifted - it does not replace it.")
+
+        L.append("")
+        L.append(DASH)
+        if any_resolved:
+            L.append(" SUMMARY: at least one window hit a barrier intra-bar. "
+                     "Nothing here is a new entry.")
+        else:
+            L.append(" SUMMARY: both windows still open. This is a warning, "
+                     "not a signal.")
+        L.append(f"          the next calibrated read is at "
+                 f"{forming.close_time:%H:%M} UTC when the bar closes.")
+        L.append(BOX)
+        return "\n".join(L)
+
 
 # --------------------------------------------------------------- cli
 def load_bars(args) -> pd.DataFrame:
@@ -570,6 +849,30 @@ def parse_args(argv=None):
                    help="ignore transactions smaller than this")
     p.add_argument("--watchlist", action="store_true",
                    help="print the tracked entities and exit")
+    # -- intra-bar watching. thresholds are DEFINITIONS of the word "spike",
+    #    not parameters: do not tune them on trading outcomes, tune them on
+    #    how often you want to be interrupted
+    p.add_argument("--no-spikes", action="store_true",
+                   help="do not watch the forming bar between closes")
+    p.add_argument("--spike-atr", type=float, default=0.75,
+                   help="alert when price moves this many ATR from the last "
+                        "close inside one bar (default 0.75). keep it below "
+                        "the model's barrier distance or the alert arrives "
+                        "after the window is already decided")
+    p.add_argument("--jolt-atr", type=float, default=0.6,
+                   help="alert when price moves this many ATR within five "
+                        "minutes, catching a fast move that then retraces "
+                        "(default 0.6)")
+    p.add_argument("--vol-pace", type=float, default=3.0,
+                   help="alert when volume arrives at this multiple of its "
+                        "usual pace for this point in the bar (default 3.0)")
+    p.add_argument("--p-delta", type=float, default=0.10,
+                   help="how far the provisional probability must move from "
+                        "the anchored one to be called material (default 0.10)")
+    p.add_argument("--no-provisional", action="store_true",
+                   help="on a spike report resolved barriers only, and never "
+                        "re-read the models with the forming bar treated as "
+                        "closed")
     return p.parse_args(argv)
 
 
@@ -640,11 +943,48 @@ def main(argv=None) -> int:
 
     interval_seconds = self_delta = mon.delta.total_seconds()
     tty = sys.stdout.isatty()
+    width = max(78, min(shutil.get_terminal_size((100, 24)).columns - 1, 160))
     net_fails = 0
     last_net_ok = utc_now()
     print(f"\nwatching {args.symbol} {args.interval} - Ctrl-C to stop")
     if refresher is None and not args.history:
         print("  (--no-fetch: relying on collect.py to update the store)")
+
+    # INTRA-BAR WATCHING.
+    #
+    # Between closes the monitor was blind. On 1h bars that is up to 59
+    # minutes in which a 4% move is invisible and the analysis on screen
+    # keeps quoting an entry price that stopped existing forty minutes ago.
+    #
+    # The cheap measurement gates the expensive one: one weight-1 REST call
+    # per poll watches the forming bar, and only a crossed threshold pays
+    # for a 107-feature recompute.
+    forming_feed = watcher = spike_cfg = None
+    vol_baseline = float("nan")
+    if not args.no_spikes and not args.history:
+        from livefeed import FormingBarFeed, SpikeConfig, SpikeWatcher
+        spike_cfg = SpikeConfig(spike_atr=args.spike_atr,
+                                jolt_atr=args.jolt_atr,
+                                volume_pace_mult=args.vol_pace)
+        forming_feed = FormingBarFeed(args.symbol, args.interval,
+                                      market=args.market)
+        watcher = SpikeWatcher(spike_cfg)
+        watcher.reset(bars.index[-1], float(bars["close"].iloc[-1]))
+        vol_baseline = SpikeWatcher.volume_baseline(bars, spike_cfg)
+        print(f"  intra-bar watch: spike {args.spike_atr:.2f} ATR, "
+              f"jolt {args.jolt_atr:.2f} ATR/5min, volume {args.vol_pace:.1f}x")
+
+        # A spike threshold at or above the barrier distance is not a warning,
+        # it is a post-mortem: by the time it fires the barrier has been
+        # touched and the window is already decided. Silent when misconfigured
+        # is the failure mode this project keeps designing against, so say it.
+        barrier = min(mon.h1.cfg.k_up, mon.h1.cfg.k_dn,
+                      mon.h2.cfg.k_up, mon.h2.cfg.k_dn)
+        if args.spike_atr >= barrier:
+            print(f"  NOTE: --spike-atr {args.spike_atr:.2f} is not below the "
+                  f"models' barrier distance ({barrier:.2f} ATR), so a MOVE "
+                  f"alert will\n        only arrive once a barrier is already "
+                  f"touched. --spike-atr {barrier * 0.75:.2f} would warn first.")
 
     try:
         while True:
@@ -677,24 +1017,45 @@ def main(argv=None) -> int:
 
             if new_bar or fresh_news or fresh_whales:
                 if tty:
-                    print("\r" + " " * 78 + "\r", end="")   # clear countdown
+                    print("\r" + " " * width + "\r", end="")  # clear countdown
                 last_seen = bars.index[-1]
                 print()
                 print(mon.screen(bars, fresh_news, whale_events=fresh_whales))
-            elif tty:
-                # a visible heartbeat. without it the process looks hung for
-                # a full hour, which is indistinguishable from a crash
-                wait = max(0, -due)
-                mm, ss = divmod(int(wait), 60)
-                watching = "news + filings" if whales else "news"
-                offline = connection_hint(net_fails, last_net_ok)
-                if offline:
-                    line = (f"  next bar closes in {mm:02d}:{ss:02d}  "
-                            f"{offline} - retrying")
-                else:
-                    line = (f"  next bar closes in {mm:02d}:{ss:02d}  "
-                            f"(last {last_seen:%H:%M} UTC)  watching {watching}...")
-                print("\r" + line.ljust(78)[:78], end="", flush=True)
+                if watcher is not None:
+                    # the closed bar is the new anchor. the old trail measured
+                    # from a price that is now history, and keeping it would
+                    # report the new bar's move from the wrong place
+                    watcher.reset(last_seen, float(bars["close"].iloc[-1]))
+                    # via the instance, not the class: the name `SpikeWatcher`
+                    # is only bound inside the enabling branch above, and a
+                    # guard that ever moves would turn that into UnboundLocalError
+                    vol_baseline = watcher.volume_baseline(bars, watcher.cfg)
+            else:
+                reading = None
+                if watcher is not None:
+                    forming = forming_feed.fetch(now)
+                    if forming is not None:
+                        X = mon.features(bars)          # cached: free
+                        reading, spike = watcher.observe(
+                            forming, atr_price_estimate(bars, X),
+                            vol_baseline, now=now)
+                        if spike is not None:
+                            if tty:
+                                print("\r" + " " * width + "\r", end="")
+                            print()
+                            print(mon.spike_screen(
+                                bars, forming, spike, now=now,
+                                p_delta=args.p_delta,
+                                provisional=not args.no_provisional))
+                if tty:
+                    # a visible heartbeat. without it the process looks hung
+                    # for a full hour, which is indistinguishable from a crash
+                    line = heartbeat(
+                        max(0.0, -due), reading,
+                        indicator_snapshot(mon.features(bars)), last_seen,
+                        "news + filings" if whales else "news",
+                        connection_hint(net_fails, last_net_ok))
+                    print("\r" + line.ljust(width)[:width], end="", flush=True)
 
             time.sleep(args.poll)
     except KeyboardInterrupt:

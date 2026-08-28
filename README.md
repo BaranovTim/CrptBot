@@ -817,6 +817,98 @@ why the output shows the arithmetic rather than just a number.
 
 ---
 
+# Watching inside the bar
+
+```bash
+python3 monitor.py                       # intra-bar watch is on by default
+python3 monitor.py --no-spikes           # off: only re-read on bar closes
+python3 monitor.py --spike-atr 0.5       # more sensitive
+python3 monitor.py --no-provisional      # resolved barriers only, never re-read
+```
+
+Between closes the monitor used to be blind. On 1h bars that is up to 59
+minutes in which a 4% move is invisible and the analysis on screen keeps
+quoting an entry price that stopped existing forty minutes ago.
+
+The status line now carries the forming bar, refreshed every `--poll` seconds:
+
+```
+  08:06 to close   79,825.00   +0.97%   +1.78atr   vol 3.6x   tkr 0.59   rsi 57   4h up   watching news...
+```
+
+Left of `rsi` is the **forming** bar and moves second to second. `rsi` and
+`4h` describe the last **closed** bar and are frozen until the next close.
+They are ordered that way on purpose — an RSI printed beside a live price
+invites you to read it as current, and it is not.
+
+## Two kinds of statement, and one is much stronger
+
+A spike prints both, kept visually apart because they are not equally load-bearing:
+
+| | |
+|---|---|
+| **RESOLVED** | price reached a barrier. An observation. No model, no features, no forming bar fed to anything — and it does not care what the odds said. |
+| **provisional** | the models re-read with the forming bar treated as closed. **Uncalibrated**, never recorded. |
+
+The second one needs the warning it carries. Both models were fitted on
+closed bars, and every closed bar spans a full interval. A forming bar does
+not: at minute 10 of an hour its high, low and volume describe ten minutes,
+and the ATR, RSI and structure computed over it are all shifted to match. The
+isotonic map that makes "61%" mean *61 times in 100* was fitted on out-of-fold
+predictions over whole bars only, so it does not apply here.
+
+So the provisional number is a **staleness warning with a number attached**,
+not a better forecast. It says the anchored read has drifted; it does not
+replace it. It is never stored, never journalled, and never counted in any
+accuracy statistic. The distortion shrinks as the bar fills — at minute 55 of
+60 it is nearly the closed bar — which is why the elapsed fraction is printed
+next to it every time.
+
+## The threshold has to sit below the barrier
+
+`--spike-atr` defaults to **0.75** and the trained barriers are at **1.0 ATR**.
+That gap is the whole point. At 1.0 the alert would fire exactly when the
+barrier is touched — by then the window is decided and there is nothing left
+to warn about. A warning has to arrive first.
+
+Retrain with different barriers and this needs revisiting. `monitor.py` reads
+`k_up` / `k_dn` off the loaded models at startup and says so rather than
+letting the mismatch pass quietly.
+
+## Three triggers, because one misses too much
+
+| trigger | default | catches |
+|---|---|---|
+| `MOVE` | 0.75 ATR from the last close | the move that got there however slowly |
+| `JOLT` | 0.60 ATR in 5 minutes | a fast move that then retraces, which `MOVE` never sees |
+| `VOLUME` | 3.0x the usual pace | size arriving before price moves — often absorption |
+
+Thresholds are in **ATR, never percent**, so the same config means the same
+thing at 40k and at 100k. A percentage threshold silently stops firing in a
+calm regime and never stops firing in a violent one.
+
+They are **definitions, not parameters** — the same rule as every
+`Agent*Config`. Tune them on how often you want to be interrupted. The moment
+one is picked because it made money it is fitted, and fitted things belong to
+Agent 5 where they can be cross-validated.
+
+## Cheap measurement gates the expensive re-read
+
+One REST call per poll costs weight 1 — about 3 a minute against a 2400/min
+budget. A 107-feature recompute over 23,000 bars costs ~1.7s. So the cheap
+thing runs on the timer and only a crossed threshold pays for the recompute —
+and the re-read is skipped entirely when both windows already resolved, which
+makes the most violent case also the cheapest.
+
+The **re-arm** is what keeps this readable. Without it a genuine 3-ATR move
+prints an alert block every 20 seconds. Price must travel another 0.5 ATR, or
+back, before the same bar can alert again. Verified live: one alert, then four
+quiet heartbeats while the move persisted.
+
+---
+
+---
+
 # Whale & insider tracking
 
 ```bash

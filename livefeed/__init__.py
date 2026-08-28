@@ -13,10 +13,19 @@ it is the piece that has to run BEFORE forward paper trading - you cannot
 forward-test on data you never captured.
 """
 from .collector import LiveCollector, build_collector
+from .forming import (
+    FormingBar,
+    FormingBarFeed,
+    Reading,
+    Spike,
+    SpikeConfig,
+    SpikeWatcher,
+)
 from .klines import CollectorStats, KlineCollector, interval_delta, seed_store
 from .news import NewsCollector, NewsStats
 from .store import BarStore
 
 __all__ = ["BarStore", "KlineCollector", "CollectorStats", "interval_delta",
            "NewsCollector", "NewsStats", "LiveCollector", "build_collector",
-           "seed_store"]
+           "seed_store", "FormingBar", "FormingBarFeed", "Reading", "Spike",
+           "SpikeConfig", "SpikeWatcher"]
