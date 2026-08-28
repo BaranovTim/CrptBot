@@ -1,0 +1,180 @@
+/// "Select Crypto Pair".
+///
+/// The mockup's NOT TRAINED badge turns out to describe reality exactly:
+/// models are fitted for BTCUSDT and nothing else. So the badge is driven by
+/// whether a `.joblib` actually exists, and tapping an untrained pair routes
+/// to the training screen rather than to a dashboard that would have no
+/// honest probability to show.
+library;
+
+import 'package:flutter/material.dart';
+
+import '../api/client.dart';
+import '../api/models.dart';
+import '../theme/liquid_obsidian.dart';
+import '../widgets/glass.dart';
+import '../widgets/status_dot.dart';
+
+class MarketScreen extends StatefulWidget {
+  const MarketScreen({
+    super.key,
+    required this.client,
+    required this.onPick,
+  });
+
+  final ApiClient client;
+  final void Function(Coin coin) onPick;
+
+  @override
+  State<MarketScreen> createState() => _MarketScreenState();
+}
+
+class _MarketScreenState extends State<MarketScreen> {
+  List<Coin> _coins = const [];
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final c = await widget.client.coins();
+      if (!mounted) return;
+      setState(() {
+        _coins = c;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RefreshIndicator(
+      onRefresh: _load,
+      backgroundColor: Obsidian.surfaceContainer,
+      color: Obsidian.primary,
+      child: ListView(
+        // addRepaintBoundaries: a BackdropFilter samples what is painted
+        // BEHIND it, and ListView puts every child in its own RepaintBoundary
+        // by default. Inside that layer the backdrop is empty, so the glass
+        // panels blur nothing and paint nothing — the screen comes up blank
+        // with no error anywhere. Opting out gives the filter a real backdrop.
+        addRepaintBoundaries: false,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
+            Obsidian.containerPadding, Obsidian.navClearance + 24),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('Select Crypto Pair', style: Obsidian.displayLg()),
+              ),
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: Obsidian.surfaceHigh.withValues(alpha: 0.6),
+                  shape: BoxShape.circle,
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                ),
+                child: const Icon(Icons.add_rounded,
+                    color: Obsidian.primary, size: 26),
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          if (_error != null)
+            Text(_error!, style: Obsidian.body(color: Obsidian.error)),
+          for (final c in _coins) ...[
+            _coinCard(c),
+            const SizedBox(height: Obsidian.gutter),
+          ],
+          if (_coins.isNotEmpty)
+            Text(
+              'Only pairs with a fitted model produce a probability. The rest '
+              'are listed so you can see what has not been trained.',
+              style: Obsidian.body(color: Obsidian.outline, size: 11.5),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _coinCard(Coin c) {
+    final up = (c.changePct ?? 0) >= 0;
+    return GlassPanel(
+      padding: const EdgeInsets.all(16),
+      onTap: () => widget.onPick(c),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Obsidian.surfaceLowest,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+            ),
+            alignment: Alignment.center,
+            child: Text(c.short,
+                style: Obsidian.labelSm(color: Obsidian.onSurface, size: 12)),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${c.name} / USDT',
+                    style: Obsidian.bodyLg()
+                        .copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    StatusDot(live: c.trained, size: 8),
+                    const SizedBox(width: 6),
+                    Text(c.trained ? 'TRAINED' : 'NOT TRAINED',
+                        style: Obsidian.labelSm(
+                            color: c.trained
+                                ? Obsidian.greenDim
+                                : Obsidian.outline,
+                            size: 9.5)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(_price(c.price),
+                  style: Obsidian.dataTable(size: 15, w: FontWeight.w700)),
+              const SizedBox(height: 4),
+              Text(
+                  '${up ? '+' : ''}${(c.changePct ?? 0).toStringAsFixed(2)}%',
+                  style: Obsidian.dataTable(
+                      size: 12.5,
+                      color: up ? Obsidian.green : Obsidian.red,
+                      w: FontWeight.w700)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _price(double? v) {
+    if (v == null) return '—';
+    final s = v.toStringAsFixed(v.abs() >= 100 ? 2 : 4);
+    final parts = s.split('.');
+    final whole = parts[0].replaceAllMapped(
+        RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
+    return '\$$whole.${parts[1]}';
+  }
+}

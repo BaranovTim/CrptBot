@@ -32,6 +32,7 @@ MODULES = [
     "tests.test_agent5_pipeline",
     "tests.test_livefeed",
     "tests.test_forming",
+    "tests.test_api",
     "tests.test_monitor",
     "tests.test_whalefeed",
 ]

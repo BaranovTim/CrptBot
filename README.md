@@ -909,6 +909,68 @@ quiet heartbeats while the move persisted.
 
 ---
 
+# The phone app
+
+```bash
+python3 serve.py            # read-only JSON API, prints the address to use
+cd mobile && flutter run    # iOS or Android, one codebase
+```
+
+A Flutter app for **iPhone and Android**, built to the Stitch design in
+`app_idea/`, reading this stack through a small local API. Full notes in
+[mobile/README.md](mobile/README.md).
+
+## The API is deliberately boring
+
+`api/` is seven GET endpoints on `http.server`. No framework: adding FastAPI
+and uvicorn to serve read-only JSON to one phone would be the largest
+dependency decision in the repo, made for its least important component.
+
+It reuses `Monitor` rather than reimplementing anything. Two code paths
+computing "the probability" is how a phone and a terminal end up disagreeing
+about the same bar — `Monitor` already owns the horizon rule, the feature
+cache, the staleness guard and the barrier arithmetic, so the app is a second
+*view* of that one object.
+
+| endpoint | what it returns |
+|---|---|
+| `/api/dashboard` | status, live forming bar, indicators, both analyses, the recommendation, TP/SL |
+| `/api/coins` | the universe, with live prices and which pairs have a fitted model |
+| `/api/chart` | closes for the sparkline |
+| `/api/whales` `/api/news` | the same feeds `monitor.py` prints |
+| `/api/training` | fitted horizons, or the command to fit one |
+
+No writes, no orders, no keys, no auth. If the process were compromised the
+worst outcome is that someone learns what your terminal already prints — which
+is also why it must never grow a write endpoint without authentication first.
+
+## Where the app disagrees with the mockup
+
+The design is followed closely. Three places it is not, and in each the
+backend wins:
+
+- **RECOMMENDED ACTION.** The mockup shows a confident `BUY`. The card shows
+  whatever `evaluate()` decided — usually `FLAT`, because EV after costs does
+  not clear the threshold. `tests/test_api.py` asserts a waiting backend can
+  never render as BUY.
+- **BOT ACTIVE → WATCHING.** Nothing places an order.
+- **Data by TradingView → Binance.** Where the bars are from.
+
+The mockup's **NOT TRAINED** badge needed no change — models exist for BTCUSDT
+and nothing else, so it was already true. Tapping an untrained pair opens
+Training instead of a dashboard with no honest probability to show.
+
+## What is absent, and stays absent until it is real
+
+No auth: there is no account server, so the login fields are a local label and
+nothing is transmitted. No billing: the Pro panel is the design, with no store
+product and no entitlement server behind it. Both say so on screen rather than
+looking functional.
+
+---
+
+---
+
 # Whale & insider tracking
 
 ```bash

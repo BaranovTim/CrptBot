@@ -1,0 +1,129 @@
+"""A read-only JSON API over the trading stack, on the standard library.
+
+WHY NO FRAMEWORK
+----------------
+`requirements.txt` is deliberately short - the detectors are geometry, not
+machine learning, and the project has kept its dependency list small on
+purpose. Adding FastAPI plus uvicorn to serve seven read-only endpoints to
+one phone would be the largest dependency decision in the repo, made for the
+least important component. `http.server` covers it.
+
+WHAT IT WILL NOT DO
+-------------------
+No writes, no orders, no keys, no auth. Every endpoint is a GET that reads
+what `monitor.py` reads. If this process is compromised the worst outcome is
+that someone learns what your terminal already prints.
+
+BINDING
+-------
+Defaults to 0.0.0.0 so a phone on the same wifi can reach it, and prints the
+LAN address to point the app at. That is also why it must never grow a write
+endpoint without authentication in front of it.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import socket
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Dict
+from urllib.parse import parse_qs, urlparse
+
+from api.service import get_service
+
+log = logging.getLogger(__name__)
+
+
+def lan_ip() -> str:
+    """Best guess at the address a phone on the same wifi should use."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))          # no packet is actually sent
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "TradingBot/1.0"
+
+    def _send(self, payload: Any, status: int = 200) -> None:
+        body = json.dumps(payload, allow_nan=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # the app may run from a Flutter web build during development
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self) -> None:                       # noqa: N802
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+
+    def do_GET(self) -> None:                           # noqa: N802
+        parsed = urlparse(self.path)
+        route = parsed.path.rstrip("/") or "/"
+        q = parse_qs(parsed.query)
+
+        def arg(name: str, default: int) -> int:
+            try:
+                return int(q.get(name, [default])[0])
+            except (TypeError, ValueError):
+                return default
+
+        svc = get_service()
+        try:
+            if route in ("/", "/api", "/api/health"):
+                self._send({"ok": True, "service": "tradingbot",
+                            "trades": False,
+                            "endpoints": ["/api/coins", "/api/dashboard",
+                                          "/api/chart", "/api/whales",
+                                          "/api/news", "/api/training"]})
+            elif route == "/api/coins":
+                self._send({"coins": svc.coins()})
+            elif route == "/api/dashboard":
+                self._send(svc.dashboard())
+            elif route == "/api/chart":
+                self._send(svc.chart(n=arg("n", 96)))
+            elif route == "/api/whales":
+                self._send({"events": svc.whales(limit=arg("limit", 20))})
+            elif route == "/api/news":
+                self._send({"items": svc.news(limit=arg("limit", 20))})
+            elif route == "/api/training":
+                sym = q.get("symbol", [svc.symbol])[0]
+                self._send(svc.training(sym))
+            else:
+                self._send({"error": "not found", "path": route}, status=404)
+        except Exception as e:                # a 500 with the cause beats a hang
+            log.error("%s failed: %s", route, e)
+            traceback.print_exc()
+            self._send({"error": str(e), "path": route}, status=500)
+
+    def log_message(self, fmt: str, *args) -> None:
+        log.info("%s - %s", self.address_string(), fmt % args)
+
+
+def serve(host: str = "0.0.0.0", port: int = 8787) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
+                        datefmt="%H:%M:%S")
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    ip = lan_ip()
+    print(f"\n  TradingBot API on http://{ip}:{port}")
+    print(f"    iOS simulator     http://localhost:{port}")
+    print(f"    Android emulator  http://10.0.2.2:{port}")
+    print(f"    physical phone    http://{ip}:{port}   (same wifi)")
+    print(f"\n  read-only. it does not trade. Ctrl-C to stop\n")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+    finally:
+        httpd.server_close()
