@@ -31,8 +31,18 @@ from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
 from api.service import get_service
+from core import utc_now
 
 log = logging.getLogger(__name__)
+
+# One engine per process: it holds the previous recommendation and the set of
+# filings already alerted on, which is what makes an alert a transition rather
+# than a repeated state.
+_ENGINE = None
+
+
+def _now_iso() -> str:
+    return utc_now().isoformat()
 
 
 def lan_ip() -> str:
@@ -86,7 +96,8 @@ class Handler(BaseHTTPRequestHandler):
                             "trades": False,
                             "endpoints": ["/api/coins", "/api/dashboard",
                                           "/api/chart", "/api/whales",
-                                          "/api/news", "/api/training"]})
+                                          "/api/news", "/api/training",
+                                          "/api/alerts", "/api/calendar"]})
             elif route == "/api/coins":
                 self._send({"coins": svc.coins()})
             elif route == "/api/dashboard":
@@ -97,6 +108,25 @@ class Handler(BaseHTTPRequestHandler):
                 self._send({"events": svc.whales(limit=arg("limit", 20))})
             elif route == "/api/news":
                 self._send({"items": svc.news(limit=arg("limit", 20))})
+            elif route == "/api/alerts":
+                from api.alerts import AlertEngine
+                global _ENGINE
+                if _ENGINE is None:
+                    _ENGINE = AlertEngine(svc)
+                raw = q.get("after", [None])[0]
+                try:
+                    cursor = int(raw) if raw not in (None, "") else None
+                except (TypeError, ValueError):
+                    cursor = None          # fail closed: no cursor, no backlog
+                alerts = _ENGINE.after(cursor)
+                self._send({"alerts": [a.to_json() for a in alerts],
+                            "cursor": _ENGINE.cursor(),
+                            "server_time": _now_iso()})
+            elif route == "/api/calendar":
+                from newsfeed.schedule import upcoming
+                days = arg("days", 21)
+                self._send({"events": [e.to_json()
+                                       for e in upcoming(within_days=days)]})
             elif route == "/api/training":
                 sym = q.get("symbol", [svc.symbol])[0]
                 self._send(svc.training(sym))

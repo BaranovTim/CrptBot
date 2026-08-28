@@ -84,6 +84,97 @@ fill an unbounded cross axis, and the layout fails with "BoxConstraints forces
 an infinite height" — which takes down the whole screen, not just that row.
 The stat-card grid wraps its Row in `IntrinsicHeight`.
 
+## Notifications — what is reliable and what is not
+
+These are LOCAL notifications. There is no push server, no Firebase, no APNs
+certificate, and the split that follows is a consequence of that, not a
+choice:
+
+| | |
+|---|---|
+| **Scheduled events** (FOMC, anything in `calendar.json`) | **Fully reliable.** The OS is handed the fire time in advance and delivers it whether the app is running, backgrounded or killed. Verified: a T-5min warning arrived as a banner with the app closed. |
+| **Signals, filings, news, spikes** | Only as timely as the app's next poll. Foreground: ~20s. Backgrounded: iOS suspends the app, so **not at all** until you open it. |
+
+Making the second row as reliable as the first needs real push, which needs an
+Apple Developer account and a server holding APNs/FCM credentials. `/api/alerts`
+is already shaped for it — it would become the thing that *pushes* rather than
+the thing that is polled — but nothing here pretends to be that today.
+
+**iOS suppresses this app's notifications while it is in the foreground.**
+Measured, not assumed: `presentAlert`, `presentBanner` and `presentList` all
+set, delivered through both `show()` and `zonedSchedule()`, and nothing
+appeared until the app was backgrounded. That is ordinary iOS behaviour, so
+the app draws its **own** in-app banner when it is on screen and leaves OS
+notifications for when it is not.
+
+Every alert carries **when the thing happened**, not when it was noticed. An
+SEC filing discloses a trade up to five days old, so a whale alert reads
+`Traded 24/08 · disclosed 26/08 (52h later)`. Collapsing those into "now"
+would imply a freshness the data does not have.
+
+### Where scheduled events come from
+
+`federalreserve.gov` publishes the FOMC calendar as plain HTML, no key, years
+ahead. Statements land at 14:00 America/New_York on the **second** day of a
+meeting — computed through a real timezone, because half the year that is
+19:00 UTC and half it is 18:00, and a one-hour error puts a 60-minute warning
+on the wrong side of the event.
+
+BLS (CPI, payrolls) returns **403 to anything that is not a browser**, so those
+cannot be fetched. Add them by hand in `data_cache/calendar.json`:
+
+```json
+[{"title": "US CPI (Aug)", "at": "2026-09-11T12:30:00+00:00",
+  "impact": "high", "note": "08:30 ET"}]
+```
+
+`at` must carry a UTC offset — a naive timestamp is rejected rather than
+guessed at. One malformed row is skipped with a warning instead of taking the
+Fed dates down with it.
+
+## Live price
+
+Price comes **straight from Binance to the phone**, not through the Python
+server. The server's copy is a REST fetch cached 5s behind a 10s poll — up to
+15 seconds stale next to the Binance app, which was the original complaint.
+
+The stream is `fstream.binance.com/ws/btcusdt@bookTicker`, and that endpoint
+was chosen by measurement. Over 8 seconds each, against the USD-M futures host:
+
+```
+/ws/btcusdt@aggTrade      0 messages
+/ws/btcusdt@ticker        0 messages
+/ws/btcusdt@bookTicker    6994 messages
+/stream?streams=a/b       handshake 101, then silence
+```
+
+The trade streams and the combined `/stream?streams=` form complete their
+handshake and then deliver nothing — no error, no close frame, a socket that
+looks healthy and says nothing. Two consequences are baked into the client:
+the connection indicator is derived from **when a frame last arrived**, never
+from whether the socket is open; and a **watchdog** forces a reconnect after
+15 seconds of silence, because reconnect logic hanging off `onDone`/`onError`
+cannot help when neither ever fires.
+
+At ~875 messages/second, frames are coalesced and emitted at ~8 Hz. Calling
+`setState` on each would empty the battery.
+
+The 24h change still comes from the server: it needs the `@ticker` stream,
+which is one of the silent ones, and a few seconds of staleness on a 24-hour
+number does not matter.
+
+**TP and SL track the live price.** The model fixed the barrier *distance* at
+the last close, not the price it is measured from — so the levels shown are
+the ones for an entry right now, and the anchor close is printed underneath.
+The probability is still the one read at that close, which the footnote says.
+
+## Tapping the chart
+
+Opens the Binance app at BTCUSDT perpetuals, falling back to the web trade
+page when the app is not installed. iOS needs `bnc` declared in
+`LSApplicationQueriesSchemes` or `canLaunchUrl` always returns false; Android
+11+ needs the matching `<queries>` entries or every tap goes to the browser.
+
 ## `build/` is a symlink, on purpose
 
 This project lives on an iCloud-synced Desktop. iCloud stamps directories with

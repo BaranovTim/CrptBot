@@ -209,6 +209,15 @@ class TradingService:
                 "current": _num(price),
                 "take_profit": _num(b.tp_price),
                 "stop_loss": _num(b.sl_price),
+                # the barriers as distances rather than prices. the app
+                # re-anchors them to the websocket price so TP/SL track the
+                # market between bars — the DISTANCE is what the model fixed
+                # at the close, the price it is measured from is not
+                "anchor": _num(b.entry),
+                "tp_pct": _num((b.upper / b.entry - 1.0) * 100.0)
+                if _num(b.entry) else None,
+                "sl_pct": _num((1.0 - b.lower / b.entry) * 100.0)
+                if _num(b.entry) else None,
             },
             "calibration_note": (
                 "Probability is the chance a long entered at this bar's close "
@@ -282,6 +291,11 @@ class TradingService:
                 "conviction": _num(getattr(e, "conviction", float("nan"))),
                 "code": getattr(e, "transaction_code", ""),
                 "published_at": e.published_at.isoformat(),
+                # when the trade actually happened, which is up to five days
+                # before it was disclosed. a notification that shows only the
+                # filing time implies a freshness this data does not have
+                "event_time": (e.event_time.isoformat()
+                               if getattr(e, "event_time", None) else None),
                 # filings lag by 24-120h and are gameable. the app repeats
                 # that next to every one of them rather than in a footnote
                 "note": "lagging evidence, not a trigger",

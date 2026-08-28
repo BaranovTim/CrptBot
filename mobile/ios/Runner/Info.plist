@@ -49,6 +49,14 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<!-- canLaunchUrl() returns false for an undeclared scheme, so without
+		     this the Binance hand-off would silently always fall back to the
+		     web page even with the app installed. -->
+		<string>bnc</string>
+		<string>binance</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- the API is http:// on localhost or the LAN, never the open internet.

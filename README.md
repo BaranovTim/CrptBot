@@ -939,6 +939,36 @@ cache, the staleness guard and the barrier arithmetic, so the app is a second
 | `/api/chart` | closes for the sparkline |
 | `/api/whales` `/api/news` | the same feeds `monitor.py` prints |
 | `/api/training` | fitted horizons, or the command to fit one |
+| `/api/alerts` | transitions worth a notification, since a cursor |
+| `/api/calendar` | scheduled events, so the phone can book warnings ahead |
+
+## Alerts are transitions, never states
+
+`/api/alerts` exists to wake a phone, and the fastest way to make a
+notification worthless is to send it too often. So "the recommendation is
+FLAT" is a state and is never sent; "it just became BUY" is a transition and
+is sent once. Filings dedupe on their filing id, calendar events on the lead
+window that fired, an intra-bar spike on the bar it happened in.
+
+Two details that are load-bearing:
+
+**The cursor is epoch milliseconds, not an ISO timestamp.** A `+00:00` offset
+in a query string has its `+` decoded as a SPACE, so the cursor arrived
+unparseable, and a handler that falls back to "return everything" then
+re-delivers the entire backlog on every poll — forever. An integer has no such
+edge, and an unparseable cursor returns **nothing** rather than everything.
+
+**A first call with no cursor returns nothing.** Otherwise opening the app
+fires twenty notifications about filings from last week, which teaches you to
+swipe the app's alerts away without reading them.
+
+Every alert carries when the underlying thing *happened* alongside when it was
+noticed. For an SEC filing those differ by days.
+
+`newsfeed/schedule.py` reads the FOMC calendar from federalreserve.gov —
+official, no key, published years ahead, with statement times resolved through
+a real timezone because half the meetings are EST and half EDT. BLS blocks
+scripted access, so CPI and payrolls go in `data_cache/calendar.json` by hand.
 
 No writes, no orders, no keys, no auth. If the process were compromised the
 worst outcome is that someone learns what your terminal already prints — which

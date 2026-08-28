@@ -22,7 +22,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:url_launcher/url_launcher.dart';
+
 import '../api/client.dart';
+import '../api/live_price.dart';
 import '../api/models.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
@@ -30,9 +33,14 @@ import '../widgets/sparkline.dart';
 import '../widgets/status_dot.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key, required this.client});
+  const DashboardScreen({super.key, required this.client, required this.live});
 
   final ApiClient client;
+
+  /// Price arrives here from Binance directly, not through the server. The
+  /// server's copy is up to 15s stale by the time it reaches the phone, which
+  /// is the whole reason this exists.
+  final LivePriceService live;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -44,10 +52,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<WhaleEvent> _whales = const [];
   String? _error;
   Timer? _timer;
+  StreamSubscription<LiveTick>? _tick;
+  LiveTick? _live;
 
   @override
   void initState() {
     super.initState();
+    // repaint on every trade. setState on a tick is cheap here because the
+    // only things that move are the price, the change badge and the two
+    // re-anchored barrier rows
+    _tick = widget.live.stream.listen((t) {
+      if (mounted) setState(() => _live = t);
+    });
     _load();
     // the service caches per closing bar, so this costs a JSON round trip,
     // not a feature recompute
@@ -57,7 +73,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _tick?.cancel();
     super.dispose();
+  }
+
+  /// Hand off to the Binance app, falling back to the web trade page.
+  Future<void> _openBinance(String symbol) async {
+    final app = Uri.parse('bnc://app.binance.com/futures/$symbol');
+    final web = Uri.parse('https://www.binance.com/en/futures/$symbol');
+    try {
+      if (await canLaunchUrl(app)) {
+        await launchUrl(app);
+        return;
+      }
+    } catch (_) {
+      // canLaunchUrl throws if the scheme is not declared; fall through
+    }
+    await launchUrl(web, mode: LaunchMode.externalApplication);
   }
 
   Future<void> _load({bool quiet = false}) async {
@@ -200,12 +232,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ------------------------------------------------------------ chart card
+  double? get _livePrice => _live?.price;
+
   Widget _chartCard(Dashboard d) {
-    final up = (d.changePct ?? 0) >= 0;
+    final change = _live?.changePct ?? d.changePct ?? 0;
+    final up = change >= 0;
     final tone = up ? Obsidian.green : Obsidian.red;
     final live = d.live;
+    final shown = _livePrice ?? d.price;
     return GlassPanel(
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
+      onTap: () => _openBinance(d.symbol),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -225,10 +262,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(_money(d.price), style: Obsidian.displayLg()),
+                  Text(_money(shown), style: Obsidian.displayLg()),
                   const SizedBox(height: 2),
-                  Text(
-                      '${up ? '+' : ''}${(d.changePct ?? 0).toStringAsFixed(2)}%',
+                  Text('${up ? '+' : ''}${change.toStringAsFixed(2)}%',
                       style: Obsidian.dataTable(
                           color: tone, size: 15, w: FontWeight.w700)),
                 ],
@@ -237,15 +273,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 8),
           Sparkline(values: _series, color: tone),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
+          // two lines, not one: sharing a row with the credit was ellipsising
+          // the volume reading into "vol…", which reads as a rendering fault
+          if (live != null) _liveStrip(live),
+          const SizedBox(height: 6),
           Row(
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              if (live != null) Expanded(child: _liveStrip(live)),
-              if (live == null) const Spacer(),
-              Text('Data by Binance',
+              StatusDot(live: widget.live.connected, size: 6),
+              const SizedBox(width: 6),
+              Text(
+                  widget.live.connected
+                      ? 'LIVE from Binance · tap to open'
+                      : 'Binance · tap to open',
                   style: Obsidian.labelSm(
-                      color: Obsidian.outline.withValues(alpha: 0.7),
-                      size: 10)),
+                      color: Obsidian.outline.withValues(alpha: 0.75),
+                      size: 9.5)),
             ],
           ),
         ],
@@ -389,15 +433,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // -------------------------------------------------------------- levels
   Widget _levels(Dashboard d) {
     final a = d.analyses.isNotEmpty ? d.analyses.last : null;
+    final px = _livePrice ?? d.price;
+    // The model fixed the barrier DISTANCE at the last close, not the price
+    // it is measured from. So TP/SL follow the live price: these are the
+    // levels for an entry right now. The probability below is still the one
+    // read at the close — that is what the footnote says.
+    final tp = d.liveTakeProfit(_livePrice);
+    final sl = d.liveStopLoss(_livePrice);
     return GlassPanel(
       padding: EdgeInsets.zero,
       child: Column(
         children: [
-          _row('Current Price', _money(d.price), Obsidian.onSurface),
+          _row('Current Price', _money(px), Obsidian.onSurface),
           _divider(),
-          _row('Take Profit (TP1)', _money(d.takeProfit), Obsidian.green),
+          _row('Take Profit (TP1)', _money(tp), Obsidian.green),
           _divider(),
-          _row('Stop Loss (SL)', _money(d.stopLoss), Obsidian.red),
+          _row('Stop Loss (SL)', _money(sl), Obsidian.red),
           if (a?.pUp != null) ...[
             _divider(),
             _row('Chance up (${a!.barsLeft}-bar window)',
@@ -426,7 +477,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _note(Dashboard d) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: Text(d.calibrationNote,
+        child: Text(
+            'TP and SL track the live price — they are the levels for an entry '
+            'now, using the barrier distance the model fixed at the '
+            '${d.interval} close (${_money(d.anchor)}). '
+            '${d.calibrationNote}',
             style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
       );
 

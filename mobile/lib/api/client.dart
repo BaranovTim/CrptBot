@@ -81,4 +81,27 @@ class ApiClient {
 
   Future<TrainingInfo> training(String symbol) async =>
       TrainingInfo.fromJson(await _get('/api/training?symbol=$symbol'));
+
+  /// Alerts newer than `cursor`, plus the cursor to use next time.
+  ///
+  /// The cursor is epoch milliseconds, not an ISO timestamp, and that is
+  /// deliberate on the server side: a `+00:00` offset in a query string has
+  /// its `+` decoded as a space, which would make every poll look like a
+  /// first poll and re-deliver the whole backlog.
+  Future<({List<Alert> alerts, int cursor})> alerts({int? cursor}) async {
+    final j = await _get('/api/alerts${cursor == null ? '' : '?after=$cursor'}');
+    return (
+      alerts: (j['alerts'] as List)
+          .map((e) => Alert.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      cursor: (j['cursor'] as num).toInt(),
+    );
+  }
+
+  Future<List<ScheduledEvent>> calendar({int days = 21}) async {
+    final j = await _get('/api/calendar?days=$days');
+    return (j['events'] as List)
+        .map((e) => ScheduledEvent.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
 }

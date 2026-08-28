@@ -117,11 +117,27 @@ class Dashboard {
             j['recommendation'] as Map<String, dynamic>),
         takeProfit = _d((j['levels'] as Map)['take_profit']),
         stopLoss = _d((j['levels'] as Map)['stop_loss']),
+        anchor = _d((j['levels'] as Map)['anchor']),
+        tpPct = _d((j['levels'] as Map)['tp_pct']),
+        slPct = _d((j['levels'] as Map)['sl_pct']),
         calibrationNote = j['calibration_note'] as String? ?? '';
 
   final String symbol, pair, interval, calibrationNote;
   final bool stale;
   final double? price, changePct, takeProfit, stopLoss;
+
+  /// The close the model measured its barriers from, and the barrier
+  /// DISTANCES. The distances are what the model fixed at that close; the
+  /// price they are measured from is not, which is why the app can re-anchor
+  /// them to a live price without touching the model's claim.
+  final double? anchor, tpPct, slPct;
+
+  /// Where TP/SL sit for an entry at `live`, rather than at the bar close.
+  double? liveTakeProfit(double? live) =>
+      (live == null || tpPct == null) ? takeProfit : live * (1 + tpPct! / 100);
+
+  double? liveStopLoss(double? live) =>
+      (live == null || slPct == null) ? stopLoss : live * (1 - slPct! / 100);
   final BotStatus status;
   final LiveReading? live;
   final List<Indicator> indicators;
@@ -160,4 +176,76 @@ class TrainingInfo {
   final String? command;
   final bool trained;
   final List<Map<String, dynamic>> horizons;
+}
+
+
+class Alert {
+  Alert.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        kind = j['kind'] as String,
+        title = j['title'] as String,
+        body = j['body'] as String,
+        severity = j['severity'] as String? ?? 'medium',
+        symbol = j['symbol'] as String? ?? '',
+        url = j['url'] as String? ?? '',
+        seq = (j['seq'] as num?)?.toInt() ?? 0,
+        at = DateTime.parse(j['at'] as String),
+        detectedAt = DateTime.parse(j['detected_at'] as String),
+        extra = Map<String, String>.from(
+            (j['extra'] as Map?)?.map((k, v) => MapEntry('$k', '$v')) ?? {});
+
+  final String id, kind, title, body, severity, symbol, url;
+  final int seq;
+
+  /// When the underlying thing HAPPENED.
+  final DateTime at;
+
+  /// When this process noticed. For a filing these differ by days.
+  final DateTime detectedAt;
+
+  final Map<String, String> extra;
+
+  /// The line every notification ends with.
+  ///
+  /// A filing gets both timestamps, because "a trade on the 24th, disclosed
+  /// on the 26th" is a materially different statement from "something
+  /// happened just now", and only one of them is true.
+  String whenLine() {
+    final disclosed = extra['disclosed_at'];
+    if (kind == 'whale' && disclosed != null) {
+      final d = DateTime.tryParse(disclosed);
+      if (d != null) {
+        final lag = d.difference(at).inHours;
+        return 'Traded ${_stamp(at)} · disclosed ${_stamp(d)}'
+            '${lag > 0 ? ' (${lag}h later)' : ''}';
+      }
+    }
+    if (kind == 'calendar') return 'Scheduled for ${_stamp(at)}';
+    return _stamp(at);
+  }
+
+  static String _stamp(DateTime utc) {
+    final l = utc.toLocal();
+    final n = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final time = '${two(l.hour)}:${two(l.minute)}';
+    final sameDay = l.year == n.year && l.month == n.month && l.day == n.day;
+    return sameDay ? time : '${two(l.day)}/${two(l.month)} $time';
+  }
+}
+
+class ScheduledEvent {
+  ScheduledEvent.fromJson(Map<String, dynamic> j)
+      : key = j['key'] as String,
+        title = j['title'] as String,
+        impact = j['impact'] as String? ?? 'medium',
+        source = j['source'] as String? ?? '',
+        url = j['url'] as String? ?? '',
+        note = j['note'] as String? ?? '',
+        at = DateTime.parse(j['at'] as String);
+
+  final String key, title, impact, source, url, note;
+  final DateTime at;
+
+  Duration get away => at.difference(DateTime.now());
 }
