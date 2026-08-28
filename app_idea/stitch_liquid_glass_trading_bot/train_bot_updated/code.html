@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Quantum Flux - Bot Training</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "error-container": "#93000a",
+                    "on-secondary-fixed-variant": "#005234",
+                    "surface-container-low": "#1a1c20",
+                    "surface": "#111317",
+                    "surface-dim": "#111317",
+                    "on-error-container": "#ffdad6",
+                    "on-primary-container": "#00285c",
+                    "tertiary": "#ffb3ae",
+                    "on-primary-fixed-variant": "#004493",
+                    "surface-container-high": "#282a2e",
+                    "primary-fixed": "#d8e2ff",
+                    "on-primary": "#002e69",
+                    "surface-variant": "#333539",
+                    "on-primary-fixed": "#001a41",
+                    "surface-tint": "#adc6ff",
+                    "inverse-on-surface": "#2f3035",
+                    "primary-container": "#4b8eff",
+                    "on-tertiary-container": "#5c0008",
+                    "on-secondary-container": "#007149",
+                    "primary-fixed-dim": "#adc6ff",
+                    "inverse-surface": "#e2e2e8",
+                    "on-tertiary": "#68000b",
+                    "background": "#111317",
+                    "surface-container-lowest": "#0c0e12",
+                    "error": "#ffb4ab",
+                    "tertiary-fixed": "#ffdad7",
+                    "secondary-container": "#00ffab",
+                    "on-surface": "#e2e2e8",
+                    "on-surface-variant": "#c1c6d7",
+                    "secondary-fixed": "#4dffb2",
+                    "inverse-primary": "#005bc1",
+                    "outline-variant": "#414755",
+                    "secondary": "#f4fff5",
+                    "surface-bright": "#37393e",
+                    "on-secondary-fixed": "#002112",
+                    "on-tertiary-fixed": "#410004",
+                    "on-secondary": "#003822",
+                    "on-tertiary-fixed-variant": "#930014",
+                    "tertiary-container": "#ff5352",
+                    "on-background": "#e2e2e8",
+                    "outline": "#8b90a0",
+                    "tertiary-fixed-dim": "#ffb3ae",
+                    "secondary-fixed-dim": "#00e297",
+                    "primary": "#adc6ff",
+                    "surface-container-highest": "#333539",
+                    "surface-container": "#1e2024",
+                    "on-error": "#690005"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "container-padding": "20px",
+                    "gutter": "16px",
+                    "unit": "4px",
+                    "panel-gap": "12px"
+            },
+            "fontFamily": {
+                    "label-sm": [
+                            "JetBrains Mono"
+                    ],
+                    "body-lg": [
+                            "Inter"
+                    ],
+                    "data-table": [
+                            "JetBrains Mono"
+                    ],
+                    "headline-md": [
+                            "Inter"
+                    ],
+                    "display-lg": [
+                            "Inter"
+                    ]
+            },
+            "fontSize": {
+                    "label-sm": [
+                            "11px",
+                            {
+                                    "lineHeight": "1",
+                                    "letterSpacing": "0.05em",
+                                    "fontWeight": "700"
+                            }
+                    ],
+                    "body-lg": [
+                            "16px",
+                            {
+                                    "lineHeight": "1.5",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "data-table": [
+                            "14px",
+                            {
+                                    "lineHeight": "1.2",
+                                    "fontWeight": "500"
+                            }
+                    ],
+                    "headline-md": [
+                            "24px",
+                            {
+                                    "lineHeight": "1.3",
+                                    "letterSpacing": "-0.01em",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "display-lg": [
+                            "48px",
+                            {
+                                    "lineHeight": "1.1",
+                                    "letterSpacing": "-0.02em",
+                                    "fontWeight": "700"
+                            }
+                    ]
+            }
+        },
+        },
+      }
+    </script>
+<style>
+        body {
+            background-color: #0F1115; /* Obsidian floor */
+            color: #e2e2e8;
+        }
+        
+        .liquid-glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .glass-highlight {
+            position: relative;
+        }
+        
+        .glass-highlight::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 100%);
+            z-index: 10;
+        }
+
+        .ambient-glow {
+            position: fixed;
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(75, 142, 255, 0.15) 0%, rgba(15, 17, 21, 0) 70%);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .ambient-glow-secondary {
+            position: fixed;
+            width: 400px;
+            height: 400px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(0, 255, 171, 0.05) 0%, rgba(15, 17, 21, 0) 70%);
+            top: -10%;
+            right: -10%;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .action-button-glow {
+            box-shadow: 0 0 20px rgba(75, 142, 255, 0.4);
+        }
+
+        .spin-slow {
+            animation: spin 8s linear infinite;
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="font-body-lg text-on-surface antialiased min-h-screen flex flex-col relative overflow-hidden">
+<div class="ambient-glow"></div>
+<div class="ambient-glow-secondary"></div>
+<!-- TopAppBar -->
+<header class="bg-surface-container/40 dark:bg-surface-container/40 backdrop-blur-xl docked full-width top-0 sticky z-50 border-b border-white/10 shadow-[0_0_20px_rgba(0,0,0,0.5)] flex justify-between items-center px-container-padding py-unit w-full max-w-full hidden md:flex">
+<div class="flex items-center gap-2 hover:bg-white/5 transition-colors active:scale-95 duration-200 cursor-pointer rounded-lg p-2">
+<span class="material-symbols-outlined text-primary text-[24px]">hub</span>
+</div>
+<div class="font-display-lg text-headline-md tracking-tighter text-primary drop-shadow-[0_0_10px_rgba(173,198,255,0.4)]">
+            QUANTUM_FLUX
+        </div>
+<div class="flex items-center gap-2 hover:bg-white/5 transition-colors active:scale-95 duration-200 cursor-pointer rounded-lg p-2">
+<span class="material-symbols-outlined text-on-surface-variant text-[24px]">notifications</span>
+</div>
+</header>
+<!-- Main Canvas -->
+<main class="flex-grow flex items-center justify-center p-container-padding mb-[80px] md:mb-0 relative z-10">
+<div class="liquid-glass glass-highlight rounded-xl w-full max-w-lg p-8 flex flex-col items-center justify-center text-center gap-6 relative overflow-hidden">
+<div class="absolute -top-10 -right-10 w-32 h-32 bg-primary/10 rounded-full blur-2xl"></div>
+<div class="relative w-32 h-32 flex items-center justify-center mb-4">
+<svg class="absolute inset-0 w-full h-full text-primary/30 spin-slow" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 100 100">
+<circle cx="50" cy="50" r="48" stroke-dasharray="10 5"></circle>
+<circle cx="50" cy="50" r="38" stroke-dasharray="5 10" stroke-opacity="0.5"></circle>
+</svg>
+<span class="material-symbols-outlined text-primary text-[64px] drop-shadow-[0_0_15px_rgba(173,198,255,0.6)] z-10" style="font-variation-settings: 'FILL' 1;">precision_manufacturing</span>
+</div>
+<div class="flex flex-col gap-2">
+<h1 class="font-headline-md text-headline-md text-on-surface">Untrained Model</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant opacity-80">Bot not trained for this coin. Initiate deep learning sequence to establish trading parameters.</p>
+</div>
+<div class="w-full bg-surface-container p-4 rounded-lg border border-white/5 flex items-center justify-between mt-2">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-surface-variant flex items-center justify-center border border-white/10">
+<span class="font-label-sm text-label-sm text-on-surface-variant">SOL</span>
+</div>
+<div class="flex flex-col text-left">
+<span class="font-data-table text-data-table text-on-surface">Solana / USDT</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Epochs Req: 5000</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline opacity-50 text-[20px]">dataset</span>
+</div>
+<button class="mt-6 w-full py-4 px-6 bg-primary-container text-on-primary-container font-headline-md text-headline-md flex items-center justify-center gap-3 action-button-glow hover:bg-primary transition-all duration-300 active:scale-95 group relative overflow-hidden rounded-xl">
+<span class="absolute inset-0 w-full h-full bg-white/20 -translate-x-full group-hover:translate-x-full transition-transform duration-700 ease-out skew-x-12"></span>
+<span class="material-symbols-outlined text-[24px]">model_training</span>
+                Start Training
+            </button>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="bg-surface-container-highest/30 dark:bg-surface-container-highest/30 backdrop-blur-[50px] fixed bottom-4 left-4 right-4 overflow-hidden border border-white/15 shadow-[0_0_40px_rgba(0,0,0,0.8)] z-50 flex justify-around items-center md:hidden rounded-full" style="height: 56px;">
+<a class="flex flex-col items-center justify-center text-outline opacity-60 hover:bg-white/5 active:scale-90 transition-transform p-2 rounded-lg w-16" href="#">
+<span class="material-symbols-outlined mb-1 text-[24px]">dashboard</span>
+<span class="font-label-sm text-label-sm-mobile">Dashboard</span>
+</a>
+<a class="flex flex-col items-center justify-center text-outline opacity-60 hover:bg-white/5 active:scale-90 transition-transform p-2 rounded-lg w-16" href="#">
+<span class="material-symbols-outlined mb-1 text-[24px]">query_stats</span>
+<span class="font-label-sm text-label-sm-mobile">Market</span>
+</a>
+<a class="flex flex-col items-center justify-center text-secondary-fixed-dim drop-shadow-[0_0_8px_rgba(0,226,151,0.4)] hover:bg-white/5 active:scale-90 transition-transform p-2 rounded-lg w-16 relative" href="#">
+<div class="absolute -top-2 w-8 h-1 bg-secondary-fixed-dim rounded-full shadow-[0_0_10px_rgba(0,226,151,0.8)]"></div>
+<span class="material-symbols-outlined mb-1 text-[24px]" style="font-variation-settings: 'FILL' 1;">model_training</span>
+<span class="font-label-sm text-label-sm-mobile text-secondary-fixed-dim">Training</span>
+</a>
+<a class="flex flex-col items-center justify-center text-outline opacity-60 hover:bg-white/5 active:scale-90 transition-transform p-2 rounded-lg w-16" href="#">
+<span class="material-symbols-outlined mb-1 text-[24px]">person</span>
+<span class="font-label-sm text-label-sm-mobile">Profile</span>
+</a>
+</nav>
+</body></html>

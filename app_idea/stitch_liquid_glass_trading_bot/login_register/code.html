@@ -1,0 +1,200 @@
+<!DOCTYPE html><html class="dark" lang="en"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Quantum Flux - Login</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error-container": "#93000a",
+                        "on-secondary-fixed-variant": "#005234",
+                        "surface-container-low": "#1a1c20",
+                        "surface": "#111317",
+                        "surface-dim": "#111317",
+                        "on-error-container": "#ffdad6",
+                        "on-primary-container": "#00285c",
+                        "tertiary": "#ffb3ae",
+                        "on-primary-fixed-variant": "#004493",
+                        "surface-container-high": "#282a2e",
+                        "primary-fixed": "#d8e2ff",
+                        "on-primary": "#002e69",
+                        "surface-variant": "#333539",
+                        "on-primary-fixed": "#001a41",
+                        "surface-tint": "#adc6ff",
+                        "inverse-on-surface": "#2f3035",
+                        "primary-container": "#4b8eff",
+                        "on-tertiary-container": "#5c0008",
+                        "on-secondary-container": "#007149",
+                        "primary-fixed-dim": "#adc6ff",
+                        "inverse-surface": "#e2e2e8",
+                        "on-tertiary": "#68000b",
+                        "background": "#111317",
+                        "surface-container-lowest": "#0c0e12",
+                        "error": "#ffb4ab",
+                        "tertiary-fixed": "#ffdad7",
+                        "secondary-container": "#00ffab",
+                        "on-surface": "#e2e2e8",
+                        "on-surface-variant": "#c1c6d7",
+                        "secondary-fixed": "#4dffb2",
+                        "inverse-primary": "#005bc1",
+                        "outline-variant": "#414755",
+                        "secondary": "#f4fff5",
+                        "surface-bright": "#37393e",
+                        "on-secondary-fixed": "#002112",
+                        "on-tertiary-fixed": "#410004",
+                        "on-secondary": "#003822",
+                        "on-tertiary-fixed-variant": "#930014",
+                        "tertiary-container": "#ff5352",
+                        "on-background": "#e2e2e8",
+                        "outline": "#8b90a0",
+                        "tertiary-fixed-dim": "#ffb3ae",
+                        "secondary-fixed-dim": "#00e297",
+                        "primary": "#adc6ff",
+                        "surface-container-highest": "#333539",
+                        "surface-container": "#1e2024",
+                        "on-error": "#690005"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "container-padding": "20px",
+                        "gutter": "16px",
+                        "unit": "4px",
+                        "panel-gap": "12px"
+                    },
+                    "fontFamily": {
+                        "label-sm": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "data-table": ["JetBrains Mono"],
+                        "headline-md": ["Inter"],
+                        "display-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "label-sm": ["11px", { "lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "body-lg": ["16px", { "lineHeight": "1.5", "fontWeight": "400" }],
+                        "data-table": ["14px", { "lineHeight": "1.2", "fontWeight": "500" }],
+                        "headline-md": ["24px", { "lineHeight": "1.3", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "display-lg": ["48px", { "lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .liquid-bg {
+            background: radial-gradient(circle at 20% 30%, rgba(75, 142, 255, 0.15) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 70%, rgba(0, 226, 151, 0.1) 0%, transparent 40%);
+        }
+        
+        .glass-panel {
+            background: rgba(25, 28, 32, 0.6);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .input-inset {
+            background: #0c0e12;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .input-inset:focus-within {
+            border-color: #adc6ff;
+            box-shadow: 0 0 15px rgba(173, 198, 255, 0.2);
+        }
+
+        .btn-glow {
+            box-shadow: 0 0 20px rgba(173, 198, 255, 0.4);
+            transition: all 0.3s ease;
+        }
+
+        .btn-glow:hover {
+            box-shadow: 0 0 30px rgba(173, 198, 255, 0.6);
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen flex flex-col liquid-bg selection:bg-primary-container selection:text-on-primary-container">
+<!-- Ambient Grid Overlay -->
+<div class="fixed inset-0 pointer-events-none" style="background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 40px 40px;"></div>
+<main class="flex-grow flex items-center justify-center p-container-padding relative z-10">
+<div class="w-full max-w-md flex flex-col items-center">
+<!-- Logo Section -->
+<div class="mb-12 flex flex-col items-center text-center">
+
+
+<p class="font-label-sm text-label-sm text-primary mt-2 uppercase tracking-widest opacity-80">Secure Neural Trading Link</p>
+</div>
+<!-- Login Card -->
+<div class="glass-panel rounded-xl w-full p-8 relative overflow-hidden">
+<!-- Edge Highlight -->
+<div class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/30 to-transparent"></div>
+<form class="flex flex-col gap-6">
+<!-- Email Field -->
+<div class="flex flex-col gap-2">
+<label class="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-2" for="email">
+<span class="material-symbols-outlined text-[14px]">mail</span>
+                            IDENTIFIER
+                        </label>
+<div class="input-inset rounded-lg px-4 py-3 flex items-center">
+<input class="bg-transparent border-none w-full font-data-table text-data-table text-on-surface focus:outline-none focus:ring-0 placeholder-outline-variant" id="email" placeholder="Enter your credentials" required="" type="email">
+</div>
+</div>
+<!-- Password Field -->
+<div class="flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<label class="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-2" for="password">
+<span class="material-symbols-outlined text-[14px]">lock</span>
+                                SECURITY KEY
+                            </label>
+<a class="font-label-sm text-label-sm text-primary hover:text-primary-container transition-colors" href="#">Recover Key?</a>
+</div>
+<div class="input-inset rounded-lg px-4 py-3 flex items-center">
+<input class="bg-transparent border-none w-full font-data-table text-data-table text-on-surface focus:outline-none focus:ring-0 placeholder-outline-variant" id="password" placeholder="••••••••••••" required="" type="password">
+<button class="text-outline-variant hover:text-on-surface transition-colors rounded-lg" type="button">
+<span class="material-symbols-outlined text-[18px]">visibility_off</span>
+</button>
+</div>
+</div>
+<!-- Status / CAPTCHA simulation -->
+<div class="flex items-center gap-3 p-3 rounded-lg bg-surface-container-low border border-white/5 mt-2">
+<div class="w-2 h-2 rounded-full bg-secondary-fixed-dim shadow-[0_0_8px_rgba(0,226,151,0.6)] animate-pulse"></div>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Network Link Secure</span>
+</div>
+<!-- Submit Action -->
+<button class="w-full bg-primary text-on-primary font-headline-md text-body-lg py-4 mt-4 btn-glow flex items-center justify-center gap-2 active:scale-[0.98] rounded-xl" type="submit">
+                        INITIALIZE CONNECTION
+                        <span class="material-symbols-outlined text-[20px]">arrow_forward</span>
+</button>
+</form>
+<!-- Registration Link -->
+<div class="mt-8 text-center border-t border-white/10 pt-6">
+<p class="font-body-lg text-body-lg text-on-surface-variant">
+                        No active node? 
+                        <a class="text-primary hover:text-primary-container font-headline-md font-semibold transition-colors border-b border-primary/30 hover:border-primary pb-1" href="#">Register New Node</a>
+</p>
+</div>
+</div>
+<!-- Footer / Disclaimer -->
+<div class="mt-12 text-center max-w-xs">
+<p class="font-label-sm text-label-sm text-outline opacity-50">
+                    End-to-end encrypted protocol. By authenticating, you agree to the Terms of Neural Interface.
+                </p>
+</div>
+</div>
+</main>
+
+
+</body></html>

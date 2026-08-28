@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Trading Bot Dashboard - BTC</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "error-container": "#93000a",
+                        "on-secondary-fixed-variant": "#005234",
+                        "surface-container-low": "#1a1c20",
+                        "surface": "#111317",
+                        "surface-dim": "#111317",
+                        "on-error-container": "#ffdad6",
+                        "on-primary-container": "#00285c",
+                        "tertiary": "#ffb3ae",
+                        "on-primary-fixed-variant": "#004493",
+                        "surface-container-high": "#282a2e",
+                        "primary-fixed": "#d8e2ff",
+                        "on-primary": "#002e69",
+                        "surface-variant": "#333539",
+                        "on-primary-fixed": "#001a41",
+                        "surface-tint": "#adc6ff",
+                        "inverse-on-surface": "#2f3035",
+                        "primary-container": "#4b8eff",
+                        "on-tertiary-container": "#5c0008",
+                        "on-secondary-container": "#007149",
+                        "primary-fixed-dim": "#adc6ff",
+                        "inverse-surface": "#e2e2e8",
+                        "on-tertiary": "#68000b",
+                        "background": "#111317",
+                        "surface-container-lowest": "#0c0e12",
+                        "error": "#ffb4ab",
+                        "tertiary-fixed": "#ffdad7",
+                        "secondary-container": "#00ffab",
+                        "on-surface": "#e2e2e8",
+                        "on-surface-variant": "#c1c6d7",
+                        "secondary-fixed": "#4dffb2",
+                        "inverse-primary": "#005bc1",
+                        "outline-variant": "#414755",
+                        "secondary": "#f4fff5",
+                        "surface-bright": "#37393e",
+                        "on-secondary-fixed": "#002112",
+                        "on-tertiary-fixed": "#410004",
+                        "on-secondary": "#003822",
+                        "on-tertiary-fixed-variant": "#930014",
+                        "tertiary-container": "#ff5352",
+                        "on-background": "#e2e2e8",
+                        "outline": "#8b90a0",
+                        "tertiary-fixed-dim": "#ffb3ae",
+                        "secondary-fixed-dim": "#00e297",
+                        "primary": "#adc6ff",
+                        "surface-container-highest": "#333539",
+                        "surface-container": "#1e2024",
+                        "on-error": "#690005"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    spacing: {
+                        "container-padding": "20px",
+                        "gutter": "16px",
+                        "unit": "4px",
+                        "panel-gap": "12px"
+                    },
+                    fontFamily: {
+                        "label-sm": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "data-table": ["JetBrains Mono"],
+                        "headline-md": ["Inter"],
+                        "display-lg": ["Inter"]
+                    },
+                    fontSize: {
+                        "label-sm": ["11px", { lineHeight: "1", letterSpacing: "0.05em", fontWeight: "700" }],
+                        "body-lg": ["16px", { lineHeight: "1.5", fontWeight: "400" }],
+                        "data-table": ["14px", { lineHeight: "1.2", fontWeight: "500" }],
+                        "headline-md": ["24px", { lineHeight: "1.3", letterSpacing: "-0.01em", fontWeight: "600" }],
+                        "display-lg": ["48px", { lineHeight: "1.1", letterSpacing: "-0.02em", fontWeight: "700" }],
+                        "label-sm-mobile": ["10px", { lineHeight: "1", letterSpacing: "0.05em", fontWeight: "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .liquid-glass {
+            background: rgba(40, 42, 46, 0.1);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        }
+        .liquid-glass-active {
+            background: rgba(40, 42, 46, 0.2);
+            backdrop-filter: blur(60px);
+            -webkit-backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .glow-green {
+            box-shadow: 0 0 20px rgba(0, 226, 151, 0.4);
+        }
+        .glow-red {
+            box-shadow: 0 0 20px rgba(255, 83, 82, 0.4);
+        }
+        .glow-white {
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+        }
+        .mesh-bg {
+            background: radial-gradient(circle at 10% 20%, rgba(173, 198, 255, 0.1) 0%, transparent 40%),
+                        radial-gradient(circle at 90% 80%, rgba(0, 226, 151, 0.05) 0%, transparent 40%);
+        }
+        .border-sweep {
+            position: relative;
+        }
+        .border-sweep::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.4) 0%, transparent 100%);
+            border-radius: inherit;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-background text-on-background min-h-screen mesh-bg pb-[100px] selection:bg-primary-container selection:text-on-primary-container">
+<!-- TopAppBar -->
+<header class="bg-surface-container/40 dark:bg-surface-container/40 backdrop-blur-xl docked full-width top-0 sticky z-50 border-b border-white/10 shadow-[0_0_20px_rgba(0,0,0,0.5)] flex justify-between items-center px-container-padding py-unit w-full max-w-full">
+<button class="text-on-surface-variant hover:bg-white/5 transition-colors active:scale-95 duration-200 p-2 rounded-xl">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">notifications</span>
+</button>
+</header>
+<main class="max-w-7xl mx-auto px-container-padding py-6 space-y-6">
+<!-- Dashboard Header -->
+<div class="flex items-center justify-between mb-8">
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">BTC/USD</h2>
+<p class="font-label-sm text-label-sm text-on-surface-variant mt-1">Algorithmic Trading Active</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="relative flex h-3 w-3">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary-fixed-dim opacity-75"></span>
+<span class="relative inline-flex rounded-full h-3 w-3 bg-secondary-fixed-dim glow-green"></span>
+</span>
+<span class="font-label-sm text-label-sm text-secondary-fixed-dim">BOT ACTIVE</span>
+</div>
+</div>
+<!-- Notification Area -->
+<div class="liquid-glass rounded-xl p-4 border-sweep flex items-start gap-4">
+<div class="p-2 bg-error-container/20 rounded-full shrink-0">
+<span class="material-symbols-outlined text-error" style="font-variation-settings: 'FILL' 1;">warning</span>
+</div>
+<div>
+<h3 class="font-data-table text-data-table text-on-surface">Whale Alert Detected</h3>
+<p class="font-body-lg text-body-lg text-on-surface-variant mt-1 text-sm">Large transaction of 5,000 BTC moved to known exchange wallet. Volatility expected.</p>
+</div>
+</div>
+<!-- Chart Area -->
+<div class="liquid-glass rounded-xl p-6 border-sweep h-64 relative overflow-hidden group">
+<div class="absolute inset-0 opacity-20 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMSIgZmlsbD0iI2ZmZmZmZiIvPjwvc3ZnPg==')]"></div>
+<!-- Mock Chart Line using SVG -->
+<svg class="absolute bottom-0 left-0 w-full h-4/5" preserveaspectratio="none" viewbox="0 0 100 100">
+<path d="M0,100 C20,80 30,90 50,40 C60,20 80,60 100,10 L100,100 Z" fill="url(#grad)" opacity="0.1"></path>
+<path class="text-secondary-fixed-dim drop-shadow-[0_0_8px_rgba(0,226,151,0.6)]" d="M0,100 C20,80 30,90 50,40 C60,20 80,60 100,10" fill="none" stroke="currentColor" stroke-width="2"></path>
+<defs>
+<lineargradient id="grad" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop class="text-secondary-fixed-dim" offset="0%" stop-color="currentColor" stop-opacity="0.5"></stop>
+<stop class="text-secondary-fixed-dim" offset="100%" stop-color="currentColor" stop-opacity="0"></stop>
+</lineargradient>
+</defs>
+</svg>
+<div class="absolute top-4 left-4">
+<span class="font-label-sm text-label-sm text-on-surface-variant">24H TIMEFRAME</span>
+</div><div class="absolute bottom-4 right-4 opacity-60"><span class="font-label-sm text-label-sm text-on-surface-variant">Data by TradingView</span></div>
+<div class="absolute top-4 right-4 text-right">
+<div class="font-headline-md text-headline-md text-on-surface">$64,231.50</div>
+<div class="font-label-sm text-label-sm text-secondary-fixed-dim mt-1">+2.45%</div>
+</div>
+</div>
+<!-- Analysis Cards -->
+<div class="grid grid-cols-2 gap-4">
+<div class="liquid-glass rounded-xl p-4 border-sweep">
+<div class="flex items-center gap-2 mb-3 text-primary-fixed-dim">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">analytics</span>
+<span class="font-label-sm text-label-sm">RSI MOMENTUM</span>
+</div>
+<div class="font-display-lg text-[32px] leading-tight font-bold text-on-surface">68.5</div>
+<div class="font-body-lg text-body-lg text-on-surface-variant text-sm mt-1">Approaching Overbought</div>
+<div class="w-full bg-surface-container-high rounded-full h-1.5 mt-4">
+<div class="bg-primary-fixed-dim h-1.5 rounded-full" style="width: 68.5%"></div>
+</div>
+</div>
+<div class="liquid-glass rounded-xl p-4 border-sweep">
+<div class="flex items-center gap-2 mb-3 text-secondary-fixed-dim">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">water_drop</span>
+<span class="font-label-sm text-label-sm">MACD CROSS</span>
+</div>
+<div class="font-display-lg text-[32px] leading-tight font-bold text-on-surface">BULL</div>
+<div class="font-body-lg text-body-lg text-on-surface-variant text-sm mt-1">Signal Line Crossover</div>
+<div class="flex items-center gap-1 mt-4">
+<div class="h-4 w-1 bg-surface-container-high rounded-full"></div>
+<div class="h-6 w-1 bg-surface-container-high rounded-full"></div>
+<div class="h-3 w-1 bg-secondary-fixed-dim rounded-full glow-green"></div>
+<div class="h-8 w-1 bg-secondary-fixed-dim rounded-full glow-green"></div>
+<div class="h-5 w-1 bg-secondary-fixed-dim rounded-full glow-green"></div>
+</div>
+</div>
+</div>
+<!-- Status Section -->
+<div class="liquid-glass-active rounded-xl p-8 border-sweep text-center glow-green relative overflow-hidden">
+<div class="absolute -inset-4 bg-secondary-fixed-dim/5 blur-xl rounded-full"></div>
+<div class="relative z-10">
+<h3 class="font-label-sm text-label-sm text-on-surface-variant mb-2">RECOMMENDED ACTION</h3>
+<div class="font-display-lg text-[64px] leading-none font-bold text-secondary-fixed-dim tracking-tight">BUY</div>
+<p class="font-body-lg text-body-lg text-on-surface mt-4 max-w-md mx-auto">Strong bullish confluence detected across multiple timeframes. Executing trailing entry strategy.</p>
+</div>
+</div>
+<!-- Data Grid -->
+<div class="liquid-glass rounded-xl p-1 border-sweep">
+<table class="w-full text-left font-data-table text-data-table">
+<tbody>
+<tr class="border-b border-white/5 hover:bg-white/5 transition-colors group">
+<td class="py-3 px-4 text-on-surface-variant">Current Price</td>
+<td class="py-3 px-4 text-right text-on-surface group-hover:text-primary-fixed-dim transition-colors">$64,231.50</td>
+</tr>
+<tr class="border-b border-white/5 hover:bg-white/5 transition-colors group">
+<td class="py-3 px-4 text-on-surface-variant">Take Profit (TP1)</td>
+<td class="py-3 px-4 text-right text-secondary-fixed-dim">$68,500.00</td>
+</tr>
+<tr class="border-b border-white/5 hover:bg-white/5 transition-colors group">
+<td class="py-3 px-4 text-on-surface-variant">Stop Loss (SL)</td>
+<td class="py-3 px-4 text-right text-error-container">$61,800.00</td>
+</tr>
+<tr class="border-b border-white/5 hover:bg-white/5 transition-colors group">
+<td class="py-3 px-4 text-on-surface-variant">Percent Change</td>
+<td class="py-3 px-4 text-right text-secondary-fixed-dim">+2.45%</td>
+</tr>
+<tr class="hover:bg-white/5 transition-colors group">
+<td class="py-3 px-4 text-on-surface-variant">Estimated Close</td>
+<td class="py-3 px-4 text-right text-on-surface">Oct 26, 14:00 UTC</td>
+</tr>
+</tbody>
+</table>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="bg-surface-container-highest/30 dark:bg-surface-container-highest/30 backdrop-blur-[50px] fixed bottom-4 left-4 right-4 overflow-hidden border border-white/15 shadow-[0_0_40px_rgba(0,0,0,0.8)] z-50 flex justify-around items-center md:hidden h-12 rounded-full">
+<a class="flex flex-col items-center justify-center text-secondary-fixed-dim drop-shadow-[0_0_8px_rgba(0,226,151,0.4)] hover:bg-white/5 active:scale-90 transition-transform w-full h-full" href="#">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 1;">dashboard</span>
+<span class="font-label-sm text-label-sm-mobile">Dashboard</span>
+</a>
+<a class="flex flex-col items-center justify-center text-outline opacity-60 hover:bg-white/5 active:scale-90 transition-transform w-full h-full" href="#">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 0;">query_stats</span>
+<span class="font-label-sm text-label-sm-mobile">Market</span>
+</a>
+<a class="flex flex-col items-center justify-center text-outline opacity-60 hover:bg-white/5 active:scale-90 transition-transform w-full h-full" href="#">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 0;">model_training</span>
+<span class="font-label-sm text-label-sm-mobile">Training</span>
+</a>
+<a class="flex flex-col items-center justify-center text-outline opacity-60 hover:bg-white/5 active:scale-90 transition-transform w-full h-full" href="#">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 0;">person</span>
+<span class="font-label-sm text-label-sm-mobile">Profile</span>
+</a>
+</nav>
+</body></html>
