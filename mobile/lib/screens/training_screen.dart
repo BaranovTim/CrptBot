@@ -20,12 +20,21 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
+import '../widgets/timeframe_bar.dart';
 
 class TrainingScreen extends StatefulWidget {
-  const TrainingScreen({super.key, required this.client, required this.symbol});
+  const TrainingScreen({
+    super.key,
+    required this.client,
+    required this.symbol,
+    required this.interval,
+    required this.onPickInterval,
+  });
 
   final ApiClient client;
   final String symbol;
+  final String interval;
+  final ValueChanged<String> onPickInterval;
 
   @override
   State<TrainingScreen> createState() => _TrainingScreenState();
@@ -44,12 +53,13 @@ class _TrainingScreenState extends State<TrainingScreen> {
   @override
   void didUpdateWidget(covariant TrainingScreen old) {
     super.didUpdateWidget(old);
-    if (old.symbol != widget.symbol) _load();
+    if (old.symbol != widget.symbol || old.interval != widget.interval) _load();
   }
 
   Future<void> _load() async {
     try {
-      final i = await widget.client.training(widget.symbol);
+      final i = await widget.client.training(widget.symbol,
+          interval: widget.interval);
       if (!mounted) return;
       setState(() {
         _info = i;
@@ -83,6 +93,12 @@ class _TrainingScreenState extends State<TrainingScreen> {
       padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
           Obsidian.containerPadding, Obsidian.navClearance + 24),
       children: [
+        TimeframeBar(
+          timeframes: i.timeframes,
+          selected: i.interval,
+          onSelect: (tf) => widget.onPickInterval(tf.interval),
+        ),
+        const SizedBox(height: Obsidian.gutter),
         GlassPanel(
           radius: Obsidian.rXl,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 34),

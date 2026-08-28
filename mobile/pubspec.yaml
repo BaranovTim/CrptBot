@@ -36,6 +36,7 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   timezone: ^0.9.4                # scheduling needs a real tz database
   url_launcher: ^6.3.1            # hand off to the Binance app
+  shared_preferences: ^2.3.2      # the watchlist lives on the device
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

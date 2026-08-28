@@ -31,6 +31,17 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// This timeframe has no fitted model yet.
+///
+/// Distinct from ApiException on purpose: it is a normal state, not a fault,
+/// and the app routes it to the training screen instead of an error panel.
+class UntrainedException implements Exception {
+  UntrainedException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 class ApiClient {
   ApiClient({String? base}) : base = base ?? defaultApiBase();
 
@@ -49,24 +60,63 @@ class ApiClient {
       throw ApiException(
           'Cannot reach $base\n\nStart it on your Mac:\n  python3 serve.py\n\n($e)');
     }
+    if (r.statusCode == 409) {
+      throw UntrainedException(
+          (json.decode(r.body) as Map<String, dynamic>)['error'] as String? ??
+              'not trained');
+    }
     if (r.statusCode != 200) {
       throw ApiException('$path returned ${r.statusCode}: ${r.body}');
     }
     return json.decode(r.body) as Map<String, dynamic>;
   }
 
-  Future<List<Coin>> coins() async {
-    final j = await _get('/api/coins');
+  Future<List<SymbolInfo>> symbols({String? q, int limit = 60}) async {
+    final query = [
+      if (q != null && q.isNotEmpty) 'q=${Uri.encodeQueryComponent(q)}',
+      'limit=$limit',
+    ].join('&');
+    final j = await _get('/api/symbols?$query');
+    return (j['symbols'] as List)
+        .map((e) => SymbolInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<Coin>> coins({List<String>? symbols}) async {
+    final q = (symbols == null || symbols.isEmpty)
+        ? ''
+        : '?symbols=${symbols.join(',')}';
+    final j = await _get('/api/coins$q');
     return (j['coins'] as List)
         .map((e) => Coin.fromJson(e as Map<String, dynamic>))
         .toList();
   }
 
-  Future<Dashboard> dashboard() async =>
-      Dashboard.fromJson(await _get('/api/dashboard'));
+  Future<Dashboard> dashboard({String? symbol, String? interval}) async =>
+      Dashboard.fromJson(await _get('/api/dashboard${_q(symbol, interval)}'));
 
-  Future<List<double>> chart({int n = 96}) async {
-    final j = await _get('/api/chart?n=$n');
+  Future<Consensus> consensus({String? symbol}) async =>
+      Consensus.fromJson(await _get('/api/consensus${_q(symbol, null)}'));
+
+  Future<List<TimeframeInfo>> timeframes({String? symbol}) async {
+    final j = await _get('/api/timeframes${_q(symbol, null)}');
+    return (j['timeframes'] as List)
+        .map((e) => TimeframeInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  static String _q(String? symbol, String? interval, {String extra = ''}) {
+    final parts = [
+      if (symbol != null) 'symbol=$symbol',
+      if (interval != null) 'interval=$interval',
+      if (extra.isNotEmpty) extra,
+    ];
+    return parts.isEmpty ? '' : '?${parts.join('&')}';
+  }
+
+  Future<List<double>> chart(
+      {String? symbol, String? interval, int n = 96}) async {
+    final j = await _get('/api/chart${_q(symbol, interval, extra: 'n=$n')}');
     return (j['points'] as List)
         .map((e) => ((e as Map)['c'] as num).toDouble())
         .toList();
@@ -79,8 +129,9 @@ class ApiClient {
         .toList();
   }
 
-  Future<TrainingInfo> training(String symbol) async =>
-      TrainingInfo.fromJson(await _get('/api/training?symbol=$symbol'));
+  Future<TrainingInfo> training(String symbol, {String? interval}) async =>
+      TrainingInfo.fromJson(
+          await _get('/api/training${_q(symbol, interval)}'));
 
   /// Alerts newer than `cursor`, plus the cursor to use next time.
   ///

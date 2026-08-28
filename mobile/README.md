@@ -84,6 +84,35 @@ fill an unbounded cross axis, and the layout fails with "BoxConstraints forces
 an infinite height" — which takes down the whole screen, not just that row.
 The stat-card grid wraps its Row in `IntrinsicHeight`.
 
+## Timeframes
+
+The selector row on the dashboard changes **which model answers**, not just
+which candles are drawn. Each of 1m / 5m / 15m / 1h / 4h / 1d is a separately
+fitted model, because an order block on a 1m chart and one on a 1d chart are
+not the same object — different flow, different horizon, different distance in
+ATR terms.
+
+Untrained timeframes stay in the row, dimmed with a **hollow ring**. Hiding
+them would make the selector look complete when it is not, and the badge is
+the point: only a fitted model has an honest probability. Tapping one goes to
+the training screen with the command to fit it, because the server answers
+`409 untrained` rather than pretending.
+
+The header shows the pair *and* its context timeframe — `1h windows · 4h
+context` — since the higher timeframe is part of what the model was fitted on.
+
+### Across timeframes
+
+The panel under the levels table shows what every fitted timeframe says at
+once, as bars centred on 50% (anchoring at zero would make every reading look
+enormous). It loads **after** the main screen rather than with it: consensus
+builds a dashboard per timeframe, and putting it in the same `Future.wait`
+held the screen on a spinner for twelve seconds.
+
+It is a view, not a model. The rows are independent models answering their own
+questions — the 1m model is not told what the 4h model thinks. Disagreement is
+the useful part; rows that agree are one piece of evidence repeated.
+
 ## Notifications — what is reliable and what is not
 
 These are LOCAL notifications. There is no push server, no Firebase, no APNs

@@ -11,6 +11,8 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../api/watchlist.dart';
+import 'add_coin_sheet.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/status_dot.dart';
@@ -31,6 +33,7 @@ class MarketScreen extends StatefulWidget {
 
 class _MarketScreenState extends State<MarketScreen> {
   List<Coin> _coins = const [];
+  List<String> _watch = const [];
   String? _error;
 
   @override
@@ -41,9 +44,11 @@ class _MarketScreenState extends State<MarketScreen> {
 
   Future<void> _load() async {
     try {
-      final c = await widget.client.coins();
+      final watch = await Watchlist.instance.load();
+      final c = await widget.client.coins(symbols: watch);
       if (!mounted) return;
       setState(() {
+        _watch = watch;
         _coins = c;
         _error = null;
       });
@@ -51,6 +56,33 @@ class _MarketScreenState extends State<MarketScreen> {
       if (!mounted) return;
       setState(() => _error = e.toString());
     }
+  }
+
+  Future<void> _openPicker() async {
+    await showAddCoinSheet(context, client: widget.client, current: _watch);
+    await _load();
+  }
+
+  Future<void> _remove(Coin c) async {
+    await Watchlist.instance.remove(c.symbol);
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..removeCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        backgroundColor: Obsidian.surfaceHigh,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, Obsidian.navClearance + 8),
+        content: Text('${c.short} removed', style: Obsidian.body()),
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: Obsidian.primary,
+          onPressed: () async {
+            await Watchlist.instance.add(c.symbol);
+            await _load();
+          },
+        ),
+      ));
   }
 
   @override
@@ -75,17 +107,21 @@ class _MarketScreenState extends State<MarketScreen> {
               Expanded(
                 child: Text('Select Crypto Pair', style: Obsidian.displayLg()),
               ),
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: Obsidian.surfaceHigh.withValues(alpha: 0.6),
-                  shape: BoxShape.circle,
-                  border:
-                      Border.all(color: Colors.white.withValues(alpha: 0.15)),
+              InkWell(
+                onTap: _openPicker,
+                customBorder: const CircleBorder(),
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: Obsidian.surfaceHigh.withValues(alpha: 0.6),
+                    shape: BoxShape.circle,
+                    border:
+                        Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                  ),
+                  child: const Icon(Icons.add_rounded,
+                      color: Obsidian.primary, size: 26),
                 ),
-                child: const Icon(Icons.add_rounded,
-                    color: Obsidian.primary, size: 26),
               ),
             ],
           ),
@@ -93,13 +129,29 @@ class _MarketScreenState extends State<MarketScreen> {
           if (_error != null)
             Text(_error!, style: Obsidian.body(color: Obsidian.error)),
           for (final c in _coins) ...[
-            _coinCard(c),
+            Dismissible(
+              key: ValueKey(c.symbol),
+              direction: DismissDirection.endToStart,
+              background: Container(
+                alignment: Alignment.centerRight,
+                padding: const EdgeInsets.only(right: 24),
+                decoration: BoxDecoration(
+                  color: Obsidian.red.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(Obsidian.rLg),
+                ),
+                child: const Icon(Icons.delete_outline_rounded,
+                    color: Obsidian.redSoft),
+              ),
+              onDismissed: (_) => _remove(c),
+              child: _coinCard(c),
+            ),
             const SizedBox(height: Obsidian.gutter),
           ],
           if (_coins.isNotEmpty)
             Text(
-              'Only pairs with a fitted model produce a probability. The rest '
-              'are listed so you can see what has not been trained.',
+              'Swipe a row to stop following it. Only pairs with a fitted '
+              'model produce a probability — the rest are shown so you can '
+              'see what has not been trained.',
               style: Obsidian.body(color: Obsidian.outline, size: 11.5),
             ),
         ],
@@ -137,14 +189,34 @@ class _MarketScreenState extends State<MarketScreen> {
                 const SizedBox(height: 6),
                 Row(
                   children: [
-                    StatusDot(live: c.trained, size: 8),
+                    StatusDot(
+                        live: c.trained,
+                        size: 8,
+                        color: c.listed ? null : Obsidian.red),
                     const SizedBox(width: 6),
-                    Text(c.trained ? 'TRAINED' : 'NOT TRAINED',
-                        style: Obsidian.labelSm(
-                            color: c.trained
-                                ? Obsidian.greenDim
-                                : Obsidian.outline,
-                            size: 9.5)),
+                    // Flexible + a COUNT rather than the full list: six
+                    // timeframes spelled out ("1m 5m 15m 1h 4h 1d") ran 17px
+                    // past the price column. The count says the same thing
+                    // and cannot grow.
+                    Flexible(
+                      child: Text(
+                          !c.listed
+                              ? 'NOT LISTED ON BINANCE'
+                              : (c.trained
+                                  ? 'TRAINED · ${c.trainedIntervals.length} '
+                                      'TIMEFRAME'
+                                      '${c.trainedIntervals.length == 1 ? "" : "S"}'
+                                  : 'NOT TRAINED'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Obsidian.labelSm(
+                              color: !c.listed
+                                  ? Obsidian.redSoft
+                                  : (c.trained
+                                      ? Obsidian.greenDim
+                                      : Obsidian.outline),
+                              size: 9.5)),
+                    ),
                   ],
                 ),
               ],

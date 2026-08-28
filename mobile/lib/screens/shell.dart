@@ -35,6 +35,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   NavTab _tab = NavTab.dashboard;
   String _symbol = 'BTCUSDT';
 
+  /// The selected timeframe. Not a chart setting — each timeframe is its own
+  /// fitted model, so this decides which model answers.
+  String _interval = '1h';
+
   late final LivePriceService _live = LivePriceService(symbol: _symbol);
   Timer? _alertTimer;
   Timer? _calendarTimer;
@@ -195,12 +199,26 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               // error painted on it.
               Expanded(
                 child: switch (_tab) {
-                  NavTab.dashboard =>
-                    DashboardScreen(client: widget.client, live: _live),
+                  NavTab.dashboard => DashboardScreen(
+                      client: widget.client,
+                      live: _live,
+                      interval: _interval,
+                      onPickInterval: (iv) => setState(() => _interval = iv),
+                      // an untrained timeframe has no probability to show, so
+                      // it goes where the truthful answer lives
+                      onNeedsTraining: (iv) => setState(() {
+                        _interval = iv;
+                        _tab = NavTab.training;
+                      }),
+                    ),
                   NavTab.market =>
                     MarketScreen(client: widget.client, onPick: _pick),
-                  NavTab.training =>
-                    TrainingScreen(client: widget.client, symbol: _symbol),
+                  NavTab.training => TrainingScreen(
+                      client: widget.client,
+                      symbol: _symbol,
+                      interval: _interval,
+                      onPickInterval: (iv) => setState(() => _interval = iv),
+                    ),
                   NavTab.profile => ProfileScreen(client: widget.client),
                 },
               ),
@@ -237,7 +255,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             // contradiction the user has no way to resolve — and the
             // dashboard names its own pair in the header anyway
             if (_tab == NavTab.training)
-              Text(_symbol, style: Obsidian.labelSm(size: 11)),
+              Text('$_symbol · $_interval',
+                  style: Obsidian.labelSm(size: 11)),
           ],
         ),
       );

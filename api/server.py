@@ -27,7 +27,7 @@ import logging
 import socket
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
 from api.service import get_service
@@ -89,6 +89,10 @@ class Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 return default
 
+        def opt(name: str) -> Optional[str]:
+            v = q.get(name, [None])[0]
+            return v or None
+
         svc = get_service()
         try:
             if route in ("/", "/api", "/api/health"):
@@ -97,13 +101,27 @@ class Handler(BaseHTTPRequestHandler):
                             "endpoints": ["/api/coins", "/api/dashboard",
                                           "/api/chart", "/api/whales",
                                           "/api/news", "/api/training",
-                                          "/api/alerts", "/api/calendar"]})
+                                          "/api/alerts", "/api/calendar",
+                                          "/api/timeframes",
+                                          "/api/consensus", "/api/symbols"]})
             elif route == "/api/coins":
-                self._send({"coins": svc.coins()})
+                raw = q.get("symbols", [None])[0]
+                picked = [x for x in (raw or "").split(",") if x.strip()] or None
+                self._send({"coins": svc.coins(picked)})
+            elif route == "/api/symbols":
+                self._send({"symbols": svc.symbols(q=opt("q"),
+                                                  limit=arg("limit", 60))})
+            elif route == "/api/timeframes":
+                self._send({"timeframes": svc.timeframes(opt("symbol"))})
             elif route == "/api/dashboard":
-                self._send(svc.dashboard())
+                self._send(svc.dashboard(symbol=opt("symbol"),
+                                         interval=opt("interval")))
+            elif route == "/api/consensus":
+                self._send(svc.consensus(opt("symbol")))
             elif route == "/api/chart":
-                self._send(svc.chart(n=arg("n", 96)))
+                self._send(svc.chart(symbol=opt("symbol"),
+                                     interval=opt("interval"),
+                                     n=arg("n", 96)))
             elif route == "/api/whales":
                 self._send({"events": svc.whales(limit=arg("limit", 20))})
             elif route == "/api/news":
@@ -128,10 +146,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send({"events": [e.to_json()
                                        for e in upcoming(within_days=days)]})
             elif route == "/api/training":
-                sym = q.get("symbol", [svc.symbol])[0]
-                self._send(svc.training(sym))
+                self._send(svc.training(opt("symbol") or svc.symbol,
+                                        interval=opt("interval")))
             else:
                 self._send({"error": "not found", "path": route}, status=404)
+        except FileNotFoundError as e:
+            # an untrained timeframe is a normal answer, not a server fault.
+            # 409 so the app can tell "not fitted yet" apart from "broken",
+            # and route the user to the training screen rather than an error
+            self._send({"error": str(e), "path": route,
+                        "untrained": True}, status=409)
         except Exception as e:                # a 500 with the cause beats a hang
             log.error("%s failed: %s", route, e)
             traceback.print_exc()

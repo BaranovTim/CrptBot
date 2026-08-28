@@ -468,6 +468,11 @@ class Monitor:
         self.h2 = JudgeAgent.load(h2_path)
         self.asset = asset
         self.news = NewsWatcher(asset=asset)
+        # what each frozen model was actually asked. h1 is the shorter
+        # horizon, h2 the longer one; at 1h that is 1 and 2 bars, at 1m it is
+        # 120 and 240
+        self.hold1 = int(getattr(self.h1.cfg, "max_hold_bars", 1))
+        self.hold2 = int(getattr(self.h2.cfg, "max_hold_bars", 2))
         self._features_cache: Optional[Tuple[pd.Timestamp, pd.DataFrame]] = None
 
     # -- features ------------------------------------------------------
@@ -645,16 +650,23 @@ class Monitor:
 
         # A: opened one bar ago, one bar left. B: opened now, two bars left.
         # after news both restart, so A is dropped and only a fresh B stands
+        # The horizons come from the FITTED MODELS, not from the numbers 1
+        # and 2. At 1h those are still 1 and 2 bars. At 1m they are 120 and
+        # 240, because +/-1 ATR over two minutes is a scalping target smaller
+        # than the round-trip fee — see core/timeframes.BARRIERS. Hardcoding
+        # the old constants here would have silently drawn a two-minute window
+        # over a model that was asked a four-hour question.
+        n1, n2 = self.hold1, self.hold2
         analyses = []
         if not restarted:
             analyses.append(evaluate(
                 self.h1, bars, X, "ANALYSIS A",
                 opened_at=last_close - self.delta,
-                ends_at=last_close + self.delta, bars_left=1))
+                ends_at=last_close + n1 * self.delta, bars_left=n1))
         analyses.append(evaluate(
             self.h2, bars, X, "ANALYSIS B" if not restarted else "ANALYSIS A (new)",
             opened_at=last_close,
-            ends_at=last_close + 2 * self.delta, bars_left=2))
+            ends_at=last_close + n2 * self.delta, bars_left=n2))
 
         for a in analyses:
             L.append("")
@@ -706,10 +718,12 @@ class Monitor:
         pairs = [
             (evaluate(self.h1, bars, X, "ANALYSIS A",
                       opened_at=last_close - self.delta,
-                      ends_at=last_close + self.delta, bars_left=1), self.h1),
+                      ends_at=last_close + self.hold1 * self.delta,
+                      bars_left=self.hold1), self.h1),
             (evaluate(self.h2, bars, X, "ANALYSIS B",
                       opened_at=last_close,
-                      ends_at=last_close + 2 * self.delta, bars_left=2), self.h2),
+                      ends_at=last_close + self.hold2 * self.delta,
+                      bars_left=self.hold2), self.h2),
         ]
 
         merged = prov_X = None

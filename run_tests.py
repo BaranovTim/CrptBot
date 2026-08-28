@@ -33,6 +33,7 @@ MODULES = [
     "tests.test_livefeed",
     "tests.test_forming",
     "tests.test_api",
+    "tests.test_timeframes",
     "tests.test_schedule",
     "tests.test_alerts",
     "tests.test_monitor",

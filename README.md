@@ -663,247 +663,121 @@ correctly. Read it in this order:
    `min_data_in_leaf`, lower `num_leaves`. On this problem a *training* AUC
    near 0.60 is healthier than one near 0.90.
 
-## The ablation answers the N/W/P/I question
+## That report was a SMALL-SAMPLE verdict, not a feature-set verdict
 
-You don't compute those weights — you measure what breaks when a block is
-removed:
+The run above is real and worth keeping, because reading it correctly is the
+skill. But it has since been repeated on the same timeframe, with the same
+features and the same purged cross-validation, over the full history rather
+than three months:
 
 ```
-added     feats     AUC  spread   delta
-regime        7  0.4235  0.0478
-agent2       33  0.4194  0.0290 -0.0041
-agent1       66  0.4666  0.0418 +0.0473
-agent4       88  0.4304  0.0279 -0.0362
+                     AUC   folds                          spread   eff-n
+three months       0.430   [0.515 0.456 0.453 0.505]       0.028      287
+full history       0.526   [0.540 0.541 0.517 0.524 0.536] 0.009   11,471
 ```
 
-A block that doesn't move out-of-fold AUC hasn't earned its complexity, its
-runtime, or — for Agents 3 and 4 — its data bill.
+Every fold is now above 0.50, the spread is a third of what it was, and the
+shuffle test is clean at 0.496. The same shape holds independently at 1m, 5m,
+15m and 4h — six timeframes, all folds above 0.50, all shuffles between 0.494
+and 0.502.
 
-## Calibration is what makes a percentage publishable
+**What that does and does not mean.** Six independent timeframes landing at
+0.51-0.53 with stable folds and clean shuffles is not the signature of
+multiple testing; noise gives you folds straddling 0.50 and spreads the size
+of the effect. So there is probably something small there, and the earlier
+"this feature set predicts nothing" was mostly a statement about 287
+observations.
 
-Raw model output is a score, not a probability. Isotonic regression on
-out-of-fold predictions learns `0.72 → 0.61`, and 0.61 is what gets shown. The
-property purchased: **every time it says 61%, roughly 61% of those trades
-should win.** That's the entire justification for putting a number on a screen
-— and given the plan's legal notes about advertising accuracy, the only
-defensible way to publish one.
+It is still **not** a claim of profitability. An AUC of 0.526 is a thin edge,
+it has not survived forward testing, and on the fast timeframes it cannot
+survive costs at all — see the table below. The correct next step is forward
+paper trading with a prediction journal, not more fitting.
 
-Measured on the real run: calibration error **0.096 → 0.045**, Brier
-**0.2273 → 0.2208**.
+## Costs decide the barrier geometry, not which timeframes are possible
 
-## Training is batch. Predicting is real-time.
+This has nothing to do with how good a model is, and it is settled before
+accuracy is discussed. With the **default +/-1 ATR barriers**, median 1-ATR
+moves on BTCUSDT against a 0.100% round trip:
 
-`fit()` and `predict_proba()` are separate, and `predict_proba()` raises if no
-model has been frozen. A model that updates its weights on every incoming tick
-is a model chasing noise — that's the failure mode behind "learn from errors"
-in the original notes. Inference is arithmetic on frozen coefficients:
-microseconds.
-
----
-
----
-
-# The live collector
-
-```bash
-python3 collect.py                     # BTCUSDT 1h + news, poll transport
-python3 collect.py --once              # one cycle, then exit (good for cron)
-python3 collect.py --status            # what is stored, and any gaps
-python3 collect.py --repair            # re-fetch missing bars
-python3 collect.py --interval 1m --transport stream
-```
-
-Records closed bars into `data_cache/live/` and news into `data_cache/news/`.
-**It does not trade.** Collection is kept separate from decision-making so you
-can restart it without touching a strategy — and it has to run *before* forward
-paper trading, because you cannot forward-test on data you never captured.
-
-## Three silent failures it exists to prevent
-
-**The forming bar.** In live mode the last row off any feed is the candle
-currently being built — its `close` is just the current price and keeps
-changing. A backtest never sees such a row, so storing it makes every derived
-feature differ live, with nothing raising. `drop_unclosed()` sat in the
-codebase unused for weeks; `BarStore.append` now refuses the write rather than
-trusting the caller. Verified against live Binance: REST returned the 14:59 bar
-at 14:30 and the store rejected it.
-
-**The invisible gap.** A Binance websocket drops roughly once every 24 hours —
-documented behaviour, not a failure. Reconnecting without backfilling leaves
-one hole per day, and nothing surfaces it: the frame still loads, the agents
-still run, and every `bars_since_*` feature quietly understates elapsed time.
-So every reconnect triggers a REST backfill, and `find_gaps()` reports holes
-that slipped through.
-
-**The lost clock.** Agent 3's entire point-in-time defence rests on
-`ingested_at` — when *we* saw an item, not when it claims to have happened. A
-backfilled corpus can never recover it: download three years of headlines today
-and every one was "ingested" today. Running this collector from now on is what
-makes future news research honest, even though it does nothing for the past.
-
-## Two transports
-
-| | |
-|---|---|
-| **poll** (default) | REST on a timer. Zero extra dependencies. For 1h bars: ~24 requests a day against a 2400/min weight budget — measured weight of **2** per cycle. Cannot silently half-work. |
-| **stream** | Websocket. Push, sub-second latency, right answer for 1s/1m bars or many symbols. Needs `pip install websockets`. |
-
-Both reconcile against REST after every cycle, so the guarantee is identical.
-Rate limiting is **weight-based, not request-count** — the collector reads
-`X-MBX-USED-WEIGHT-1M` from every response and throttles itself before Binance
-does it with a 429 and then an escalating IP ban.
-
-## Feeding it back into the agents
-
-```python
-from livefeed import BarStore
-bars = BarStore("BTCUSDT", "1h").load()     # same shape the agents expect
-```
-
-Store is append-only and monthly-partitioned CSV, so a month is easy to
-inspect, delete or re-fetch. Restarting the process loses nothing.
-
----
-
----
-
-# Getting the percentage
-
-Three commands, three different jobs. `collect.py` never prints a signal —
-that is not what it is for.
-
-| command | what it does | how long |
+| timeframe | span at +/-1 ATR | fees as share |
 |---|---|---|
-| `collect.py` | records closed bars, forever | runs until stopped |
-| `main.py --judge --save-model ...` | trains and freezes a model | minutes, once |
-| `predict.py` | reads the probability | milliseconds |
+| 1m | 0.092% | **109%** |
+| 5m | 0.278% | 36% |
+| 15m | 0.555% | 18% |
+| 1h | 1.278% | 8% |
+
+At 1m the whole distance from take-profit to stop-loss is smaller than the
+cost of opening and closing. An AUC of 0.99 would still lose money.
+
+**That is a statement about the barriers, not about the timeframe.** +/-1 ATR
+over one or two 1m bars is a *scalping* target — predicting the next two
+minutes to within 0.05%. Day trading does not mean that. It means using fast
+bars for RESOLUTION while holding for tens of minutes to hours.
+
+So `core.timeframes.BARRIERS` widens the barriers as the bars shrink:
+
+| tf | k (each side) | hold | horizon | span | fees as share |
+|---|---|---|---|---|---|
+| 1m | 11 | 240 bars | 4h | 1.01% | 10% |
+| 5m | 4 | 32 bars | 2h40 | 1.11% | 9% |
+| 15m | 2 | 8 bars | 2h | 1.11% | 9% |
+| 1h | 1 | 2 bars | 2h | 1.28% | 8% |
+| 4h | 1 | 2 bars | 8h | 3.06% | 3% |
+| 1d | 1 | 2 bars | 2d | 8.27% | 1% |
+
+`k` is picked so the span clears ~1%, which puts a 0.1% round trip near 10% of
+it. The hold is about `2k^2` bars, because a random walk covers `k` ATR in
+roughly `k^2` bars — a hold much shorter than that means only the vertical
+(time-out) barrier ever fires and the model learns to predict the clock. The
+result is a 2-4 hour horizon on every fast timeframe, which is what day
+trading is.
+
+1h, 4h and 1d keep +/-1: their spans already clear costs, and 1h's frozen
+models were fitted that way.
+
+**The monitor reads the horizon off the fitted model** rather than assuming 1
+and 2 bars. At 1m it draws a 120/240-bar window because that is the question
+the model was asked; hardcoding the old constants would have drawn a
+two-minute window over a four-hour prediction.
+
+`tests/test_timeframes.py` asserts every profile keeps fees under 15% of its
+span, and separately asserts that +/-1 ATR at 1m would still be untradeable —
+so if that ever stops being true, the profiles get revisited rather than
+quietly kept.
+
+## Two limits on the fast timeframes
+
+**Feature rebuilds do not scale down.** `Monitor.features()` recomputes the
+whole history whenever the newest bar changes. At 1h that is a 1.7s job once
+an hour. At 1m it is **18.2 seconds over 171,360 bars, once a minute** —
+roughly a third of a core, permanently, for one symbol. The models are fitted
+and usable, and reading a single screen is fine, but a live 1m loop needs
+incremental features before it is practical. Nothing here pretends otherwise:
+the first load of a 1m dashboard visibly takes half a minute.
+
+**Collect every interval you intend to look at.** `--interval` is
+appendable, so one process covers all six:
 
 ```bash
-# 1. train once on downloaded history (the live store will not have
-#    enough bars for weeks)
-python3 main.py --judge --save-model output/judge.joblib --start 2024-01-01
-
-# 2. read the signal
-python3 predict.py --history
-python3 predict.py --watch          # re-read as each bar closes
+python3 collect.py --interval 1m --interval 5m --interval 15m \
+                   --interval 1h --interval 4h --interval 1d
 ```
 
-```
-[2026-08-25 23:59:59.999+00:00] Agent 5
-  calibrated probability 30.2%
-  barriers  TP +1.69%  SL -0.84%
-  EV after costs -0.178%  (threshold +0.05%)
-  full Kelly 0.000 -> 0.25 Kelly = 0.00% of equity
-  DECISION: FLAT - EV below threshold after costs
-```
+Open a 1m screen without a 1m collector and it reports `STALE` — correctly,
+because the newest stored bar really is old. That is the guard working, not a
+limitation of the timeframe.
 
-**Training and prediction are separate commands on purpose.** Training is
-batch and offline; prediction is arithmetic on a frozen function. A model that
-refits on every incoming bar is a model chasing noise — the plan is explicit
-that "training and predicting in real time" is the wrong shape.
+## Reading the training table
 
-## What the percentage actually means
+`train.py` prints every timeframe together and **refuses to sort them**. Six
+timeframes times two horizons is twelve fits, so the best of them is above
+0.50 by construction even when nothing predicts anything — that is the
+multiple-testing trap the plan named, and picking the top row is how you fall
+into it.
 
-Not "chance BTC goes up". It is: **the probability that a long entered at this
-bar's close reaches +k_up ATR before −k_dn ATR, within max_hold bars.** Tied to
-specific barriers and a specific holding period, which is why they are printed
-next to it. The same 30% against different barriers is a different statement.
-
-And the probability is *not* the decision. A 61% chance with a good payoff is a
-trade; the same 61% with a bad one is not. EV after costs decides — which is
-why the output shows the arithmetic rather than just a number.
-
----
-
----
-
-# Watching inside the bar
-
-```bash
-python3 monitor.py                       # intra-bar watch is on by default
-python3 monitor.py --no-spikes           # off: only re-read on bar closes
-python3 monitor.py --spike-atr 0.5       # more sensitive
-python3 monitor.py --no-provisional      # resolved barriers only, never re-read
-```
-
-Between closes the monitor used to be blind. On 1h bars that is up to 59
-minutes in which a 4% move is invisible and the analysis on screen keeps
-quoting an entry price that stopped existing forty minutes ago.
-
-The status line now carries the forming bar, refreshed every `--poll` seconds:
-
-```
-  08:06 to close   79,825.00   +0.97%   +1.78atr   vol 3.6x   tkr 0.59   rsi 57   4h up   watching news...
-```
-
-Left of `rsi` is the **forming** bar and moves second to second. `rsi` and
-`4h` describe the last **closed** bar and are frozen until the next close.
-They are ordered that way on purpose — an RSI printed beside a live price
-invites you to read it as current, and it is not.
-
-## Two kinds of statement, and one is much stronger
-
-A spike prints both, kept visually apart because they are not equally load-bearing:
-
-| | |
-|---|---|
-| **RESOLVED** | price reached a barrier. An observation. No model, no features, no forming bar fed to anything — and it does not care what the odds said. |
-| **provisional** | the models re-read with the forming bar treated as closed. **Uncalibrated**, never recorded. |
-
-The second one needs the warning it carries. Both models were fitted on
-closed bars, and every closed bar spans a full interval. A forming bar does
-not: at minute 10 of an hour its high, low and volume describe ten minutes,
-and the ATR, RSI and structure computed over it are all shifted to match. The
-isotonic map that makes "61%" mean *61 times in 100* was fitted on out-of-fold
-predictions over whole bars only, so it does not apply here.
-
-So the provisional number is a **staleness warning with a number attached**,
-not a better forecast. It says the anchored read has drifted; it does not
-replace it. It is never stored, never journalled, and never counted in any
-accuracy statistic. The distortion shrinks as the bar fills — at minute 55 of
-60 it is nearly the closed bar — which is why the elapsed fraction is printed
-next to it every time.
-
-## The threshold has to sit below the barrier
-
-`--spike-atr` defaults to **0.75** and the trained barriers are at **1.0 ATR**.
-That gap is the whole point. At 1.0 the alert would fire exactly when the
-barrier is touched — by then the window is decided and there is nothing left
-to warn about. A warning has to arrive first.
-
-Retrain with different barriers and this needs revisiting. `monitor.py` reads
-`k_up` / `k_dn` off the loaded models at startup and says so rather than
-letting the mismatch pass quietly.
-
-## Three triggers, because one misses too much
-
-| trigger | default | catches |
-|---|---|---|
-| `MOVE` | 0.75 ATR from the last close | the move that got there however slowly |
-| `JOLT` | 0.60 ATR in 5 minutes | a fast move that then retraces, which `MOVE` never sees |
-| `VOLUME` | 3.0x the usual pace | size arriving before price moves — often absorption |
-
-Thresholds are in **ATR, never percent**, so the same config means the same
-thing at 40k and at 100k. A percentage threshold silently stops firing in a
-calm regime and never stops firing in a violent one.
-
-They are **definitions, not parameters** — the same rule as every
-`Agent*Config`. Tune them on how often you want to be interrupted. The moment
-one is picked because it made money it is fitted, and fitted things belong to
-Agent 5 where they can be cross-validated.
-
-## Cheap measurement gates the expensive re-read
-
-One REST call per poll costs weight 1 — about 3 a minute against a 2400/min
-budget. A 107-feature recompute over 23,000 bars costs ~1.7s. So the cheap
-thing runs on the timer and only a crossed threshold pays for the recompute —
-and the re-read is skipped entirely when both windows already resolved, which
-makes the most violent case also the cheapest.
-
-The **re-arm** is what keeps this readable. Without it a genuine 3-ATR move
-prints an alert block every 20 seconds. Price must travel another 0.5 ATR, or
-back, before the same bar can alert again. Verified live: one alert, then four
-quiet heartbeats while the move persisted.
+A timeframe earns trust from **stable folds** and a **clean shuffle test**
+(~0.50), never from its mean. A fold spread wider than the mean's distance
+from 0.50 means the mean is noise.
 
 ---
 
@@ -941,6 +815,28 @@ cache, the staleness guard and the barrier arithmetic, so the app is a second
 | `/api/training` | fitted horizons, or the command to fit one |
 | `/api/alerts` | transitions worth a notification, since a cursor |
 | `/api/calendar` | scheduled events, so the phone can book warnings ahead |
+| `/api/symbols` | every USD-M perpetual Binance lists, by 24h volume |
+| `/api/coins?symbols=` | rows for whatever list the phone asks about |
+
+## The watchlist lives on the phone, not here
+
+`/api/symbols` reads Binance's `exchangeInfo` and returns the 524 USDT
+perpetuals currently `TRADING`, ordered by 24h quote volume — a search for
+"b" should offer BTC before BAKE, and alphabetical order buries every pair
+anyone wants behind three-letter tokens nobody has heard of. Cached six
+hours; contracts are listed and delisted, not renamed hourly.
+
+**Nothing is stored server-side.** The app keeps its own list and passes it as
+`/api/coins?symbols=BTCUSDT,ETHUSDT,...`; the service answers and forgets. That
+is deliberate: this API has no auth and no rate limiting, and its entire
+security argument is that a compromise yields only what your terminal already
+prints. A write endpoint — even one holding four strings — trades that away.
+`tests/test_api.py::test_the_api_stays_read_only` asserts the handler still
+implements nothing but GET and OPTIONS.
+
+A pair the exchange does not list comes back with `listed: false` rather than
+a row of dashes. That case is real: `PEPEUSDT` does not exist as a perpetual
+because the listed contract is `1000PEPEUSDT`.
 
 ## Alerts are transitions, never states
 

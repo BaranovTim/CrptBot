@@ -30,12 +30,29 @@ import '../api/models.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/sparkline.dart';
+import '../widgets/timeframe_bar.dart';
 import '../widgets/status_dot.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key, required this.client, required this.live});
+  const DashboardScreen({
+    super.key,
+    required this.client,
+    required this.live,
+    required this.interval,
+    required this.onPickInterval,
+    required this.onNeedsTraining,
+  });
 
   final ApiClient client;
+
+  /// The selected timeframe. Each one is a separately fitted model, so this
+  /// changes which model answers, not just which candles are drawn.
+  final String interval;
+  final ValueChanged<String> onPickInterval;
+
+  /// Called when the chosen timeframe has no model — the training screen is
+  /// the honest destination, not an error panel.
+  final ValueChanged<String> onNeedsTraining;
 
   /// Price arrives here from Binance directly, not through the server. The
   /// server's copy is up to 15s stale by the time it reaches the phone, which
@@ -50,7 +67,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Dashboard? _data;
   List<double> _series = const [];
   List<WhaleEvent> _whales = const [];
+  Consensus? _consensus;
   String? _error;
+  String? _untrained;
   Timer? _timer;
   StreamSubscription<LiveTick>? _tick;
   LiveTick? _live;
@@ -68,6 +87,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // the service caches per closing bar, so this costs a JSON round trip,
     // not a feature recompute
     _timer = Timer.periodic(const Duration(seconds: 10), (_) => _load(quiet: true));
+  }
+
+  Future<void> _loadConsensus() async {
+    try {
+      final c = await widget.client.consensus();
+      if (mounted) setState(() => _consensus = c);
+    } catch (_) {
+      // supporting context; its absence is not worth an error state
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant DashboardScreen old) {
+    super.didUpdateWidget(old);
+    if (old.interval != widget.interval) {
+      setState(() {
+        _data = null;
+        _series = const [];
+        _untrained = null;
+      });
+      _load();
+    }
   }
 
   @override
@@ -94,9 +135,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _load({bool quiet = false}) async {
     try {
+      final iv = widget.interval;
       final results = await Future.wait([
-        widget.client.dashboard(),
-        widget.client.chart(n: 96),
+        widget.client.dashboard(interval: iv),
+        widget.client.chart(interval: iv, n: 96),
         widget.client.whales(limit: 6),
       ]);
       if (!mounted) return;
@@ -104,6 +146,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _data = results[0] as Dashboard;
         _series = results[1] as List<double>;
         _whales = results[2] as List<WhaleEvent>;
+        _error = null;
+        _untrained = null;
+      });
+      // Deliberately NOT awaited with the rest.
+      //
+      // Consensus builds a dashboard per trained timeframe, and each one is a
+      // full feature computation the first time it is asked for. Putting it in
+      // the same Future.wait held the whole screen on a spinner for twelve
+      // seconds. It is supporting context, so it arrives when it arrives.
+      unawaited(_loadConsensus());
+    } on UntrainedException catch (e) {
+      // a normal state, not a fault: this timeframe simply has no model yet
+      if (!mounted) return;
+      setState(() {
+        _untrained = e.message;
         _error = null;
       });
     } catch (e) {
@@ -114,6 +171,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_untrained != null) return _untrainedPanel();
     final d = _data;
     if (d == null) return _placeholder();
 
@@ -133,7 +191,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Obsidian.containerPadding, Obsidian.navClearance + 24),
         children: [
           _header(d),
+          const SizedBox(height: 14),
+          TimeframeBar(
+            timeframes: d.timeframes,
+            selected: d.interval,
+            onSelect: (tf) => tf.trained
+                ? widget.onPickInterval(tf.interval)
+                : widget.onNeedsTraining(tf.interval),
+          ),
           const SizedBox(height: Obsidian.gutter),
+          ..._costWarning(d),
           ..._whaleAlerts(),
           _chartCard(d),
           const SizedBox(height: Obsidian.panelGap),
@@ -143,6 +210,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: Obsidian.gutter),
           _levels(d),
           const SizedBox(height: Obsidian.gutter),
+          ..._consensusPanel(),
           _note(d),
         ],
       ),
@@ -162,7 +230,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             children: [
               Text(d.pair.replaceAll(' / ', '/'), style: Obsidian.displayLg()),
               const SizedBox(height: 4),
-              Text('${d.interval} windows · ${s.detail}',
+              Text('${d.interval} windows · ${d.htf} context · ${s.detail}',
                   style: Obsidian.body(size: 13)),
             ],
           ),
@@ -180,6 +248,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ],
     );
+  }
+
+  /// Shown when fees eat too much of the barrier span to trade this
+  /// timeframe, whatever the probability says.
+  ///
+  /// Placed ABOVE the odds on purpose. A confident percentage sitting over a
+  /// trade that cannot clear its own costs is the most expensive thing this
+  /// screen could show.
+  List<Widget> _costWarning(Dashboard d) {
+    final c = d.timeframes
+        .where((t) => t.interval == d.interval)
+        .map((t) => t.cost)
+        .firstOrNull;
+    if (c == null || (!c.untradeable && !c.marginal)) return const [];
+    final colour = c.untradeable ? Obsidian.red : Obsidian.tone('warn');
+    return [
+      GlassPanel(
+        padding: const EdgeInsets.all(16),
+        glow: c.untradeable ? colour : null,
+        glowOpacity: 0.2,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+                c.untradeable
+                    ? Icons.block_rounded
+                    : Icons.warning_amber_rounded,
+                color: colour,
+                size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                      c.untradeable
+                          ? 'Costs exceed the whole range at ${d.interval}'
+                          : 'Costs take a large bite at ${d.interval}',
+                      style: Obsidian.bodyLg(color: colour)
+                          .copyWith(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Text(c.note, style: Obsidian.body(size: 12.5)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: Obsidian.gutter),
+    ];
   }
 
   // ----------------------------------------------------------- whale alert
@@ -432,7 +550,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // -------------------------------------------------------------- levels
   Widget _levels(Dashboard d) {
-    final a = d.analyses.isNotEmpty ? d.analyses.last : null;
     final px = _livePrice ?? d.price;
     // The model fixed the barrier DISTANCE at the last close, not the price
     // it is measured from. So TP/SL follow the live price: these are the
@@ -449,10 +566,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _row('Take Profit (TP1)', _money(tp), Obsidian.green),
           _divider(),
           _row('Stop Loss (SL)', _money(sl), Obsidian.red),
-          if (a?.pUp != null) ...[
+          if (d.windowPUp != null) ...[
             _divider(),
-            _row('Chance up (${a!.barsLeft}-bar window)',
-                '${(a.pUp! * 100).toStringAsFixed(1)}%', Obsidian.primary),
+            // the recommendation's own window, so the two never disagree
+            _row('Chance up (${d.windowBars ?? '?'} × ${d.interval})',
+                '${(d.windowPUp! * 100).toStringAsFixed(1)}%',
+                Obsidian.primary),
           ],
         ],
       ),
@@ -475,6 +594,124 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _divider() =>
       Divider(height: 1, thickness: 1, color: Colors.white.withValues(alpha: 0.05));
 
+  /// Every fitted timeframe, side by side.
+  ///
+  /// Worth showing because disagreement is the useful part: rows that all
+  /// say the same thing are one piece of evidence repeated, rows that
+  /// conflict are a reason to wait. It is a view, not a model — nothing here
+  /// feeds back into a prediction.
+  List<Widget> _consensusPanel() {
+    final c = _consensus;
+    if (c == null || c.rows.length < 2) return const [];
+    return [
+      GlassPanel(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text('ACROSS TIMEFRAMES', style: Obsidian.labelSm(size: 11)),
+                const Spacer(),
+                if (c.agreement != null)
+                  Text('${(c.agreement! * 100).round()}% agree',
+                      style: Obsidian.labelSm(
+                          color: c.agreement! >= 0.8
+                              ? Obsidian.green
+                              : Obsidian.onSurfaceVariant,
+                          size: 10.5)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            for (final r in c.rows)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 42,
+                      child: Text(r.interval,
+                          style: Obsidian.dataTable(
+                              size: 13,
+                              color: r.interval == widget.interval
+                                  ? Obsidian.green
+                                  : Obsidian.onSurfaceVariant)),
+                    ),
+                    Expanded(child: _consensusBar(r)),
+                    const SizedBox(width: 10),
+                    SizedBox(
+                      width: 52,
+                      child: Text(
+                          r.pUp == null
+                              ? '—'
+                              : '${(r.pUp! * 100).toStringAsFixed(1)}%',
+                          textAlign: TextAlign.right,
+                          style: Obsidian.dataTable(
+                              size: 13,
+                              color: r.stale
+                                  ? Obsidian.outline
+                                  : Obsidian.onSurface)),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 2),
+            Text(c.note,
+                style: Obsidian.body(color: Obsidian.outline, size: 10.5)),
+          ],
+        ),
+      ),
+      const SizedBox(height: Obsidian.gutter),
+    ];
+  }
+
+  /// A bar centred on 50%: right of centre leans up, left leans down.
+  /// Anchoring at zero instead would make every reading look enormous.
+  Widget _consensusBar(ConsensusRow r) {
+    final p = r.pUp;
+    if (p == null) return const SizedBox(height: 6);
+    final lean = (p - 0.5).clamp(-0.5, 0.5);
+    final up = lean >= 0;
+    final colour =
+        r.stale ? Obsidian.outline : (up ? Obsidian.green : Obsidian.red);
+    return LayoutBuilder(builder: (_, box) {
+      final half = box.maxWidth / 2;
+      final w = (lean.abs() / 0.5) * half;
+      return SizedBox(
+        height: 8,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Container(
+                margin: const EdgeInsets.symmetric(vertical: 3),
+                color: Colors.white.withValues(alpha: 0.05),
+              ),
+            ),
+            Positioned(
+              left: up ? half : half - w,
+              width: w.clamp(1.0, half),
+              top: 0,
+              bottom: 0,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colour.withValues(alpha: 0.75),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Positioned(
+              left: half - 0.5,
+              top: 0,
+              bottom: 0,
+              child: Container(
+                  width: 1, color: Colors.white.withValues(alpha: 0.25)),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
   Widget _note(Dashboard d) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
         child: Text(
@@ -486,6 +723,55 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
 
   // ------------------------------------------------------------- fallbacks
+  Widget _untrainedPanel() {
+    final tfs = _data?.timeframes ?? const <TimeframeInfo>[];
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
+          Obsidian.containerPadding, Obsidian.navClearance + 24),
+      children: [
+        if (tfs.isNotEmpty) ...[
+          TimeframeBar(
+            timeframes: tfs,
+            selected: widget.interval,
+            onSelect: (tf) => tf.trained
+                ? widget.onPickInterval(tf.interval)
+                : widget.onNeedsTraining(tf.interval),
+          ),
+          const SizedBox(height: Obsidian.gutter),
+        ],
+        GlassPanel(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            children: [
+              const Icon(Icons.model_training_rounded,
+                  color: Obsidian.outline, size: 34),
+              const SizedBox(height: 14),
+              Text('No model for ${widget.interval}',
+                  style: Obsidian.headlineMd()),
+              const SizedBox(height: 10),
+              Text(
+                'Each timeframe is its own fitted model — a pattern on a 1m '
+                'chart is not the same object as the one on a 1d chart, so a '
+                'single fit cannot serve both. There is no probability to '
+                'show here until this one is trained.',
+                textAlign: TextAlign.center,
+                style: Obsidian.body(size: 13.5),
+              ),
+              const SizedBox(height: 18),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                    backgroundColor: Obsidian.primary,
+                    foregroundColor: Obsidian.onPrimary),
+                onPressed: () => widget.onNeedsTraining(widget.interval),
+                child: const Text('How to train it'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _placeholder() {
     if (_error != null) {
       return Center(

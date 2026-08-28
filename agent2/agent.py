@@ -37,7 +37,7 @@ from . import indicators as ind
 from .config import DEFAULT_CONFIG, Agent2Config
 from .htf import compute_htf
 from .schema import FEATURE_COLUMNS, validate_features
-from core import REQUIRED_OHLCV, check_bars
+from core import REQUIRED_OHLCV, check_bars, pandas_rule
 
 
 
@@ -122,7 +122,10 @@ class IndicatorAgent:
             return base
         interval = infer_interval(bars.index)
         try:
-            htf_td = pd.Timedelta(pd.tseries.frequencies.to_offset(self.cfg.htf_rule))
+            # via pandas_rule: htf_rule is BINANCE notation, and
+            # to_offset('15m') is fifteen MONTHS, not fifteen minutes
+            htf_td = pd.Timedelta(
+                pd.tseries.frequencies.to_offset(pandas_rule(self.cfg.htf_rule)))
         except (ValueError, TypeError):
             return base                      # non-fixed frequency; cannot convert
         if interval <= pd.Timedelta(0) or htf_td <= pd.Timedelta(0):

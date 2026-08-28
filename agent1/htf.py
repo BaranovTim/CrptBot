@@ -16,6 +16,8 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 
+from core import pandas_rule
+
 from .config import Agent1Config
 from .indicators import atr as compute_atr
 from .pivots import find_pivots
@@ -31,7 +33,16 @@ def infer_interval(index: pd.DatetimeIndex) -> pd.Timedelta: # Определи�
 
 
 def resample_bars(bars: pd.DataFrame, rule: str) -> pd.DataFrame: # Return a new DataFrame of bars resampled to the given rule, aligned to the close of each period.
-    """Aggregate to ``rule``, keeping only periods that have actually closed."""
+    """Aggregate to ``rule``, keeping only periods that have actually closed.
+
+    ``rule`` is a BINANCE interval ("15m", "4h", "1d"), not a pandas alias.
+    The two are not the same: pandas reads "15m" as fifteen MONTH-ENDS, so a
+    minute-based higher timeframe collapses all of history into one bucket and
+    every HTF column goes flat with nothing raising. `pandas_rule` is the
+    translation, and it rejects what it does not recognise rather than letting
+    pandas guess.
+    """
+    rule = pandas_rule(rule)
     interval = infer_interval(bars.index)
     open_time = bars.index - interval
     grouped = (

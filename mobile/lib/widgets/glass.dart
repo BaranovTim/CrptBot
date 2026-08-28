@@ -113,6 +113,7 @@ class GlassField extends StatefulWidget {
     this.obscure = false,
     this.keyboardType,
     this.trailing,
+    this.onChanged,
   });
 
   final TextEditingController controller;
@@ -120,6 +121,7 @@ class GlassField extends StatefulWidget {
   final bool obscure;
   final TextInputType? keyboardType;
   final Widget? trailing;
+  final ValueChanged<String>? onChanged;
 
   @override
   State<GlassField> createState() => _GlassFieldState();
@@ -162,6 +164,8 @@ class _GlassFieldState extends State<GlassField> {
               focusNode: _focus,
               obscureText: widget.obscure,
               keyboardType: widget.keyboardType,
+              onChanged: widget.onChanged,
+              textCapitalization: TextCapitalization.characters,
               style: Obsidian.dataTable(size: 16),
               cursorColor: Obsidian.primary,
               decoration: InputDecoration(

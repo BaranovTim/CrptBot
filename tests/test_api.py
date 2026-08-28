@@ -120,7 +120,51 @@ def test_rsi_notes_track_the_value():
                           (50, "Neutral Range"), (35, "Approaching Oversold"),
                           (25, "Oversold")):
         got = _indicators({"rsi_14": float(value)})
-        assert got[0]["note"] == expect, (value, got[0]["note"])
+        assert got[0]["note"].startswith(expect), (value, got[0]["note"])
+    return True
+
+
+def test_the_rsi_note_says_which_bars_it_spans():
+    """RSI(14) is 14 minutes at 1m and 14 hours at 1h. Same number, wildly
+    different claim — the card has to say which."""
+    for interval in ("1m", "1h", "1d"):
+        note = _indicators({"rsi_14": 50.0}, interval=interval)[0]["note"]
+        assert interval in note, note
+    return True
+
+
+def test_the_htf_card_names_the_timeframe_it_is_actually_showing():
+    """The bug this guards: the label was hardcoded "4H STRUCTURE" while the
+    value came from whatever `htf_rule` was set to. On the 1d screen that
+    displayed the WEEKLY trend under a 4H heading, which then appeared to
+    contradict the 1h screen for a reason no user could see. Agent 1's column
+    is called `trend_direction_4h` on every timeframe, so the column name
+    cannot be trusted as the label."""
+    for interval, htf in (("1m", "15m"), ("15m", "4h"), ("1h", "4h"),
+                          ("4h", "1d"), ("1d", "1w")):
+        card = [c for c in _indicators({"trend_direction_4h": 1.0},
+                                       interval=interval, htf=htf)
+                if c["key"] == "htf"][0]
+        assert card["label"] == f"{htf.upper()} STRUCTURE", card["label"]
+        assert htf in card["note"], card["note"]
+    return True
+
+
+def test_levels_describe_the_same_window_the_card_recommends():
+    """A BUY from the 1-bar model shown above a probability from the 2-bar
+    model reads as incoherent: "BUY" next to "51.7%". Both must come from
+    whichever window actually won."""
+    from api.service import _choose
+
+    entering, waiting = _enter("LONG"), _wait()
+    assert _choose(waiting, entering) is entering, "an entering window lost"
+    assert _choose(entering, waiting) is entering
+    # nothing entering -> the primary window speaks
+    assert _choose(waiting, waiting) is waiting
+
+    rec = _recommendation(waiting, entering, stale=False)
+    assert rec["p_up"] == entering.p_up
+    assert rec["window_bars"] == entering.bars_left
     return True
 
 
@@ -157,5 +201,122 @@ def test_untrained_pairs_are_reported_as_untrained():
     from api.service import get_service
     info = get_service().training("ETHUSDT")
     assert info["trained"] is False, info
-    assert "command" in info and "main.py" in info["command"]
+    assert "train.py" in info.get("command", ""), info.get("command")
+    return True
+
+
+def test_training_is_reported_per_timeframe_not_per_symbol():
+    """A symbol is not trained or untrained. Each timeframe is its own model,
+    and BTCUSDT having a 1h model says nothing about its 5m."""
+    from api.service import get_service
+    svc = get_service()
+    rows = {t["interval"]: t["trained"] for t in svc.timeframes("ETHUSDT")}
+    assert rows and not any(rows.values()), rows
+
+    btc = svc.training("BTCUSDT", interval="1h")
+    assert btc["interval"] == "1h" and btc["htf"] == "4h", btc
+    return True
+
+
+def test_the_cost_drag_is_reported_and_flags_the_untradeable():
+    """At 1m the barriers sit inside the round trip. That has to reach the
+    surface — it is not a model problem and no accuracy fixes it."""
+    from api.service import get_service
+    svc = get_service()
+    c = svc.cost_drag("BTCUSDT", "1m")
+    if c["span_pct"] is None:
+        return True                       # no 1m bars collected here
+    assert c["cost_share"] > c["cost_share"] * 0, c
+    assert c["verdict"] in ("untradeable", "marginal", "workable")
+    slow = svc.cost_drag("BTCUSDT", "1d")
+    if slow["span_pct"] is not None:
+        assert c["cost_share"] > slow["cost_share"], (
+            "fees must eat a larger share of a smaller barrier span")
+    return True
+
+
+# ------------------------------------------------------------ the universe
+def test_the_api_stays_read_only():
+    """The watchlist lives on the DEVICE, and this is why.
+
+    The service has no auth and no rate limiting, and its whole security
+    argument is that the worst a compromise yields is what the terminal
+    already prints. A write endpoint — even one that only stores a few
+    strings — trades that away. If a handler for anything but GET ever
+    appears here, that argument needs rewriting first.
+    """
+    from api.server import Handler
+
+    verbs = [m for m in dir(Handler) if m.startswith("do_")]
+    assert sorted(verbs) == ["do_GET", "do_OPTIONS"], verbs
+    return True
+
+
+def test_an_unlisted_symbol_is_flagged_not_silently_blank():
+    """PEPEUSDT is not a perpetual — 1000PEPEUSDT is. Without the flag the
+    row renders as dashes with nothing to explain them."""
+    from api.service import get_service
+
+    svc = get_service()
+    if not svc.symbols(limit=5):
+        return True                              # offline
+    rows = {c["symbol"]: c for c in
+            svc.coins(["BTCUSDT", "DEFINITELYNOTAPAIRUSDT"])}
+    assert rows["BTCUSDT"]["listed"] is True
+    assert rows["DEFINITELYNOTAPAIRUSDT"]["listed"] is False
+    assert rows["DEFINITELYNOTAPAIRUSDT"]["price"] is None
+    return True
+
+
+def test_the_universe_is_tradable_usdt_perpetuals_only():
+    """A SETTLING contract or a quarterly future would look identical in the
+    picker and then have no live price behind it."""
+    from api.service import get_service
+
+    rows = get_service().symbols(limit=500)
+    if not rows:
+        return True
+    assert len(rows) > 100, f"only {len(rows)} symbols; the filter is too tight"
+    for r in rows[:50]:
+        assert r["symbol"].endswith("USDT"), r["symbol"]
+        assert r["quote"] == "USDT", r
+    return True
+
+
+def test_symbols_are_ordered_by_volume_not_alphabetically():
+    """Searching "b" must offer BTC before BAKE."""
+    from api.service import get_service
+
+    rows = get_service().symbols(limit=20)
+    if len(rows) < 5:
+        return True
+    vols = [r["volume_24h"] or 0.0 for r in rows]
+    assert vols == sorted(vols, reverse=True), vols[:5]
+    assert rows[0]["symbol"] == "BTCUSDT", rows[0]["symbol"]
+    return True
+
+
+def test_search_matches_both_the_pair_and_the_base_asset():
+    from api.service import get_service
+
+    svc = get_service()
+    if not svc.symbols(limit=5):
+        return True
+    got = {r["symbol"] for r in svc.symbols(q="sol", limit=30)}
+    assert "SOLUSDT" in got, got
+    for sym in got:
+        assert "SOL" in sym, sym
+    return True
+
+
+def test_coins_honours_the_list_it_is_given():
+    """The device decides what is followed; the server just answers."""
+    from api.service import get_service
+
+    svc = get_service()
+    if not svc.symbols(limit=5):
+        return True
+    picked = ["ETHUSDT", "BTCUSDT"]
+    got = [c["symbol"] for c in svc.coins(picked)]
+    assert got == picked, got                     # order preserved too
     return True
