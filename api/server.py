@@ -65,6 +65,15 @@ def _now_iso() -> str:
     return utc_now().isoformat()
 
 
+def _stripe_ready() -> bool:
+    """Is Stripe actually wired, or is the paywall a shop window?
+
+    The app asks so it can say "payments are not set up yet" instead of
+    opening a checkout that 501s.
+    """
+    return bool(os.environ.get("STRIPE_SECRET_KEY"))
+
+
 def lan_ip() -> str:
     """Best guess at the address a phone on the same wifi should use."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -94,34 +103,94 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:                       # noqa: N802
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, *")
         self.end_headers()
 
     # -- auth ----------------------------------------------------------
-    def _authorised(self, route: str) -> bool:
-        token = TOKEN
-        if not token:
-            return True                     # loopback-only mode; see serve()
-        if route in ("/", "/api", "/api/health"):
-            return True                     # probes must not hold the secret
+    #
+    # Two kinds of caller, one header.
+    #
+    #   the shared TRADINGBOT_TOKEN  -> full access, no account. This is the
+    #                                   operator's key and how the collector,
+    #                                   curl and the pre-configured build all
+    #                                   reach the API. Keeping it working
+    #                                   means adding accounts did not break
+    #                                   the deployment that already existed.
+    #   a session token              -> whatever that account is entitled to.
+    #
+    # Both arrive as `Authorization: Bearer <x>`, so the app never had to
+    # learn a second scheme.
+
+    # Reachable with no credential at all. Health must stay open for the
+    # container probe, and a login form obviously cannot require a session.
+    OPEN = ("/", "/api", "/api/health",
+            "/api/auth/login", "/api/auth/register", "/api/billing/plans")
+
+    # Reachable by a signed-in account with no subscription. The chart is
+    # here because the paywall is meant to show the graph and withhold the
+    # analysis — a paywall that renders an empty screen tells you nothing
+    # about what you would be buying.
+    FREE = OPEN + ("/api/chart", "/api/me", "/api/auth/logout",
+                   "/api/billing/checkout")
+
+    def _bearer(self) -> str:
         header = self.headers.get("Authorization", "")
         prefix = "Bearer "
-        if not header.startswith(prefix):
-            return False
-        # constant time: a plain == leaks the shared secret one byte at a
-        # time to anyone willing to measure
-        return hmac.compare_digest(header[len(prefix):].strip(), token)
+        return header[len(prefix):].strip() if header.startswith(prefix) else ""
+
+    def _principal(self):
+        """(is_operator, user_or_None) for this request.
+
+        `(False, None)` means nobody — the caller presented nothing valid.
+        """
+        token = self._bearer()
+        if TOKEN and token and hmac.compare_digest(token, TOKEN):
+            # constant time: a plain == leaks the shared secret one byte at a
+            # time to anyone willing to measure
+            return True, None
+        if token:
+            from api.accounts import get_accounts
+            u = get_accounts().session_user(token)
+            if u is not None:
+                return False, u
+        return False, None
+
+    def _gate(self, route: str):
+        """None if the request may proceed, else (payload, status).
+
+        Returns 402 rather than 403 for a signed-in account without a
+        subscription. They are different situations and the app draws
+        different screens for them: 401 is "sign in", 402 is "this is what
+        you would be buying", 403 would mean "never, for you".
+        """
+        if route in self.OPEN:
+            return None
+        if not TOKEN:
+            return None                     # loopback-only mode; see serve()
+
+        operator, user = self._principal()
+        if operator:
+            return None
+        if user is None:
+            return ({"error": "unauthorised",
+                     "hint": "sign in, or send Authorization: Bearer <token>"},
+                    401)
+        if route in self.FREE or user.entitled:
+            return None
+        return ({"error": "subscription required",
+                 "tier": user.tier,
+                 "entitled": False,
+                 "hint": "this endpoint needs an active subscription"}, 402)
 
     def do_GET(self) -> None:                           # noqa: N802
         parsed = urlparse(self.path)
         route = parsed.path.rstrip("/") or "/"
         q = parse_qs(parsed.query)
 
-        if not self._authorised(route):
-            self._send({"error": "unauthorised",
-                        "hint": "send Authorization: Bearer <token>"},
-                       status=401)
+        denied = self._gate(route)
+        if denied is not None:
+            self._send(denied[0], status=denied[1])
             return
 
         def arg(name: str, default: int) -> int:
@@ -144,7 +213,25 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/news", "/api/training",
                                           "/api/alerts", "/api/calendar",
                                           "/api/timeframes",
-                                          "/api/consensus", "/api/symbols"]})
+                                          "/api/consensus", "/api/symbols",
+                                          "/api/me", "/api/auth/login",
+                                          "/api/auth/register",
+                                          "/api/billing/plans"]})
+            elif route == "/api/me":
+                operator, user = self._principal()
+                if operator:
+                    # the shared key is not an account. Say so rather than
+                    # inventing a username the app would then display.
+                    self._send({"identifier": "operator", "tier": "admin",
+                                "entitled": True, "operator": True})
+                else:
+                    self._send(user.public() if user else
+                               {"identifier": None, "tier": "free",
+                                "entitled": False})
+            elif route == "/api/billing/plans":
+                from api.billing import plans
+                self._send({"plans": plans(), "provider": "stripe",
+                            "configured": _stripe_ready()})
             elif route == "/api/coins":
                 raw = q.get("symbols", [None])[0]
                 picked = [x for x in (raw or "").split(",") if x.strip()] or None
@@ -198,6 +285,76 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"error": str(e), "path": route,
                         "untrained": True}, status=409)
         except Exception as e:                # a 500 with the cause beats a hang
+            log.error("%s failed: %s", route, e)
+            traceback.print_exc()
+            self._send({"error": str(e), "path": route}, status=500)
+
+    # -- writes --------------------------------------------------------
+    #
+    # This handler used to be GET-only, and a test enforced it. That test
+    # existed because the whole security argument was "a compromise yields
+    # what your terminal already prints". Accounts change that, so the
+    # argument is narrowed rather than dropped:
+    #
+    #   MARKET DATA IS STILL READ-ONLY. Nothing below writes a bar, a model
+    #   or a watchlist. The only mutable state this process owns is the
+    #   account table, and every route here names an account operation.
+    #
+    # `test_writes_touch_accounts_and_nothing_else` holds that line.
+    def _body(self) -> dict:
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return {}
+        if n <= 0 or n > 64 * 1024:      # a login form is not 64KB
+            return {}
+        try:
+            return json.loads(self.rfile.read(n) or b"{}")
+        except (ValueError, UnicodeDecodeError):
+            return {}
+
+    def do_POST(self) -> None:                          # noqa: N802
+        route = urlparse(self.path).path.rstrip("/") or "/"
+
+        denied = self._gate(route)
+        if denied is not None:
+            self._send(denied[0], status=denied[1])
+            return
+
+        from api.accounts import AuthError, get_accounts
+        acc = get_accounts()
+        body = self._body()
+        ident = str(body.get("identifier") or "")
+        password = str(body.get("password") or "")
+
+        try:
+            if route == "/api/auth/register":
+                u = acc.register(ident, password)
+                self._send({"token": acc.start_session(u),
+                            "user": u.public()}, status=201)
+            elif route == "/api/auth/login":
+                u = acc.verify(ident, password)
+                self._send({"token": acc.start_session(u),
+                            "user": u.public()})
+            elif route == "/api/auth/logout":
+                acc.end_session(self._bearer())
+                self._send({"ok": True})
+            elif route == "/api/billing/checkout":
+                from api.billing import checkout_session
+                _, user = self._principal()
+                self._send(checkout_session(user, body.get("plan")))
+            else:
+                self._send({"error": "not found", "path": route}, status=404)
+        except AuthError as e:
+            # 400, not 500: the caller gave something this endpoint rejects,
+            # and the message is written to be shown to a person.
+            self._send({"error": str(e), "path": route}, status=400)
+        except NotImplementedError as e:
+            # billing before Stripe keys exist. 501 says "the server has not
+            # implemented this", which is exactly true and lets the app show
+            # a real explanation instead of a generic failure.
+            self._send({"error": str(e), "path": route}, status=501)
+        except Exception as e:
             log.error("%s failed: %s", route, e)
             traceback.print_exc()
             self._send({"error": str(e), "path": route}, status=500)

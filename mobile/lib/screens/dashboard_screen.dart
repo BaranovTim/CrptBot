@@ -38,12 +38,23 @@ class DashboardScreen extends StatefulWidget {
     super.key,
     required this.client,
     required this.live,
+    required this.entitled,
+    required this.onSubscribe,
     required this.interval,
     required this.onPickInterval,
     required this.onNeedsTraining,
   });
 
   final ApiClient client;
+
+  /// Whether this account may see the analysis, or only the graph.
+  ///
+  /// A free account is not shown a screen full of blanked-out panels: the
+  /// endpoints behind them return 402 and there is nothing to blank. It gets
+  /// the chart, which is genuinely free, and one panel saying what the rest
+  /// is.
+  final bool entitled;
+  final VoidCallback onSubscribe;
 
   /// The selected timeframe. Each one is a separately fitted model, so this
   /// changes which model answers, not just which candles are drawn.
@@ -134,8 +145,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _load({bool quiet = false}) async {
+    final iv = widget.interval;
+
+    // Free tier: fetch ONLY the chart. Requesting the gated endpoints and
+    // catching six 402s would work and would also make every screen refresh
+    // hammer the server with calls whose answer is known in advance.
+    if (!widget.entitled) {
+      try {
+        final series = await widget.client.chart(interval: iv, n: 96);
+        if (!mounted) return;
+        setState(() {
+          _series = series;
+          _error = null;
+          _untrained = null;
+        });
+      } catch (e) {
+        if (!mounted || quiet) return;
+        setState(() => _error = e.toString());
+      }
+      return;
+    }
+
     try {
-      final iv = widget.interval;
       final results = await Future.wait([
         widget.client.dashboard(interval: iv),
         widget.client.chart(interval: iv, n: 96),
@@ -171,6 +202,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.entitled) return _freeBody();
     if (_untrained != null) return _untrainedPanel();
     final d = _data;
     if (d == null) return _placeholder();
@@ -215,6 +247,110 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
+  }
+
+  /// What an unsubscribed account sees: the graph, and an honest account of
+  /// what is behind the rest.
+  Widget _freeBody() {
+    final live = widget.live.last.price;
+    return RefreshIndicator(
+      onRefresh: _load,
+      backgroundColor: Obsidian.surfaceContainer,
+      color: Obsidian.primary,
+      child: ListView(
+        addRepaintBoundaries: false,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
+            Obsidian.containerPadding, Obsidian.navClearance + 24),
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('BTC / USDT', style: Obsidian.displayLg()),
+                    const SizedBox(height: 4),
+                    Text('Live price · ${widget.interval}',
+                        style: Obsidian.body(color: Obsidian.outline)),
+                  ],
+                ),
+              ),
+              if (live != null)
+                Text(_fmtPrice(live),
+                    style: Obsidian.dataTable(size: 22, w: FontWeight.w700)),
+            ],
+          ),
+          const SizedBox(height: 18),
+          GlassPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('PRICE', style: Obsidian.labelSm(size: 10.5)),
+                const SizedBox(height: 14),
+                if (_series.isEmpty)
+                  const SizedBox(
+                      height: 90,
+                      child: Center(
+                          child: CircularProgressIndicator(
+                              color: Obsidian.primary)))
+                else
+                  Sparkline(values: _series, color: Obsidian.primary),
+              ],
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: Obsidian.gutter),
+            Text(_error!,
+                style: Obsidian.body(color: Obsidian.redSoft, size: 12.5)),
+          ],
+          const SizedBox(height: Obsidian.gutter),
+          GlassPanel(
+            onTap: widget.onSubscribe,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.lock_outline_rounded,
+                        size: 17, color: Obsidian.outline),
+                    const SizedBox(width: 9),
+                    Text('THE REST NEEDS A SUBSCRIPTION',
+                        style: Obsidian.labelSm(size: 10.5)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                    'Model probability, expected value, entry and exit levels, '
+                    'indicators, whale filings and alerts — across six '
+                    'independently fitted timeframes.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 12.5)),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Text('See what is included',
+                        style: Obsidian.body(
+                            color: Obsidian.primary, size: 12.5)),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.arrow_forward_rounded,
+                        size: 15, color: Obsidian.primary),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _fmtPrice(double v) {
+    final s = v.toStringAsFixed(v.abs() >= 100 ? 2 : 4);
+    final parts = s.split('.');
+    final whole = parts[0].replaceAllMapped(
+        RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
+    return '\$$whole.${parts[1]}';
   }
 
   // ---------------------------------------------------------------- header

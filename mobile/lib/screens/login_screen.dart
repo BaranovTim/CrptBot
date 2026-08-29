@@ -1,31 +1,36 @@
-/// The "Secure Neural Trading Link" screen.
+/// Sign in to ThusIldy.
 ///
-/// HONESTY NOTE, because this screen looks like an auth wall and is not one.
-/// There is no account server in this project — nothing issues credentials,
-/// nothing verifies them. So the two fields are a LOCAL session label only:
-/// what you type is held in memory, is never transmitted, and is never
-/// persisted. Building a convincing credential form that quietly posted a
-/// password to something would be worse than building nothing.
+/// This screen used to be a prop. The two fields looked like an auth wall,
+/// were never transmitted, and let anybody through — which was the honest
+/// thing to build when there was no account server to talk to. There is one
+/// now, so the form does what it appears to do.
 ///
-/// What IS real here is the status row. "Network Link Secure" pings the
-/// Python service and reports what actually came back, and tapping it opens
-/// the host editor — which is the one genuinely necessary setting, since a
-/// physical phone has to be pointed at the Mac's LAN address.
+/// WHAT THE PASSWORD DOES AND DOES NOT TOUCH
+///     It is sent once, over the link to your own server, and exchanged for a
+///     session token. The app stores the TOKEN, never the password. Signing
+///     out discards the token; changing the password on the server invalidates
+///     every token that account had.
+///
+/// WHY THE HOST EDITOR IS ON THE SIGN-IN SCREEN
+///     Because a wrong host and a wrong password fail identically from the
+///     user's side, and only one of them is fixable by typing more carefully.
+///     The status row says which it is before you try.
 library;
 
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/models.dart';
+import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/mesh_background.dart';
-import '../widgets/status_dot.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.client, required this.onEnter});
 
   final ApiClient client;
-  final VoidCallback onEnter;
+  final ValueChanged<Account> onEnter;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -35,9 +40,12 @@ class _LoginScreenState extends State<LoginScreen> {
   final _id = TextEditingController();
   final _key = TextEditingController();
   bool _obscure = true;
+  bool _register = false;
+  bool _busy = false;
   bool _probing = true;
   bool _linked = false;
   String _linkDetail = 'checking link...';
+  String? _error;
 
   @override
   void initState() {
@@ -52,13 +60,18 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  /// Is the server reachable at all?
+  ///
+  /// Deliberately `/api/health`, which needs no credential. Probing something
+  /// gated would report "no link" for an account problem and send the user to
+  /// re-type a host that was correct all along.
   Future<void> _probe() async {
     setState(() {
       _probing = true;
       _linkDetail = 'checking link...';
     });
     try {
-      await widget.client.coins();
+      await widget.client.health();
       if (!mounted) return;
       setState(() {
         _linked = true;
@@ -75,6 +88,40 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _submit() async {
+    final id = _id.text.trim();
+    final pw = _key.text;
+    if (id.isEmpty || pw.isEmpty) {
+      setState(() => _error = 'Both fields are required.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final account = _register
+          ? await widget.client.register(id, pw)
+          : await widget.client.login(id, pw);
+      // persist the SESSION, not the password
+      await Settings.instance.saveToken(widget.client.token);
+      if (!mounted) return;
+      widget.onEnter(account);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$e';
+      });
+    }
+  }
+
   Future<void> _editHost() async {
     final ctrl = TextEditingController(text: widget.client.base);
     final saved = await showDialog<String>(
@@ -83,18 +130,19 @@ class _LoginScreenState extends State<LoginScreen> {
         backgroundColor: Obsidian.surfaceContainer,
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Obsidian.rLg)),
-        title: Text('API host', style: Obsidian.headlineMd()),
+        title: Text('Server address', style: Obsidian.headlineMd()),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Run  python3 serve.py  on your Mac. It prints the address to '
-              'use for the simulator, the emulator and a physical phone.',
+              'The address of your ThusIldy server. If it is reachable over '
+              'Tailscale, use the 100.x.y.z address and keep Tailscale '
+              'connected on this phone.',
               style: Obsidian.body(),
             ),
             const SizedBox(height: 16),
-            GlassField(controller: ctrl, hint: 'http://192.168.1.20:8787'),
+            GlassField(controller: ctrl, hint: 'http://100.64.0.1:8787'),
           ],
         ),
         actions: [
@@ -111,9 +159,18 @@ class _LoginScreenState extends State<LoginScreen> {
     );
     if (saved != null && saved.isNotEmpty) {
       widget.client.base = saved;
+      await Settings.instance.saveBase(saved);
       await _probe();
     }
   }
+
+  Widget _label(IconData icon, String text) => Row(
+        children: [
+          Icon(icon, size: 15, color: Obsidian.outline),
+          const SizedBox(width: 7),
+          Text(text, style: Obsidian.labelSm(size: 10.5)),
+        ],
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -126,78 +183,146 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text('SECURE NEURAL TRADING LINK',
+                  Image.asset('assets/logo.png',
+                      width: 76, height: 76, filterQuality: FilterQuality.high),
+                  const SizedBox(height: 14),
+                  Text('THUSILDY',
                       textAlign: TextAlign.center,
-                      style: Obsidian.labelSm(color: Obsidian.primary, size: 13)),
-                  const SizedBox(height: 28),
+                      style: Obsidian.displayLg().copyWith(letterSpacing: 6)),
+                  const SizedBox(height: 6),
+                  Text(
+                      _register
+                          ? 'Create an account'
+                          : 'Sign in to your account',
+                      style: Obsidian.body(color: Obsidian.outline)),
+                  const SizedBox(height: 26),
                   GlassPanel(
                     padding: const EdgeInsets.all(24),
                     radius: Obsidian.rXl,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _label(Icons.mail_outline_rounded, 'IDENTIFIER'),
+                        _label(Icons.person_outline_rounded, 'IDENTIFIER'),
                         const SizedBox(height: 10),
                         GlassField(
-                            controller: _id, hint: 'Enter your credentials'),
-                        const SizedBox(height: 22),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            _label(Icons.lock_outline_rounded, 'SECURITY KEY'),
-                            Text('Recover Key?',
-                                style: Obsidian.labelSm(
-                                    color: Obsidian.primary, size: 12)),
-                          ],
+                          controller: _id,
+                          hint: 'your handle',
+                          onChanged: (_) => setState(() => _error = null),
                         ),
+                        const SizedBox(height: 20),
+                        _label(Icons.lock_outline_rounded, 'PASSWORD'),
                         const SizedBox(height: 10),
                         GlassField(
                           controller: _key,
+                          hint: _register
+                              ? 'at least 8 characters'
+                              : 'your password',
                           obscure: _obscure,
-                          hint: '••••••••••',
-                          trailing: IconButton(
-                            icon: Icon(
+                          onChanged: (_) => setState(() => _error = null),
+                          trailing: InkWell(
+                            onTap: () => setState(() => _obscure = !_obscure),
+                            child: Icon(
                                 _obscure
-                                    ? Icons.visibility_off_outlined
-                                    : Icons.visibility_outlined,
+                                    ? Icons.visibility_off_rounded
+                                    : Icons.visibility_rounded,
+                                size: 18,
                                 color: Obsidian.outline),
-                            onPressed: () =>
-                                setState(() => _obscure = !_obscure),
                           ),
                         ),
-                        const SizedBox(height: 10),
-                        Text(
-                          'Local session only — no account server exists yet, '
-                          'and nothing you type here leaves the device.',
-                          style: Obsidian.body(
-                              color: Obsidian.outline, size: 11.5),
-                        ),
-                        const SizedBox(height: 20),
-                        _linkRow(),
+                        if (_error != null) ...[
+                          const SizedBox(height: 16),
+                          Text(_error!,
+                              style: Obsidian.body(
+                                  color: Obsidian.redSoft, size: 12.5)),
+                        ],
                         const SizedBox(height: 24),
-                        _connectButton(),
-                        const SizedBox(height: 20),
-                        Divider(color: Colors.white.withValues(alpha: 0.08)),
+                        SizedBox(
+                          height: 52,
+                          child: FilledButton(
+                            onPressed: _busy ? null : _submit,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Obsidian.primaryContainer,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius:
+                                      BorderRadius.circular(Obsidian.rLg)),
+                            ),
+                            child: _busy
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white))
+                                : Text(
+                                    _register ? 'CREATE ACCOUNT' : 'SIGN IN',
+                                    style: Obsidian.labelSm(
+                                        color: Colors.white, size: 12.5)),
+                          ),
+                        ),
                         const SizedBox(height: 14),
                         Center(
-                          child: Wrap(
-                            alignment: WrapAlignment.center,
-                            children: [
-                              Text('No active node? ', style: Obsidian.body()),
-                              Text('Register New Node',
-                                  style: Obsidian.bodyLg(
-                                          color: Obsidian.primary)
-                                      .copyWith(
-                                          fontWeight: FontWeight.w700,
-                                          decoration:
-                                              TextDecoration.underline,
-                                          decorationColor: Obsidian.primary)),
-                            ],
+                          child: TextButton(
+                            onPressed: _busy
+                                ? null
+                                : () => setState(() {
+                                      _register = !_register;
+                                      _error = null;
+                                    }),
+                            child: Text(
+                                _register
+                                    ? 'Already have an account? Sign in'
+                                    : 'No account? Create one',
+                                style:
+                                    Obsidian.body(color: Obsidian.primary,
+                                        size: 12.5)),
                           ),
                         ),
                       ],
                     ),
                   ),
+                  const SizedBox(height: 22),
+                  InkWell(
+                    onTap: _editHost,
+                    borderRadius: BorderRadius.circular(Obsidian.rLg),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_probing)
+                            const SizedBox(
+                                width: 10,
+                                height: 10,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                    color: Obsidian.outline))
+                          else
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: _linked
+                                    ? Obsidian.green
+                                    : Obsidian.redSoft,
+                              ),
+                            ),
+                          const SizedBox(width: 9),
+                          Text(_linkDetail,
+                              style: Obsidian.labelSm(
+                                  size: 10.5,
+                                  color: _linked
+                                      ? Obsidian.greenDim
+                                      : Obsidian.outline)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('Analysis only. ThusIldy places no orders.',
+                      textAlign: TextAlign.center,
+                      style:
+                          Obsidian.body(color: Obsidian.outline, size: 11)),
                 ],
               ),
             ),
@@ -206,77 +331,4 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
-
-  Widget _label(IconData icon, String text) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: Obsidian.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Text(text, style: Obsidian.labelSm(size: 13)),
-        ],
-      );
-
-  Widget _linkRow() => InkWell(
-        onTap: _editHost,
-        borderRadius: BorderRadius.circular(Obsidian.rMd),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            color: Obsidian.surfaceLowest.withValues(alpha: 0.6),
-            borderRadius: BorderRadius.circular(Obsidian.rMd),
-            border:
-                Border.all(color: Colors.white.withValues(alpha: 0.08)),
-          ),
-          child: Row(
-            children: [
-              if (_probing)
-                const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Obsidian.primary))
-              else
-                StatusDot(live: _linked),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(_linkDetail,
-                    style: Obsidian.dataTable(
-                        size: 13,
-                        color: _linked
-                            ? Obsidian.onSurface
-                            : Obsidian.onSurfaceVariant)),
-              ),
-              Icon(Icons.tune_rounded, size: 16, color: Obsidian.outline),
-            ],
-          ),
-        ),
-      );
-
-  Widget _connectButton() => Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(Obsidian.rLg),
-          boxShadow: Obsidian.glow(Obsidian.primary, opacity: 0.35, blur: 26),
-        ),
-        child: FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: Obsidian.primary,
-            foregroundColor: Obsidian.onPrimary,
-            minimumSize: const Size.fromHeight(60),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(Obsidian.rLg)),
-          ),
-          onPressed: widget.onEnter,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text('INITIALIZE CONNECTION',
-                  style: Obsidian.bodyLg(color: Obsidian.onPrimary)
-                      .copyWith(
-                          fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-              const SizedBox(width: 10),
-              const Icon(Icons.arrow_forward_rounded, size: 20),
-            ],
-          ),
-        ),
-      );
 }

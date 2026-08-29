@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../api/muted.dart';
 import '../api/watchlist.dart';
 import 'add_coin_sheet.dart';
 import '../theme/liquid_obsidian.dart';
@@ -65,6 +66,7 @@ class _MarketScreenState extends State<MarketScreen> {
 
   Future<void> _remove(Coin c) async {
     await Watchlist.instance.remove(c.symbol);
+    await Muted.instance.forget(c.symbol);
     await _load();
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -149,9 +151,10 @@ class _MarketScreenState extends State<MarketScreen> {
           ],
           if (_coins.isNotEmpty)
             Text(
-              'Swipe a row to stop following it. Only pairs with a fitted '
-              'model produce a probability — the rest are shown so you can '
-              'see what has not been trained.',
+              'Tap the bell to silence a pair\'s alerts, × to stop '
+              'following it, or swipe a row. Only pairs with a fitted model '
+              'produce a probability — the rest are shown so you can see '
+              'what has not been trained.',
               style: Obsidian.body(color: Obsidian.outline, size: 11.5),
             ),
         ],
@@ -236,9 +239,83 @@ class _MarketScreenState extends State<MarketScreen> {
                       w: FontWeight.w700)),
             ],
           ),
+          const SizedBox(width: 6),
+          // Swipe-to-delete already worked, and was invisible: the only hint
+          // sat BELOW every row, so on a list longer than a screen you would
+          // never meet it. A gesture nobody discovers is not a feature.
+          // These two buttons say out loud what the row can do.
+          _rowButton(
+            icon: Muted.instance.isMuted(c.symbol)
+                ? Icons.notifications_off_rounded
+                : Icons.notifications_active_rounded,
+            color: Muted.instance.isMuted(c.symbol)
+                ? Obsidian.outline
+                : Obsidian.green,
+            tooltip: 'Alerts for ${c.short}',
+            onTap: () async {
+              await Muted.instance.toggle(c.symbol);
+              if (mounted) setState(() {});
+            },
+          ),
+          _rowButton(
+            icon: Icons.close_rounded,
+            color: Obsidian.outline,
+            tooltip: 'Stop following ${c.short}',
+            onTap: () => _confirmRemove(c),
+          ),
         ],
       ),
     );
+  }
+
+  Widget _rowButton({
+    required IconData icon,
+    required Color color,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) =>
+      Semantics(
+        button: true,
+        label: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          // 40px: below ~44 a target next to a tappable card gets hit by
+          // accident, and this one removes a coin
+          child: SizedBox(
+              width: 40,
+              height: 40,
+              child: Icon(icon, size: 19, color: color)),
+        ),
+      );
+
+  /// Confirm before dropping a pair.
+  ///
+  /// The swipe has an Undo snackbar and needs no dialog; a button sitting one
+  /// finger-width from "open this coin" does, because a mis-tap there is
+  /// silent and you would not know which coin vanished.
+  Future<void> _confirmRemove(Coin c) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        title: Text('Stop following ${c.short}?', style: Obsidian.headlineMd()),
+        content: Text(
+            'It disappears from this list. Nothing is deleted on the server, '
+            'and you can add it back from the + button.',
+            style: Obsidian.body(color: Obsidian.outline)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Keep', style: Obsidian.body())),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Remove',
+                  style: Obsidian.body(color: Obsidian.redSoft))),
+        ],
+      ),
+    );
+    if (ok == true) await _remove(c);
   }
 
   static String _price(double? v) {

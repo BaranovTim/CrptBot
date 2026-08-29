@@ -25,6 +25,7 @@ What these guard, in order of how badly they would mislead you:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -236,19 +237,143 @@ def test_the_cost_drag_is_reported_and_flags_the_untradeable():
 
 
 # ------------------------------------------------------------ the universe
-def test_the_api_stays_read_only():
-    """The watchlist lives on the DEVICE, and this is why.
+def test_writes_touch_accounts_and_nothing_else():
+    """The read-only rule, narrowed rather than dropped.
 
-    The service has no auth and no rate limiting, and its whole security
-    argument is that the worst a compromise yields is what the terminal
-    already prints. A write endpoint — even one that only stores a few
-    strings — trades that away. If a handler for anything but GET ever
-    appears here, that argument needs rewriting first.
+    This used to assert the handler had no verb but GET, because the whole
+    security argument was "a compromise yields what your terminal already
+    prints". Accounts changed that: sign-in has to write. So the line moved
+    to where it still means something —
+
+        MARKET DATA IS STILL READ-ONLY.
+
+    Nothing reachable by POST writes a bar, a model, a watchlist or a
+    training run. If a route that is not an account or billing operation
+    appears in `do_POST`, that argument needs rewriting again.
     """
+    import inspect
+
     from api.server import Handler
 
-    verbs = [m for m in dir(Handler) if m.startswith("do_")]
-    assert sorted(verbs) == ["do_GET", "do_OPTIONS"], verbs
+    verbs = sorted(m for m in dir(Handler) if m.startswith("do_"))
+    assert verbs == ["do_GET", "do_OPTIONS", "do_POST"], verbs
+
+    src = inspect.getsource(Handler.do_POST)
+    routes = re.findall(r'route == "(/api/[^"]+)"', src)
+    assert routes, "no routes found in do_POST"
+    for r in routes:
+        assert r.startswith(("/api/auth/", "/api/billing/")), \
+            f"{r} writes something that is not an account"
+    return True
+
+
+def test_a_password_is_never_stored_in_the_clear():
+    """The file on disk must not contain the password, anywhere, ever."""
+    import tempfile
+    from pathlib import Path
+
+    from api.accounts import Accounts
+
+    with tempfile.TemporaryDirectory() as d:
+        acc = Accounts(Path(d) / "accounts.json")
+        acc.register("tim", "correct horse battery staple")
+        raw = (Path(d) / "accounts.json").read_text()
+        assert "correct horse" not in raw, "password written in the clear"
+        assert "battery staple" not in raw
+        # and the stored digest is not just a hash of the password with no
+        # salt, which would make a rainbow table sufficient
+        import hashlib
+        naked = hashlib.sha256(b"correct horse battery staple").hexdigest()
+        assert naked not in raw
+    return True
+
+
+def test_an_unknown_account_and_a_wrong_password_are_indistinguishable():
+    """Otherwise the login form tells an attacker which handles exist."""
+    import tempfile
+    from pathlib import Path
+
+    from api.accounts import Accounts, AuthError
+
+    with tempfile.TemporaryDirectory() as d:
+        acc = Accounts(Path(d) / "accounts.json")
+        acc.register("tim", "a-real-password")
+
+        msgs = []
+        for ident, pw in (("tim", "wrong-password"), ("nobody", "anything")):
+            try:
+                acc.verify(ident, pw)
+                raise AssertionError(f"{ident} should not have verified")
+            except AuthError as e:
+                msgs.append(str(e))
+        assert msgs[0] == msgs[1], msgs
+    return True
+
+
+def test_an_unsubscribed_account_gets_the_chart_and_not_the_analysis():
+    """The paywall, which is the whole point of the tier.
+
+    Free sees the graph — a paywall showing nothing tells you nothing about
+    what you would be buying — and is refused everything that is the product.
+    """
+    import api.server as server
+    from api.accounts import Accounts
+    from api.server import Handler
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        acc = Accounts(Path(d) / "accounts.json")
+        free = acc.register("skint", "password-long-enough")
+        paid = acc.register("payer", "password-long-enough", tier="pro")
+
+        h = object.__new__(Handler)          # no socket needed for _gate
+        old_token = server.TOKEN
+        server.TOKEN = "operator-key"
+        try:
+            def gate_as(user, route):
+                h._principal = lambda: (False, user)
+                return h._gate(route)
+
+            assert gate_as(free, "/api/chart") is None
+            assert gate_as(free, "/api/me") is None
+            assert gate_as(free, "/api/billing/plans") is None
+
+            for route in ("/api/dashboard", "/api/consensus", "/api/news",
+                          "/api/whales", "/api/alerts", "/api/training"):
+                denied = gate_as(free, route)
+                assert denied is not None, f"{route} leaked to a free account"
+                assert denied[1] == 402, (route, denied)
+
+            for route in ("/api/dashboard", "/api/consensus", "/api/chart"):
+                assert gate_as(paid, route) is None, route
+
+            # nobody at all is 401, not 402: "sign in" and "subscribe" are
+            # different screens
+            assert gate_as(None, "/api/dashboard")[1] == 401
+        finally:
+            server.TOKEN = old_token
+    return True
+
+
+def test_a_lapsed_subscription_falls_back_to_free_on_its_own():
+    """No cron job stands between an expired card and the paywall."""
+    import time as _time
+
+    from api.accounts import User
+
+    live = User(identifier="a", salt="00", hash="x", tier="pro",
+                subscription_ends=_time.time() + 3600)
+    lapsed = User(identifier="b", salt="00", hash="x", tier="pro",
+                  subscription_ends=_time.time() - 1)
+    admin = User(identifier="c", salt="00", hash="x", tier="admin")
+
+    assert live.entitled
+    assert not lapsed.entitled
+    assert admin.entitled                    # never expires, never billed
+    assert "hash" not in live.public()       # and the digest never ships
+    assert "salt" not in live.public()
     return True
 
 
@@ -418,4 +543,38 @@ def test_the_dashboard_ttl_tracks_the_bar_period():
     # 1m build on the one-core droplet; a 30s TTL there means never stopping.
     svc._build_cost[("BTCUSDT", "1m")] = 27.0
     assert t("1m") >= 108.0, t("1m")
+    return True
+
+
+def test_a_grant_from_another_process_reaches_the_running_api():
+    """The bug that would read as "I paid and nothing happened".
+
+    `manage_accounts.py grant` — and, later, a Stripe webhook — may run in a
+    different process from the API. The API held its user table in memory and
+    never re-read the file, so an account that was already `pro` on disk kept
+    getting 402 until the server was restarted.
+
+    Measured on the droplet before the fix: `list` reported `pro True` while
+    `/api/dashboard` answered 402 to that account's live session.
+    """
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from api.accounts import Accounts
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "accounts.json"
+        writer, reader = Accounts(path), Accounts(path)
+
+        writer.register("alice", "password-long-enough")
+        assert reader.get("alice") is not None       # reader picks up creation
+        assert not reader.get("alice").entitled
+
+        time.sleep(0.01)                             # distinct mtime
+        writer.set_tier("alice", "pro", time.time() + 3600)
+
+        assert writer.get("alice").entitled
+        assert reader.get("alice").entitled, \
+            "the running API cannot see a grant made by the CLI"
     return True

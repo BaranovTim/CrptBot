@@ -27,6 +27,19 @@ String defaultApiBase() {
   return 'http://localhost:8787';
 }
 
+/// This account is signed in but has no subscription.
+///
+/// Separate from ApiException because the app draws a different screen for
+/// it: not an error, a price list. 401 means "sign in", 402 means "this is
+/// what you would be buying", and conflating them sends people to the wrong
+/// place.
+class PaywallException implements Exception {
+  PaywallException(this.tier);
+  final String tier;
+  @override
+  String toString() => 'subscription required';
+}
+
 class ApiException implements Exception {
   ApiException(this.message);
   final String message;
@@ -81,6 +94,10 @@ class ApiClient {
           'The server rejected the token.\n\nProfile → Bearer token, and '
           'paste the value from the server\'s .env file.');
     }
+    if (r.statusCode == 402) {
+      final j = json.decode(r.body) as Map<String, dynamic>;
+      throw PaywallException(j['tier'] as String? ?? 'free');
+    }
     if (r.statusCode == 409) {
       throw UntrainedException(
           (json.decode(r.body) as Map<String, dynamic>)['error'] as String? ??
@@ -90,6 +107,79 @@ class ApiClient {
       throw ApiException('$path returned ${r.statusCode}: ${r.body}');
     }
     return json.decode(r.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> _post(String path,
+      Map<String, dynamic> body) async {
+    final uri = Uri.parse('$base$path');
+    late http.Response r;
+    try {
+      r = await http
+          .post(uri,
+              headers: {..._headers, 'Content-Type': 'application/json'},
+              body: json.encode(body))
+          .timeout(const Duration(seconds: 30));
+    } catch (e) {
+      throw ApiException('Cannot reach $base\n\n($e)');
+    }
+    final j = r.body.isEmpty
+        ? <String, dynamic>{}
+        : json.decode(r.body) as Map<String, dynamic>;
+    if (r.statusCode >= 400) {
+      // the server writes these to be read by a person — 'that identifier is
+      // already taken', not 'constraint violation'
+      throw ApiException(j['error'] as String? ?? 'failed (${r.statusCode})');
+    }
+    return j;
+  }
+
+  /// Sign in. On success the session token replaces whatever `token` held,
+  /// so every later call is made as this account.
+  Future<Account> login(String identifier, String password) async {
+    final j = await _post('/api/auth/login',
+        {'identifier': identifier, 'password': password});
+    token = j['token'] as String? ?? '';
+    return Account.fromJson(j['user'] as Map<String, dynamic>);
+  }
+
+  Future<Account> register(String identifier, String password) async {
+    final j = await _post('/api/auth/register',
+        {'identifier': identifier, 'password': password});
+    token = j['token'] as String? ?? '';
+    return Account.fromJson(j['user'] as Map<String, dynamic>);
+  }
+
+  Future<void> logout() async {
+    try {
+      await _post('/api/auth/logout', const {});
+    } catch (_) {
+      // the session is being abandoned either way; a failed call must not
+      // leave the user stuck on a screen they asked to leave
+    }
+    token = '';
+  }
+
+  /// Who the current token belongs to, and what it may see.
+  Future<Account> me() async =>
+      Account.fromJson(await _get('/api/me'));
+
+  /// Reachability, with no credential involved.
+  ///
+  /// The sign-in screen probes this rather than a gated route, so a bad
+  /// password cannot be reported as a broken network.
+  Future<Map<String, dynamic>> health() async => _get('/api/health');
+
+  Future<Map<String, dynamic>> plans() async => _get('/api/billing/plans');
+
+  /// Ask for a Stripe checkout URL. Throws with a readable reason while
+  /// payments are not configured.
+  Future<String> checkout(String plan) async {
+    final j = await _post('/api/billing/checkout', {'plan': plan});
+    final url = j['url'] as String?;
+    if (url == null || url.isEmpty) {
+      throw ApiException('The server did not return a checkout link.');
+    }
+    return url;
   }
 
   Future<List<SymbolInfo>> symbols({String? q, int limit = 60}) async {

@@ -374,3 +374,40 @@ class Consensus {
   final double? agreement;
   final List<ConsensusRow> rows;
 }
+
+/// Who is signed in, and what they are allowed to see.
+///
+/// `entitled` is computed on the SERVER, never here. A client that decides
+/// its own entitlement is a client that can be edited to decide differently —
+/// the app hides screens for a good experience, and the API refuses them for
+/// the actual guarantee.
+class Account {
+  Account.fromJson(Map<String, dynamic> j)
+      : identifier = j['identifier'] as String? ?? '',
+        tier = j['tier'] as String? ?? 'free',
+        entitled = j['entitled'] as bool? ?? false,
+        operator = j['operator'] as bool? ?? false,
+        subscriptionEnds = (j['subscription_ends'] as num?) == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(
+                ((j['subscription_ends'] as num).toDouble() * 1000).round(),
+                isUtc: true);
+
+  const Account.anonymous()
+      : identifier = '',
+        tier = 'free',
+        entitled = false,
+        operator = false,
+        subscriptionEnds = null;
+
+  final String identifier, tier;
+  final bool entitled;
+
+  /// Signed in with the shared operator key rather than an account. Full
+  /// access, no username to display.
+  final bool operator;
+
+  final DateTime? subscriptionEnds;
+
+  bool get signedIn => identifier.isNotEmpty || operator;
+}

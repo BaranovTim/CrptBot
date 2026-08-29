@@ -1,271 +1,378 @@
-/// Profile, carrying the "Unlock Quantum Flux Pro" panel from the mockup.
+/// Account, subscription, alerts, connection.
 ///
-/// The panel is built to the design. What is NOT built is a purchase flow —
-/// there is no billing backend, no store product and no entitlement server,
-/// so a working-looking Subscribe button would be a button that takes money
-/// for nothing. It explains its own state instead.
+/// The previous version of this screen was mostly a mock: a "Pro" panel with
+/// perks, and a note admitting nothing could charge you. There is a real
+/// account behind it now, so the screen shows real state — who you are, what
+/// your subscription actually says, and whether this phone can reach the
+/// server — rather than an aspirational layout.
 ///
-/// There is also a design question worth leaving on the screen rather than
-/// burying: tiering by *precision* means deliberately serving numbers you
-/// know are worse to people who paid less. Tiering by coverage — more pairs,
-/// more timeframes, alert latency, history — sells the same honest number to
-/// everyone. The panel lists the second kind.
+/// Everything shown here is asked of the server or read from this device.
+/// Nothing is inferred: an app that decides locally what tier you are is an
+/// app that can be edited into deciding differently.
 library;
 
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/models.dart';
+import '../api/muted.dart';
+import '../api/notifications.dart';
 import '../api/settings.dart';
+import '../api/watchlist.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/status_dot.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key, required this.client});
+  const ProfileScreen({
+    super.key,
+    required this.client,
+    required this.account,
+    required this.onSignOut,
+  });
 
   final ApiClient client;
+  final Account account;
+  final VoidCallback onSignOut;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  bool _linked = false;
   bool _checking = true;
+  bool _linked = false;
+  int _muted = 0;
 
   @override
   void initState() {
     super.initState();
     _probe();
+    _countMuted();
   }
 
   Future<void> _probe() async {
     setState(() => _checking = true);
+    var ok = false;
     try {
-      await widget.client.coins();
-      if (!mounted) return;
-      setState(() {
-        _linked = true;
-        _checking = false;
-      });
+      await widget.client.health();
+      ok = true;
     } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _linked = false;
-        _checking = false;
-      });
+      ok = false;
     }
+    if (!mounted) return;
+    setState(() {
+      _linked = ok;
+      _checking = false;
+    });
+  }
+
+  Future<void> _countMuted() async {
+    final muted = await Muted.instance.load();
+    final following = await Watchlist.instance.load();
+    if (!mounted) return;
+    // count only pairs still followed: a mute left over from a coin you
+    // dropped is not something to report as active
+    setState(() =>
+        _muted = following.where((s) => muted.contains(s)).length);
   }
 
   Future<void> _editHost() async {
     final ctrl = TextEditingController(text: widget.client.base);
-    final saved = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Obsidian.surfaceContainer,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(Obsidian.rLg)),
-        title: Text('API host', style: Obsidian.headlineMd()),
-        content: GlassField(controller: ctrl, hint: 'http://192.168.1.20:8787'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text('Cancel', style: Obsidian.body())),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child:
-                  Text('Save', style: Obsidian.body(color: Obsidian.primary))),
-        ],
-      ),
+    final saved = await _prompt(
+      title: 'Server address',
+      body: 'Where your ThusIldy server is reachable. Over Tailscale this is '
+          'the 100.x.y.z address, and Tailscale has to stay connected on '
+          'this phone.',
+      ctrl: ctrl,
+      hint: 'http://100.64.0.1:8787',
     );
-    if (saved != null && saved.isNotEmpty) {
-      widget.client.base = saved;
-      await Settings.instance.saveBase(saved);
-      await _probe();
-    }
+    if (saved == null) return;
+    widget.client.base = saved;
+    await Settings.instance.saveBase(saved);
+    await _probe();
   }
 
   Future<void> _editToken() async {
     final ctrl = TextEditingController(text: widget.client.token);
-    final saved = await showDialog<String>(
+    final saved = await _prompt(
+      title: 'Access token',
+      body: 'Normally this is your sign-in session and you never touch it. '
+          'The operator key from the server\'s .env goes here instead if you '
+          'are connecting as the owner.',
+      ctrl: ctrl,
+      hint: 'paste the token',
+      obscure: true,
+    );
+    if (saved == null) return;
+    widget.client.token = saved;
+    await Settings.instance.saveToken(saved);
+    await _probe();
+  }
+
+  Future<String?> _prompt({
+    required String title,
+    required String body,
+    required TextEditingController ctrl,
+    required String hint,
+    bool obscure = false,
+  }) =>
+      showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Obsidian.surfaceContainer,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(Obsidian.rLg)),
+          title: Text(title, style: Obsidian.headlineMd()),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(body, style: Obsidian.body()),
+              const SizedBox(height: 16),
+              GlassField(controller: ctrl, hint: hint, obscure: obscure),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Cancel', style: Obsidian.body())),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                child:
+                    Text('Save', style: Obsidian.body(color: Obsidian.primary))),
+          ],
+        ),
+      ).then((v) => (v == null || v.isEmpty) ? null : v);
+
+  Future<void> _confirmSignOut() async {
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Obsidian.surfaceContainer,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(Obsidian.rLg)),
-        title: Text('Bearer token', style: Obsidian.headlineMd()),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Only needed when the backend runs on a server. It is the '
-              'TRADINGBOT_TOKEN from that machine\'s .env file — leave it '
-              'empty when the backend is on your own computer.',
-              style: Obsidian.body(size: 12.5),
-            ),
-            const SizedBox(height: 16),
-            GlassField(controller: ctrl, hint: 'paste the token'),
-          ],
-        ),
+        title: Text('Sign out?', style: Obsidian.headlineMd()),
+        content: Text(
+            'Your watchlist and alert settings stay on this device. You will '
+            'need your password to sign back in.',
+            style: Obsidian.body(color: Obsidian.outline)),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text('Cancel', style: Obsidian.body())),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Stay', style: Obsidian.body())),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child:
-                  Text('Save', style: Obsidian.body(color: Obsidian.primary))),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Sign out',
+                  style: Obsidian.body(color: Obsidian.redSoft))),
         ],
       ),
     );
-    if (saved != null) {
-      widget.client.token = saved;
-      await Settings.instance.saveToken(saved);
-      await _probe();
-    }
+    if (ok == true) widget.onSignOut();
   }
 
+  // ------------------------------------------------------------- rendering
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      // addRepaintBoundaries: a BackdropFilter samples what is painted
-      // BEHIND it, and ListView puts every child in its own RepaintBoundary
-      // by default. Inside that layer the backdrop is empty, so the glass
-      // panels blur nothing and paint nothing — the screen comes up blank
-      // with no error anywhere. Opting out gives the filter a real backdrop.
-      addRepaintBoundaries: false,
-      padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
-          Obsidian.containerPadding, Obsidian.navClearance + 24),
-      children: [
-        GlassPanel(
-          active: true,
-          radius: Obsidian.rXl,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-          child: Column(
-            children: [
-              Container(
-                width: 120,
-                height: 120,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.18)),
-                  boxShadow:
-                      Obsidian.glow(Obsidian.primary, opacity: 0.30, blur: 40),
-                ),
-                child: const Icon(Icons.lock_rounded,
-                    size: 52, color: Obsidian.primary),
+    final a = widget.account;
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _probe();
+        await _countMuted();
+      },
+      backgroundColor: Obsidian.surfaceContainer,
+      color: Obsidian.primary,
+      child: ListView(
+        addRepaintBoundaries: false,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
+            Obsidian.containerPadding, Obsidian.navClearance + 24),
+        children: [
+          Text('Profile', style: Obsidian.displayLg()),
+          const SizedBox(height: 20),
+          _identityCard(a),
+          const SizedBox(height: Obsidian.gutter),
+          _section('SUBSCRIPTION', [
+            _tile(
+              icon: a.tier == 'admin'
+                  ? Icons.verified_user_rounded
+                  : Icons.workspace_premium_rounded,
+              title: _tierName(a),
+              subtitle: _tierDetail(a),
+              trailing: StatusDot(live: a.entitled),
+            ),
+          ]),
+          const SizedBox(height: Obsidian.gutter),
+          _section('ALERTS', [
+            _tile(
+              icon: Notifications.instance.granted
+                  ? Icons.notifications_active_rounded
+                  : Icons.notifications_off_rounded,
+              title: 'System permission',
+              subtitle: Notifications.instance.granted
+                  ? 'Granted — alerts can reach this phone'
+                  : 'Denied in system settings; nothing will be delivered',
+              trailing: StatusDot(live: Notifications.instance.granted),
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.notifications_paused_rounded,
+              title: 'Silenced pairs',
+              subtitle: _muted == 0
+                  ? 'None — every followed pair can alert you'
+                  : '$_muted of your pairs are muted',
+              trailing: Text('$_muted',
+                  style: Obsidian.dataTable(size: 15, w: FontWeight.w700)),
+            ),
+          ]),
+          const SizedBox(height: Obsidian.gutter),
+          _section('CONNECTION', [
+            _tile(
+              icon: _checking ? Icons.sync_rounded : Icons.dns_rounded,
+              title: 'Server address',
+              subtitle: widget.client.base,
+              trailing: _checking
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Obsidian.primary))
+                  : StatusDot(live: _linked),
+              onTap: _editHost,
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.key_rounded,
+              title: 'Access token',
+              subtitle: widget.client.token.isEmpty
+                  ? 'none — server is on this network'
+                  : '•' * 16,
+              onTap: _editToken,
+            ),
+          ]),
+          const SizedBox(height: Obsidian.gutter),
+          _section('ABOUT', [
+            _tile(
+              icon: Icons.gavel_rounded,
+              title: 'What ThusIldy does',
+              subtitle: 'Reads and analyses. It never places an order, holds '
+                  'a key, or moves money.',
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.query_stats_rounded,
+              title: 'Accuracy',
+              subtitle: 'Backtested at or near chance (AUC 0.43–0.53, where '
+                  '0.5 is a coin flip). Treat every number as a hypothesis.',
+            ),
+          ]),
+          const SizedBox(height: 26),
+          SizedBox(
+            height: 50,
+            child: OutlinedButton(
+              onPressed: _confirmSignOut,
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(Obsidian.rLg)),
               ),
-              const SizedBox(height: 26),
-              RichText(
-                textAlign: TextAlign.center,
-                text: TextSpan(children: [
-                  TextSpan(text: 'Unlock ', style: Obsidian.displayLg()),
-                  TextSpan(
-                    text: 'Quantum Flux Pro',
-                    style: Obsidian.displayLg(color: Obsidian.primary).copyWith(
-                      shadows: [
-                        BoxShadow(
-                            color: Obsidian.primary.withValues(alpha: 0.5),
-                            blurRadius: 24)
-                      ],
-                    ),
-                  ),
-                ]),
-              ),
-              const SizedBox(height: 14),
-              Text(
-                'Get access to advanced trading signals, more pairs and '
-                'longer history.',
-                textAlign: TextAlign.center,
-                style: Obsidian.body(size: 15),
-              ),
-              const SizedBox(height: 24),
-              ..._perk(Icons.donut_large_rounded, 'Every pair, not just BTC'),
-              ..._perk(Icons.timelapse_rounded, 'All timeframes and horizons'),
-              ..._perk(Icons.notifications_active_rounded,
-                  'Push alerts the moment a spike fires'),
-              ..._perk(Icons.receipt_long_rounded,
-                  'Full prediction log with calibration'),
-              const SizedBox(height: 22),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Obsidian.surfaceLowest.withValues(alpha: 0.7),
-                  borderRadius: BorderRadius.circular(Obsidian.rMd),
-                  border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.08)),
-                ),
-                child: Text(
-                  'No billing is wired up. There is no store product and no '
-                  'entitlement server, so nothing here can charge you — the '
-                  'panel is the design, not a checkout.',
-                  style: Obsidian.body(color: Obsidian.outline, size: 12),
-                ),
-              ),
-            ],
+              child: Text('SIGN OUT',
+                  style:
+                      Obsidian.labelSm(color: Obsidian.redSoft, size: 12)),
+            ),
           ),
-        ),
-        const SizedBox(height: Obsidian.gutter),
-        GlassPanel(
-          padding: EdgeInsets.zero,
-          child: Column(
-            children: [
-              _tile(
-                icon: _checking ? Icons.sync_rounded : Icons.dns_rounded,
-                title: 'API host',
-                subtitle: widget.client.base,
-                trailing: _checking
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Obsidian.primary))
-                    : StatusDot(live: _linked),
-                onTap: _editHost,
-              ),
-              Divider(
-                  height: 1,
-                  thickness: 1,
-                  color: Colors.white.withValues(alpha: 0.05)),
-              _tile(
-                icon: Icons.key_rounded,
-                title: 'Bearer token',
-                subtitle: widget.client.token.isEmpty
-                    ? 'none — backend is on this network'
-                    : '•' * 12,
-                onTap: _editToken,
-              ),
-              Divider(
-                  height: 1,
-                  thickness: 1,
-                  color: Colors.white.withValues(alpha: 0.05)),
-              _tile(
-                icon: Icons.gavel_rounded,
-                title: 'What this app does',
-                subtitle: 'Reads and advises. It never places an order.',
-              ),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
-  List<Widget> _perk(IconData icon, String text) => [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Row(
-            children: [
-              Icon(icon, size: 18, color: Obsidian.green),
-              const SizedBox(width: 12),
-              Expanded(child: Text(text, style: Obsidian.body(size: 14))),
-            ],
-          ),
+  String _tierName(Account a) => switch (a.tier) {
+        'admin' => 'Owner',
+        'pro' => a.entitled ? 'Subscribed' : 'Subscription lapsed',
+        _ => 'Free',
+      };
+
+  String _tierDetail(Account a) {
+    if (a.tier == 'admin') {
+      return 'Full access, no billing, never expires';
+    }
+    final ends = a.subscriptionEnds;
+    if (a.tier == 'pro' && ends != null) {
+      final d = ends.toLocal();
+      final when = '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+          '${d.day.toString().padLeft(2, '0')}';
+      return a.entitled ? 'Active until $when' : 'Ended $when';
+    }
+    if (a.entitled) return 'Active';
+    return 'Chart only — the analysis needs a subscription';
+  }
+
+  Widget _identityCard(Account a) => GlassPanel(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            Container(
+              width: 58,
+              height: 58,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Obsidian.surfaceLowest,
+                border:
+                    Border.all(color: Colors.white.withValues(alpha: 0.10)),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                  a.operator
+                      ? '★'
+                      : (a.identifier.isEmpty
+                          ? '?'
+                          : a.identifier.characters.first.toUpperCase()),
+                  style: Obsidian.headlineMd()),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(a.operator ? 'Operator' : a.identifier,
+                      style: Obsidian.headlineMd()),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: (a.entitled ? Obsidian.greenDim : Obsidian.outline)
+                          .withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(_tierName(a).toUpperCase(),
+                        style: Obsidian.labelSm(
+                            size: 9.5,
+                            color: a.entitled
+                                ? Obsidian.greenDim
+                                : Obsidian.outline)),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-      ];
+      );
+
+  Widget _section(String label, List<Widget> rows) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 10),
+            child: Text(label, style: Obsidian.labelSm(size: 10.5)),
+          ),
+          GlassPanel(
+            padding: EdgeInsets.zero,
+            child: Column(children: rows),
+          ),
+        ],
+      );
+
+  Widget _divider() => Divider(
+      height: 1, thickness: 1, color: Colors.white.withValues(alpha: 0.05));
 
   Widget _tile({
     required IconData icon,
@@ -277,24 +384,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
       InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, size: 20, color: Obsidian.onSurfaceVariant),
+              Icon(icon, size: 19, color: Obsidian.outline),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title, style: Obsidian.bodyLg()),
-                    const SizedBox(height: 3),
+                    Text(title,
+                        style: Obsidian.bodyLg()
+                            .copyWith(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
                     Text(subtitle,
-                        style: Obsidian.body(size: 12),
-                        overflow: TextOverflow.ellipsis),
+                        style: Obsidian.body(
+                            color: Obsidian.outline, size: 12)),
                   ],
                 ),
               ),
-              ?trailing,
+              if (trailing != null) ...[
+                const SizedBox(width: 12),
+                trailing,
+              ] else if (onTap != null) ...[
+                const SizedBox(width: 12),
+                const Icon(Icons.chevron_right_rounded,
+                    size: 18, color: Obsidian.outline),
+              ],
             ],
           ),
         ),
