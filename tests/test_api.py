@@ -320,3 +320,102 @@ def test_coins_honours_the_list_it_is_given():
     got = [c["symbol"] for c in svc.coins(picked)]
     assert got == picked, got                     # order preserved too
     return True
+
+
+def test_a_slow_build_of_one_timeframe_does_not_block_another():
+    """The bug that broke the phone: one 1m build stalling every other screen.
+
+    `dashboard()` used to call `_build_dashboard()` while holding the single
+    global lock. On a laptop the builds are ~3s and nobody notices; on the
+    one-core droplet a 1m build is 46s, so switching to 1m made the 4h screen
+    time out too, and the 5s TTL meant it rebuilt forever and never recovered.
+
+    Two pairs, one of them deliberately slow. The fast one must return while
+    the slow one is still building.
+    """
+    import threading
+    import time
+
+    from api.service import TradingService
+
+    svc = TradingService()
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_build(symbol, interval):
+        if interval == "1m":
+            started.set()
+            release.wait(10)                      # hold it open
+        return {"symbol": symbol, "interval": interval}
+
+    svc._build_dashboard = fake_build
+
+    slow = threading.Thread(target=svc.dashboard, args=("BTCUSDT", "1m"))
+    slow.start()
+    assert started.wait(5), "slow build never started"
+
+    t0 = time.time()
+    got = svc.dashboard("BTCUSDT", "4h")          # must NOT queue behind 1m
+    elapsed = time.time() - t0
+
+    release.set()
+    slow.join(10)
+
+    assert got["interval"] == "4h", got
+    assert elapsed < 2.0, f"4h waited {elapsed:.1f}s on the 1m build"
+    return True
+
+
+def test_an_expired_dashboard_is_served_immediately_not_rebuilt_inline():
+    """Stale-while-revalidate: expiry must never make a phone wait.
+
+    A cached payload past its TTL is returned as-is and refreshed behind the
+    request. Only a pair that has never been built is allowed to block.
+    """
+    import threading
+    import time
+
+    from api.service import TradingService, _Cached
+
+    svc = TradingService()
+    calls = []
+    gate = threading.Event()
+
+    def fake_build(symbol, interval):
+        calls.append(interval)
+        gate.wait(10)                             # any inline call would hang
+        return {"symbol": symbol, "interval": interval, "fresh": True}
+
+    svc._build_dashboard = fake_build
+    key = ("BTCUSDT", "1m")
+    svc._dash[key] = _Cached(time.time() - 10_000, {"stale": True})
+
+    t0 = time.time()
+    got = svc.dashboard("BTCUSDT", "1m")
+    elapsed = time.time() - t0
+    gate.set()
+
+    assert got == {"stale": True}, got            # the old copy, right away
+    assert elapsed < 1.0, f"took {elapsed:.1f}s to serve a cached payload"
+    return True
+
+
+def test_the_dashboard_ttl_tracks_the_bar_period():
+    """A 1h payload rebuilt every 5s is pure waste; it changes once an hour.
+
+    The old fixed 5s TTL against a 10-46s build meant the cache was expired
+    every time it was read.
+    """
+    from api.service import TradingService
+
+    svc = TradingService()
+    t = lambda iv: svc._dash_ttl(("BTCUSDT", iv))
+    assert t("1m") < t("15m") < t("1h")
+    assert t("1m") >= 30.0                        # never hammer a slow box
+    assert t("1d") <= 900.0                       # never serve a stale day
+
+    # and it backs off from what the build ACTUALLY costs. 27s is the measured
+    # 1m build on the one-core droplet; a 30s TTL there means never stopping.
+    svc._build_cost[("BTCUSDT", "1m")] = 27.0
+    assert t("1m") >= 108.0, t("1m")
+    return True

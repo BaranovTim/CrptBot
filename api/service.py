@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
 import time
 import urllib.error
@@ -38,7 +39,8 @@ import numpy as np
 import pandas as pd
 
 import config as project_config
-from core import TIMEFRAMES, htf_for, is_trained, model_paths, utc_now
+from core import (TIMEFRAMES, htf_for, interval_seconds, is_trained,
+                  model_paths, utc_now)
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +84,12 @@ class TradingService:
         # a separately fitted model
         self.symbol, self.interval, self.asset = symbol, interval, asset
         self._lock = threading.Lock()
+        # one lock per pair, so a slow build blocks only its own timeframe
+        self._locks: Dict[Tuple[str, str], threading.Lock] = {}
+        self._building: set = set()
+        self._build_cost: Dict[Tuple[str, str], float] = {}
+        self._refresh_q: "queue.Queue" = queue.Queue()
+        self._worker: Optional[threading.Thread] = None
         self._monitors: Dict[Tuple[str, str], Any] = {}
         self._tickers: Dict[str, _Cached] = {}
         self._dash: Dict[Tuple[str, str], _Cached] = {}
@@ -331,24 +339,124 @@ class TradingService:
         return out
 
     # -------------------------------------------------------- dashboard
+    def _dash_ttl(self, key: Tuple[str, str]) -> float:
+        """How long a built dashboard is served before a refresh is kicked off.
+
+        A quarter of the bar period -- the expensive part only changes when a
+        bar closes, and the phone gets its tick-by-tick price from the Binance
+        websocket, not from here.
+
+        But ALSO at least four times what the last build actually cost. On a
+        laptop a 1m build is ~3s and this is irrelevant. On the one-core
+        droplet it is 27s, against a 30s bar-derived TTL -- which would leave
+        the box rebuilding 1m continuously and starving every other timeframe.
+        Measuring instead of assuming means the same code adapts to whatever
+        hardware it lands on rather than needing a config knob per host.
+        """
+        floor = interval_seconds(key[1]) / 4.0
+        cost = self._build_cost.get(key, 0.0)
+        return min(max(floor, cost * 4.0, 30.0), 900.0)
+
+    def _key_lock(self, key: Tuple[str, str]) -> threading.Lock:
+        """One lock per (symbol, interval), so a slow 1m build cannot block 4h."""
+        with self._lock:
+            lk = self._locks.get(key)
+            if lk is None:
+                lk = self._locks[key] = threading.Lock()
+            return lk
+
+    def _build_and_store(self, key: Tuple[str, str]) -> Dict[str, Any]:
+        with self._key_lock(key):
+            # somebody may have finished building while we queued on the lock
+            with self._lock:
+                hit = self._dash.get(key)
+            if hit and time.time() - hit.at < 1.0:
+                return hit.value
+            t0 = time.time()
+            v = self._build_dashboard(*key)
+            cost = time.time() - t0
+            with self._lock:
+                self._dash[key] = _Cached(time.time(), v)
+                self._build_cost[key] = cost
+            return v
+
+    def _refresh_soon(self, key: Tuple[str, str]) -> None:
+        """Queue `key` for rebuild off the request path. Caller holds _lock.
+
+        Queued, not spawned. Six timeframes refreshing concurrently on a
+        single core makes all six slower than doing them one after another,
+        and briefly doubles resident memory. One worker drains this serially.
+        """
+        if key in self._building:
+            return
+        self._building.add(key)
+        self._refresh_q.put(key)
+        if self._worker is None or not self._worker.is_alive():
+            self._worker = threading.Thread(target=self._refresh_loop,
+                                            daemon=True, name="refresh")
+            self._worker.start()
+
+    def _refresh_loop(self) -> None:
+        while True:
+            try:
+                key = self._refresh_q.get(timeout=300)
+            except queue.Empty:
+                return                      # idle: let the thread go
+            try:
+                self._build_and_store(key)
+            except Exception as e:          # a failed refresh must never take
+                log.warning("refresh %s %s: %s", key[0], key[1], e)
+            finally:                        # down the copy already being served
+                with self._lock:
+                    self._building.discard(key)
+
     def dashboard(self, symbol: Optional[str] = None,
                   interval: Optional[str] = None,
-                  ttl: float = 5.0) -> Dict[str, Any]:
+                  ttl: Optional[float] = None) -> Dict[str, Any]:
         """Everything the dashboard screen renders, in one payload.
 
-        Cached briefly: the heavy part is the feature frame, which `Monitor`
-        already caches per closing bar, but the barrier arithmetic and the
-        forming-bar fetch are re-done and a phone polling every second should
-        not drive one REST call per poll.
+        Stale-while-revalidate, and NOT under the global lock. Both matter on
+        a one-core box, where building this costs 10-46s per timeframe:
+
+          - building inside `self._lock` meant one slow 1m build stalled every
+            other request in the app, so switching to 1m made 4h time out too.
+          - a 5s TTL against a 46s build meant the cache was always expired,
+            so it rebuilt forever and never recovered.
+
+        Now an expired entry is still returned immediately and refreshed
+        behind the request. Only a pair that has never been built blocks, and
+        `warm()` exists so that normally happens at boot rather than under a
+        phone waiting on it.
         """
         key = self._pair(symbol, interval)
+        ttl = self._dash_ttl(key) if ttl is None else ttl
         with self._lock:
             hit = self._dash.get(key)
-            if hit and time.time() - hit.at < ttl:
+            if hit:
+                if time.time() - hit.at >= ttl:
+                    self._refresh_soon(key)
                 return hit.value
-            v = self._build_dashboard(*key)
-            self._dash[key] = _Cached(time.time(), v)
-            return v
+        return self._build_and_store(key)
+
+    def warm(self, symbol: Optional[str] = None) -> None:
+        """Build every trained timeframe once, in the background, at startup.
+
+        Without this the first phone request after a restart pays the full
+        cold build - 120s for 1h on the droplet - which no client timeout
+        will sit through.
+        """
+        sym = (symbol or self.symbol).upper()
+
+        def run() -> None:
+            for tf in self.trained_intervals(sym):
+                try:
+                    t0 = time.time()
+                    self._build_and_store((sym, tf))
+                    log.info("warmed %s %s in %.1fs", sym, tf, time.time() - t0)
+                except Exception as e:
+                    log.warning("warm %s %s: %s", sym, tf, e)
+
+        threading.Thread(target=run, daemon=True, name="warm").start()
 
     def _build_dashboard(self, symbol: str, interval: str) -> Dict[str, Any]:
         from monitor import (atr_price_estimate, evaluate, indicator_snapshot)

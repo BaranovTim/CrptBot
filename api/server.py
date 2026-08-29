@@ -236,6 +236,15 @@ def serve(host: str = "0.0.0.0", port: int = 8787,
     print(f"    physical phone    http://{ip}:{port}   (same wifi)")
     print(f"\n  auth: {'Bearer token REQUIRED' if TOKEN else 'none (loopback only)'}")
     print(f"  read-only. it does not trade. Ctrl-C to stop\n")
+
+    # Build every trained timeframe before a phone asks for one. A cold build
+    # is 10-46s on a single core, and the first request after a restart would
+    # otherwise pay all of it while the app sits on a timeout.
+    try:
+        get_service().warm()
+    except Exception as e:                  # a warm failure is not fatal - the
+        log.warning("warm-up skipped: %s", e)   # request path still builds
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
