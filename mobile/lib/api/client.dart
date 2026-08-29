@@ -17,6 +17,9 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 
 const _envBase = String.fromEnvironment('API_BASE');
+const _envToken = String.fromEnvironment('API_TOKEN');
+
+String defaultApiToken() => _envToken;
 
 String defaultApiBase() {
   if (_envBase.isNotEmpty) return _envBase;
@@ -43,22 +46,40 @@ class UntrainedException implements Exception {
 }
 
 class ApiClient {
-  ApiClient({String? base}) : base = base ?? defaultApiBase();
+  ApiClient({String? base, String? token})
+      : base = base ?? defaultApiBase(),
+        token = token ?? defaultApiToken();
 
   String base;
+
+  /// Bearer credential for a deployed server.
+  ///
+  /// Empty when the backend runs on your own machine bound to loopback —
+  /// `serve.py` only demands one when it binds somewhere reachable, and it
+  /// refuses to start without one in that case rather than quietly serving
+  /// the internet.
+  String token;
+
+  Map<String, String> get _headers =>
+      token.isEmpty ? const {} : {'Authorization': 'Bearer $token'};
 
   Future<Map<String, dynamic>> _get(String path,
       {Duration timeout = const Duration(seconds: 20)}) async {
     final uri = Uri.parse('$base$path');
     late http.Response r;
     try {
-      r = await http.get(uri).timeout(timeout);
+      r = await http.get(uri, headers: _headers).timeout(timeout);
     } catch (e) {
       // the overwhelmingly likely cause is the server not running or the
       // phone being on a different network, so say that rather than
       // surfacing a SocketException the user has to decode
       throw ApiException(
           'Cannot reach $base\n\nStart it on your Mac:\n  python3 serve.py\n\n($e)');
+    }
+    if (r.statusCode == 401) {
+      throw ApiException(
+          'The server rejected the token.\n\nProfile → Bearer token, and '
+          'paste the value from the server\'s .env file.');
     }
     if (r.statusCode == 409) {
       throw UntrainedException(

@@ -14,16 +14,32 @@ No writes, no orders, no keys, no auth. Every endpoint is a GET that reads
 what `monitor.py` reads. If this process is compromised the worst outcome is
 that someone learns what your terminal already prints.
 
-BINDING
--------
-Defaults to 0.0.0.0 so a phone on the same wifi can reach it, and prints the
-LAN address to point the app at. That is also why it must never grow a write
-endpoint without authentication in front of it.
+BINDING, AND WHY A TOKEN IS NOT OPTIONAL OFF-LAN
+------------------------------------------------
+On a home network, 0.0.0.0 with no auth is defensible: the worst a reachable
+attacker learns is what your own terminal prints, and a router stands between
+it and the internet.
+
+On a rented server that reasoning collapses. There is no router, the port is
+world-reachable, and an open endpoint that proxies Binance calls is a way to
+burn someone else's rate limit and bandwidth for free.
+
+So `serve()` REFUSES to bind to anything but loopback without a token. Failing
+to start is the correct behaviour: the alternative is a process that looks
+healthy while serving the whole internet, and nobody discovers that by
+looking at it.
+
+    TRADINGBOT_TOKEN=$(openssl rand -hex 32) python3 serve.py
+
+`/api/health` stays open so a container healthcheck or load balancer can probe
+it without holding the secret. It returns no market data.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import os
 import socket
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +55,10 @@ log = logging.getLogger(__name__)
 # filings already alerted on, which is what makes an alert a transition rather
 # than a repeated state.
 _ENGINE = None
+
+# Shared secret. Empty means loopback-only operation; `serve()` refuses any
+# other binding without one.
+TOKEN = ""
 
 
 def _now_iso() -> str:
@@ -75,13 +95,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, *")
         self.end_headers()
+
+    # -- auth ----------------------------------------------------------
+    def _authorised(self, route: str) -> bool:
+        token = TOKEN
+        if not token:
+            return True                     # loopback-only mode; see serve()
+        if route in ("/", "/api", "/api/health"):
+            return True                     # probes must not hold the secret
+        header = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+        if not header.startswith(prefix):
+            return False
+        # constant time: a plain == leaks the shared secret one byte at a
+        # time to anyone willing to measure
+        return hmac.compare_digest(header[len(prefix):].strip(), token)
 
     def do_GET(self) -> None:                           # noqa: N802
         parsed = urlparse(self.path)
         route = parsed.path.rstrip("/") or "/"
         q = parse_qs(parsed.query)
+
+        if not self._authorised(route):
+            self._send({"error": "unauthorised",
+                        "hint": "send Authorization: Bearer <token>"},
+                       status=401)
+            return
 
         def arg(name: str, default: int) -> int:
             try:
@@ -165,7 +206,26 @@ class Handler(BaseHTTPRequestHandler):
         log.info("%s - %s", self.address_string(), fmt % args)
 
 
-def serve(host: str = "0.0.0.0", port: int = 8787) -> None:
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def serve(host: str = "0.0.0.0", port: int = 8787,
+          token: Optional[str] = None) -> None:
+    global TOKEN
+    TOKEN = token or os.environ.get("TRADINGBOT_TOKEN") or ""
+
+    if host not in LOOPBACK and not TOKEN:
+        raise SystemExit(
+            "\n  REFUSING TO START.\n\n"
+            f"  Binding to {host} exposes this API beyond the machine it runs\n"
+            "  on, and it has no authentication. On a home network that is\n"
+            "  defensible; on a rented server it is an open endpoint that\n"
+            "  proxies Binance calls with your rate limit.\n\n"
+            "  Either set a token:\n"
+            "    TRADINGBOT_TOKEN=$(openssl rand -hex 32) python3 serve.py\n\n"
+            "  or keep it on this machine only:\n"
+            "    python3 serve.py --host 127.0.0.1\n")
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
                         datefmt="%H:%M:%S")
     httpd = ThreadingHTTPServer((host, port), Handler)
@@ -174,7 +234,8 @@ def serve(host: str = "0.0.0.0", port: int = 8787) -> None:
     print(f"    iOS simulator     http://localhost:{port}")
     print(f"    Android emulator  http://10.0.2.2:{port}")
     print(f"    physical phone    http://{ip}:{port}   (same wifi)")
-    print(f"\n  read-only. it does not trade. Ctrl-C to stop\n")
+    print(f"\n  auth: {'Bearer token REQUIRED' if TOKEN else 'none (loopback only)'}")
+    print(f"  read-only. it does not trade. Ctrl-C to stop\n")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

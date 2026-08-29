@@ -15,6 +15,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/status_dot.dart';
@@ -79,6 +80,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
     if (saved != null && saved.isNotEmpty) {
       widget.client.base = saved;
+      await Settings.instance.saveBase(saved);
+      await _probe();
+    }
+  }
+
+  Future<void> _editToken() async {
+    final ctrl = TextEditingController(text: widget.client.token);
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Obsidian.rLg)),
+        title: Text('Bearer token', style: Obsidian.headlineMd()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Only needed when the backend runs on a server. It is the '
+              'TRADINGBOT_TOKEN from that machine\'s .env file — leave it '
+              'empty when the backend is on your own computer.',
+              style: Obsidian.body(size: 12.5),
+            ),
+            const SizedBox(height: 16),
+            GlassField(controller: ctrl, hint: 'paste the token'),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel', style: Obsidian.body())),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child:
+                  Text('Save', style: Obsidian.body(color: Obsidian.primary))),
+        ],
+      ),
+    );
+    if (saved != null) {
+      widget.client.token = saved;
+      await Settings.instance.saveToken(saved);
       await _probe();
     }
   }
@@ -182,6 +225,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             strokeWidth: 2, color: Obsidian.primary))
                     : StatusDot(live: _linked),
                 onTap: _editHost,
+              ),
+              Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: Colors.white.withValues(alpha: 0.05)),
+              _tile(
+                icon: Icons.key_rounded,
+                title: 'Bearer token',
+                subtitle: widget.client.token.isEmpty
+                    ? 'none — backend is on this network'
+                    : '•' * 12,
+                onTap: _editToken,
               ),
               Divider(
                   height: 1,

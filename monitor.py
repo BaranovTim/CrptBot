@@ -476,12 +476,56 @@ class Monitor:
         self._features_cache: Optional[Tuple[pd.Timestamp, pd.DataFrame]] = None
 
     # -- features ------------------------------------------------------
+    def live_window(self, bars: pd.DataFrame) -> pd.DataFrame:
+        """The tail of `bars` that a LIVE read actually needs.
+
+        Prediction uses exactly one row — the newest. Computing 172,000 rows
+        of history to use the last of them is pure waste, and it is waste that
+        repeats: the feature cache is keyed on the newest bar, so a 1m
+        collector invalidates it every sixty seconds. Measured before this
+        existed, the server burned 75% of a core doing nothing else.
+
+        The detectors are causal, so a long enough tail reproduces the newest
+        row exactly. "Long enough" was measured rather than guessed — on
+        172,767 one-minute bars, against the full-history computation:
+
+            tail     time    worst feature drift   p_up
+            16,000   1.8s    9.3e-03               identical to 6 dp
+            24,000   1.8s    7.9e-04               identical to 6 dp
+            40,000   2.9s    5.6e-06               identical to 6 dp
+            172,767  31.5s   -                     -
+
+        The only columns that drift at all are the HTF EMA pair (`rsi_14_4h`,
+        `macd_hist_atr_4h`), and they never converge exactly by construction —
+        an EMA has infinite impulse response, so it approaches the
+        full-history value exponentially instead of reaching it. Four times
+        the warmup keeps that below 1e-5, far under anything the model
+        resolves.
+
+        TRAINING STILL USES EVERYTHING. This is the live read only; `train.py`
+        calls the agents directly on the full history.
+        """
+        need = self.required_bars(bars)
+        want = max(need * 4, 20_000)
+        return bars if len(bars) <= want else bars.tail(want)
+
+    def required_bars(self, bars: pd.DataFrame) -> int:
+        """How many bars the slowest detector needs before it emits anything."""
+        from agent1 import PatternAgent
+        from agent2 import IndicatorAgent
+        from agent4 import FlowAgent
+
+        return max(
+            (getattr(a, "required_bars", lambda _b: a.warmup_bars)(bars)
+             for a in (PatternAgent(), IndicatorAgent(), FlowAgent())),
+            default=1000)
+
     def features(self, bars: pd.DataFrame) -> pd.DataFrame:
         """Detector features for these CLOSED bars, cached per closing bar."""
         stamp = bars.index[-1]
         if self._features_cache and self._features_cache[0] == stamp:
             return self._features_cache[1]
-        X = self._compute_features(bars)
+        X = self._compute_features(self.live_window(bars))
         self._features_cache = (stamp, X)
         return X
 
@@ -507,7 +551,8 @@ class Monitor:
         nearly the closed bar - which is why every caller prints the elapsed
         fraction next to the number.
         """
-        return self._compute_features(self._merge_forming(bars, forming))
+        return self._compute_features(
+            self.live_window(self._merge_forming(bars, forming)))
 
     def _merge_forming(self, bars: pd.DataFrame, forming) -> pd.DataFrame:
         """Closed bars plus the forming one, as a single frame."""

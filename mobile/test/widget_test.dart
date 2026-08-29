@@ -6,14 +6,23 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
 import 'package:tradingbot_app/main.dart';
 
 void main() {
   testWidgets('boots to the secure link screen, not straight to a dashboard',
       (tester) async {
+    // The app restores a saved API host and token before painting anything,
+    // because probing the connection against the compile-time default first
+    // would report "no link" for a server that is perfectly reachable.
+    // Without a mock store that read throws on the test binding.
+    SharedPreferences.setMockInitialValues({});
+
     await tester.pumpWidget(const TradingBotApp());
-    await tester.pump();
+    await tester.pump();                                  // kick off restore
+    await tester.pump(const Duration(milliseconds: 50));   // let it land
+
     expect(find.text('SECURE NEURAL TRADING LINK'), findsOneWidget);
     expect(find.text('INITIALIZE CONNECTION'), findsOneWidget);
   });

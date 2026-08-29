@@ -1,0 +1,11 @@
+.git
+.gitignore
+mobile/
+app_idea/
+tests/
+**/__pycache__/
+*.pyc
+.DS_Store
+# bars and models are bind-mounted, not baked in: an image carrying 111MB of
+# candles would be rebuilt for every price update
+data_cache/

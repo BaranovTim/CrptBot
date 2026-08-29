@@ -384,3 +384,56 @@ def test_spike_threshold_sits_below_the_barrier():
         f"default spike_atr {cfg.spike_atr} is not below the trained barrier "
         f"distance of 1.0 ATR - alerts would only arrive after the fact")
     return True
+
+
+def test_the_live_window_reproduces_the_full_history_prediction():
+    """Trimming history for a live read must not change the answer.
+
+    The live path computes features on a tail rather than on all 172,000
+    stored bars, because the cache is keyed on the newest bar and a 1m
+    collector invalidates it every sixty seconds — recomputing everything
+    each time burned 75% of a core. The trim is only safe because the
+    detectors are causal, and that is exactly what this asserts: same newest
+    row, same probability.
+
+    If a non-causal feature is ever added, this fails and `live_window` has
+    to grow (or the feature has to go).
+    """
+    from livefeed import BarStore
+
+    if not all(p.exists() for p in MODELS):
+        return True
+    bars = BarStore("BTCUSDT", "1h").load()
+    if len(bars) < 5000:
+        return True
+
+    mon = Monitor("BTCUSDT", "1h", MODELS[0], MODELS[1])
+    window = mon.live_window(bars)
+    assert len(window) >= mon.required_bars(bars), "the window is too short"
+
+    full = mon._compute_features(bars)
+    trimmed = mon._compute_features(window)
+    p_full = float(mon.h2.predict_proba(full.iloc[[-1]])[0])
+    p_trim = float(mon.h2.predict_proba(trimmed.iloc[[-1]])[0])
+    assert abs(p_full - p_trim) < 1e-6, (
+        f"trimming history moved the prediction {p_full:.6f} -> {p_trim:.6f}")
+    return True
+
+
+def test_the_live_window_never_trims_below_what_detectors_need():
+    """A window shorter than warmup produces NaN columns and the frozen
+    model refuses the frame - loudly, but only at request time."""
+    from livefeed import BarStore
+
+    if not all(p.exists() for p in MODELS):
+        return True
+    for interval in ("1h", "1m"):
+        bars = BarStore("BTCUSDT", interval).load()
+        if bars.empty:
+            continue
+        h1, h2 = __import__("core").model_paths("BTCUSDT", interval)
+        if not (h1.exists() and h2.exists()):
+            continue
+        mon = Monitor("BTCUSDT", interval, h1, h2)
+        assert len(mon.live_window(bars)) >= mon.required_bars(bars), interval
+    return True

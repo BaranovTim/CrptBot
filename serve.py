@@ -18,8 +18,12 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Read-only TradingBot JSON API.")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8787)
+    p.add_argument("--token", default=None,
+                   help="shared secret clients must send as "
+                        "'Authorization: Bearer <token>'. Also read from "
+                        "TRADINGBOT_TOKEN. Required unless --host is loopback.")
     a = p.parse_args(argv)
-    serve(a.host, a.port)
+    serve(a.host, a.port, token=a.token)
     return 0
 
 

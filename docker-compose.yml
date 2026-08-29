@@ -1,0 +1,66 @@
+# TradingBot on a server.
+#
+# Two containers, one image. The collector records bars forever; the API reads
+# them. They share the bar store and the frozen models through bind mounts, so
+# `docker compose pull && up -d` never loses history.
+#
+#   cp .env.example .env && edit it        <- put a real token in
+#   docker compose up -d
+#   docker compose logs -f api
+#
+# See DEPLOY.md before exposing this to the internet.
+
+services:
+  api:
+    build: .
+    image: tradingbot:latest
+    restart: unless-stopped
+    environment:
+      # Required. The API refuses to bind to anything but loopback without it.
+      TRADINGBOT_TOKEN: ${TRADINGBOT_TOKEN:?set TRADINGBOT_TOKEN in .env}
+    volumes:
+      - ./data_cache:/app/data_cache
+      - ./output:/app/output
+    ports:
+      # Loopback by default. Reaching it from outside is the reverse proxy's or
+      # the VPN's job. Never set BIND_ADDR to 0.0.0.0 — Docker writes its own
+      # iptables rules, so that publishes the port straight past `ufw` and onto
+      # the public internet. For Tailscale, set it to the tailnet IP
+      # (100.x.y.z), which is an interface no stranger can route to.
+      - "${BIND_ADDR:-127.0.0.1}:8787:8787"
+    deploy:
+      resources:
+        limits:
+          # measured: ~300MB with all six timeframes cached. The limit is a
+          # backstop against a leak, not a target
+          memory: 1g
+
+  collector:
+    build: .
+    image: tradingbot:latest
+    restart: unless-stopped
+    command: >
+      python3 collect.py
+      --interval 1m --interval 5m --interval 15m
+      --interval 1h --interval 4h --interval 1d
+    healthcheck:
+      # NOT the image's default check — that one curls the API port, which
+      # nothing serves in this container, so the collector would sit at
+      # "unhealthy" forever while working perfectly.
+      #
+      # What actually matters is whether bars are still arriving. The current
+      # month's 1m CSV is rewritten on every close, so a file untouched for
+      # five minutes means the collector has gone quiet — which is the failure
+      # that would otherwise be invisible until the app said STALE.
+      test: ["CMD-SHELL", "find /app/data_cache/live -path '*/1m/*.csv' -newermt '-5 minutes' | grep -q ."]
+      interval: 60s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+    volumes:
+      - ./data_cache:/app/data_cache
+      - ./output:/app/output
+    deploy:
+      resources:
+        limits:
+          memory: 256m
