@@ -30,6 +30,7 @@ import '../api/live_price.dart';
 import '../api/models.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
+import '../widgets/indicator_sheet.dart';
 import '../widgets/sparkline.dart';
 import '../widgets/timeframe_bar.dart';
 import '../widgets/status_dot.dart';
@@ -98,6 +99,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Dashboard? _data;
   List<double> _series = const [];
   List<WhaleEvent> _whales = const [];
+  List<NewsItem> _news = const [];
   Consensus? _consensus;
   String? _error;
   String? _untrained;
@@ -315,10 +317,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // catching six 402s would work and would also make every screen refresh
     // hammer the server with calls whose answer is known in advance.
     if (!widget.entitled) {
+      final freeSym = widget.symbol;
+      final freeKey = '$freeSym:$iv';
       try {
         final series =
-            await widget.client.chart(symbol: widget.symbol, interval: iv, n: 96);
+            await widget.client.chart(symbol: freeSym, interval: iv, n: 96);
         if (!mounted) return;
+        _seriesCache[freeKey] = series;
+        if (freeKey != _key) return;       // swiped away; do not paint it
         setState(() {
           _series = series;
           _error = null;
@@ -332,22 +338,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
+    // The pair this request is FOR, captured now.
+    //
+    // THE BUG THIS FIXES, which was seen on a phone: the header said BTC
+    // while the graph was ETH. `_key` is derived from `widget.symbol`, so a
+    // response that arrived after a swipe was written into the NEW pair's
+    // cache slot — poisoning ETH's entry with BTC's dashboard. Landing on
+    // ETH later then showed BTC's header beside ETH's freshly fetched chart.
+    //
+    // Everything below is keyed and guarded on what was asked for, never on
+    // what happens to be on screen when the answer comes back.
+    final sym = widget.symbol;
+    final forKey = '$sym:$iv';
+
     try {
       final results = await Future.wait([
-        widget.client.dashboard(symbol: widget.symbol, interval: iv),
-        widget.client.chart(symbol: widget.symbol, interval: iv, n: 96),
+        widget.client.dashboard(symbol: sym, interval: iv),
+        widget.client.chart(symbol: sym, interval: iv, n: 96),
         widget.client.whales(limit: 6),
+        widget.client.news(limit: 8),
       ]);
       if (!mounted) return;
+
+      final data = results[0] as Dashboard;
+      final series = results[1] as List<double>;
+      _cache[forKey] = data;               // always the pair it was asked for
+      _seriesCache[forKey] = series;
+
+      // stale answer for a pair we have since swiped away from: cached above
+      // so it is not wasted, but it must not touch the screen
+      if (forKey != _key) return;
+
       setState(() {
-        _data = results[0] as Dashboard;
-        _series = results[1] as List<double>;
+        _data = data;
+        _series = series;
         _whales = results[2] as List<WhaleEvent>;
+        _news = results[3] as List<NewsItem>;
         _error = null;
         _untrained = null;
       });
-      _cache[_key] = _data!;
-      _seriesCache[_key] = _series;
       unawaited(_prefetchNeighbours());
       // Deliberately NOT awaited with the rest.
       //
@@ -359,13 +388,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       unawaited(_loadMajor());
     } on UntrainedException catch (e) {
       // a normal state, not a fault: this timeframe simply has no model yet
-      if (!mounted) return;
+      if (!mounted || forKey != _key) return;
       setState(() {
         _untrained = e.message;
         _error = null;
       });
     } catch (e) {
-      if (!mounted || quiet) return;
+      // an error belonging to a pair no longer on screen is not this pair's
+      // error, and showing it would blame the wrong coin
+      if (!mounted || quiet || forKey != _key) return;
       setState(() => _error = e.toString());
     }
   }
@@ -425,7 +456,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: Obsidian.gutter),
           ..._costWarning(d),
-          ..._whaleAlerts(),
+          ..._recentActivity(),
           _chartCard(d),
           const SizedBox(height: Obsidian.panelGap),
           _indicatorGrid(d),
@@ -632,15 +663,106 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------------------------------------- whale alert
-  List<Widget> _whaleAlerts() {
+  /// Recent market activity — a filing or a headline — or nothing at all.
+  ///
+  /// WHY THIS CAN NOW BE ABSENT
+  ///     It used to pin the newest non-mechanical filing to the top of the
+  ///     dashboard permanently, so the screen opened with a two-day-old
+  ///     insider sale above the price every single time. A panel that is
+  ///     always there stops being read.
+  ///
+  ///     Now it appears only while the item is still recent, and how recent
+  ///     depends on the item: a high-conviction filing stays up for three
+  ///     days, a small routine one for twelve hours, a news headline for
+  ///     eight. Nothing recent means no panel and the chart moves up.
+  List<Widget> _recentActivity() {
     // mechanical transactions are filtered out by the same rule the terminal
     // uses: code F is tax withholding on vesting, nobody decided anything
-    final real = _whales.where((w) => !w.mechanical).take(1).toList();
-    if (real.isEmpty) return const [];
-    final w = real.first;
+    final whale = _whales
+        .where((w) => !w.mechanical && w.isRecent)
+        .cast<WhaleEvent?>()
+        .firstWhere((_) => true, orElse: () => null);
+    final news = _news
+        .where((n) => n.isRecent)
+        .cast<NewsItem?>()
+        .firstWhere((_) => true, orElse: () => null);
+
+    // whichever actually happened most recently leads
+    final whaleAt = whale?.publishedAt;
+    final newsAt = news?.publishedAt;
+    final showNews = news != null &&
+        (whale == null || (newsAt != null && whaleAt != null &&
+            newsAt.isAfter(whaleAt)));
+
+    if (showNews) return _newsCard(news);
+    if (whale == null) return const [];
+    return _whaleCard(whale);
+  }
+
+  List<Widget> _newsCard(NewsItem n) {
     return [
       GlassPanel(
         padding: const EdgeInsets.all(18),
+        // straight to the article: the app has no more to say about a
+        // headline than the publisher does
+        onTap: n.url.isEmpty ? null : () => _openUrl(n.url),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: Obsidian.primary.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: Obsidian.primary.withValues(alpha: 0.40)),
+              ),
+              child: const Icon(Icons.article_outlined,
+                  color: Obsidian.primary, size: 21),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text('News',
+                            style: Obsidian.bodyLg()
+                                .copyWith(fontWeight: FontWeight.w600)),
+                      ),
+                      Text(_ago(n.publishedAt),
+                          style: Obsidian.labelSm(size: 10)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(n.headline, style: Obsidian.body(size: 14)),
+                  const SizedBox(height: 6),
+                  Text(
+                      n.url.isEmpty
+                          ? n.source
+                          : '${n.source} · tap to read',
+                      style: Obsidian.labelSm(
+                          color: Obsidian.outline, size: 10.5)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: Obsidian.gutter),
+    ];
+  }
+
+  List<Widget> _whaleCard(WhaleEvent w) {
+    return [
+      GlassPanel(
+        padding: const EdgeInsets.all(18),
+        // a filing needs explaining, not just linking: what the code means,
+        // when it actually happened, and why it is not a trigger
+        onTap: () => _explainWhale(w),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -661,13 +783,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Whale Activity Detected',
-                      style: Obsidian.bodyLg().copyWith(
-                          fontWeight: FontWeight.w600)),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text('Whale Activity Detected',
+                            style: Obsidian.bodyLg().copyWith(
+                                fontWeight: FontWeight.w600)),
+                      ),
+                      Text(_ago(w.publishedAt),
+                          style: Obsidian.labelSm(size: 10)),
+                    ],
+                  ),
                   const SizedBox(height: 6),
                   Text(w.describe, style: Obsidian.body(size: 14)),
                   const SizedBox(height: 6),
-                  Text('${w.impact} · ${w.note}',
+                  Text('${w.impact} · ${w.note} · tap to explain',
                       style: Obsidian.labelSm(
                           color: Obsidian.outline, size: 10.5)),
                 ],
@@ -679,6 +809,110 @@ class _DashboardScreenState extends State<DashboardScreen> {
       const SizedBox(height: Obsidian.gutter),
     ];
   }
+
+  /// How long ago, said the way a person would.
+  static String _ago(DateTime? at) {
+    if (at == null) return '';
+    final d = DateTime.now().toUtc().difference(at.toUtc());
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 48) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  /// What a Form 4 actually says, in the app.
+  ///
+  /// The filing is disclosure of something that already happened, up to five
+  /// days earlier. Presenting it as an event that has just occurred is the
+  /// single easiest way to misread this data, so both times are shown and
+  /// the lag is named.
+  void _explainWhale(WhaleEvent w) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(Obsidian.containerPadding),
+          child: GlassPanel(
+            active: true,
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('INSIDER FILING',
+                    style: Obsidian.labelSm(
+                        size: 11, color: Obsidian.redSoft)),
+                const SizedBox(height: 12),
+                Text(w.describe,
+                    style: Obsidian.bodyLg()
+                        .copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 16),
+                _explainRow('Reading', w.impact),
+                if (w.code.isNotEmpty)
+                  _explainRow('Transaction code', w.code),
+                if (w.conviction != null)
+                  _explainRow('Conviction',
+                      w.conviction!.toStringAsFixed(2)),
+                if (w.eventTime != null)
+                  _explainRow('Trade happened', _ago(w.eventTime)),
+                if (w.publishedAt != null)
+                  _explainRow('Disclosed', _ago(w.publishedAt)),
+                const SizedBox(height: 14),
+                Text(
+                    'A Form 4 discloses a trade that already happened — the '
+                    'law allows up to five days, so the market may have '
+                    'moved on it before you saw it. Treat it as lagging '
+                    'evidence about what insiders were doing, never as a '
+                    'trigger to act now.',
+                    style:
+                        Obsidian.body(color: Obsidian.outline, size: 12)),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    if (w.url.isNotEmpty)
+                      TextButton(
+                        onPressed: () => _openUrl(w.url),
+                        child: Text('Open the filing',
+                            style:
+                                Obsidian.body(color: Obsidian.primary)),
+                      )
+                    else
+                      const SizedBox.shrink(),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: Text('Close', style: Obsidian.body()),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _explainRow(String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          children: [
+            Expanded(
+                child: Text(label,
+                    style:
+                        Obsidian.body(color: Obsidian.outline, size: 12.5))),
+            Text(value, style: Obsidian.dataTable(size: 12.5)),
+          ],
+        ),
+      );
 
   // ------------------------------------------------------------ chart card
   double? get _livePrice => _live?.price;
@@ -798,10 +1032,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  /// Open one indicator's history.
+  ///
+  /// A SHEET, not an overlay on the price chart. Overlaying was the other
+  /// option and is the wrong one: RSI runs 0-100, volume is a ratio around
+  /// 1, structure is +1/-1, and price is 78,000. Sharing an axis would
+  /// either flatten the indicator to a flat line or need a second axis,
+  /// which is the classic way to make two unrelated series look correlated.
+  Future<void> _openIndicator(Indicator ind) async {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => IndicatorSheet(
+        client: widget.client,
+        indicator: ind,
+        symbol: widget.symbol,
+        interval: widget.interval,
+      ),
+    );
+  }
+
   Widget _statCard(Indicator ind) {
     final c = Obsidian.tone(ind.tone);
     return GlassPanel(
       padding: const EdgeInsets.all(16),
+      onTap: () => _openIndicator(ind),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -828,6 +1084,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Text(ind.value, style: Obsidian.displayLg().copyWith(fontSize: 30)),
           const SizedBox(height: 6),
           Text(ind.note, style: Obsidian.body(size: 12.5)),
+          const SizedBox(height: 8),
+          // a card that opens something has to say so, or nobody presses it —
+          // the same mistake swipe-to-delete made on the market screen
+          Row(
+            children: [
+              Text('History',
+                  style: Obsidian.labelSm(size: 9, color: Obsidian.outline)),
+              const SizedBox(width: 3),
+              const Icon(Icons.chevron_right_rounded,
+                  size: 13, color: Obsidian.outline),
+            ],
+          ),
         ],
       ),
     );
@@ -900,23 +1168,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (d.windowPUp != null) ...[
             _divider(),
             // the recommendation's own window, so the two never disagree
-            _row('Chance up (${d.windowBars ?? '?'} × ${d.interval})',
-                '${(d.windowPUp! * 100).toStringAsFixed(1)}%',
-                Obsidian.primary),
+            _row(
+              'Chance up (${d.windowBars ?? '?'} × ${d.interval})',
+              '${(d.windowPUp! * 100).toStringAsFixed(1)}%',
+              Obsidian.primary,
+              sub: 'The model\'s probability that price reaches Take Profit '
+                  'before Stop Loss within the next '
+                  '${d.windowBars ?? '?'} ${d.interval} bars. 50% is a coin '
+                  'flip; it is not a forecast of how far price moves.',
+            ),
           ],
         ],
       ),
     );
   }
 
-  Widget _row(String label, String value, Color c) => Padding(
+  Widget _row(String label, String value, Color c, {String? sub}) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: Text(label, style: Obsidian.bodyLg())),
-            Text(value,
-                style: Obsidian.dataTable(
-                    color: c, size: 15, w: FontWeight.w700)),
+            Row(
+              children: [
+                Expanded(child: Text(label, style: Obsidian.bodyLg())),
+                Text(value,
+                    style: Obsidian.dataTable(
+                        color: c, size: 15, w: FontWeight.w700)),
+              ],
+            ),
+            if (sub != null) ...[
+              const SizedBox(height: 6),
+              Text(sub,
+                  style: Obsidian.body(color: Obsidian.outline, size: 11)),
+            ],
           ],
         ),
       );

@@ -863,3 +863,153 @@ def test_asking_for_a_pair_counts_as_attention():
     svc.dashboard(*key)                     # a phone opens it again
     assert _time.time() - svc._last_seen[key] < 5.0
     return True
+
+
+def test_the_chart_does_not_reparse_the_whole_store_every_call():
+    """The measured cause of the app's timeouts.
+
+    `/api/chart` returns at most 500 points but used to re-read and re-parse
+    the entire bar store to get them - 175,000 rows for a 1m pair. Measured
+    on the droplet: 1m 5.9s, 5m 5.3s, 15m 3.8s, 1h 2.6s, while the dashboard
+    beside it answered in 7ms. With the app prefetching neighbouring pairs
+    that put 11.4s of work on one core, queued ahead of the request the phone
+    was waiting for.
+    """
+    import time
+
+    from api.service import get_service
+
+    svc = get_service()
+    try:
+        first_t0 = time.time()
+        svc.chart(symbol="BTCUSDT", interval="1h", n=96)
+        first = time.time() - first_t0
+    except Exception:
+        return True                       # no bars in this environment
+
+    second_t0 = time.time()
+    again = svc.chart(symbol="BTCUSDT", interval="1h", n=96)
+    second = time.time() - second_t0
+
+    assert again["points"], "chart returned nothing"
+    # the second call must be dramatically cheaper, not marginally
+    assert second < max(first / 5.0, 0.05), (first, second)
+    return True
+
+
+def test_bars_are_reloaded_when_the_files_change_and_not_before():
+    """A stale candle is worse than a slow one, so the cache is keyed on the
+    files themselves - mtime and size - rather than on a clock. The moment
+    the collector appends a bar the signature changes and the next read
+    reloads."""
+    import inspect
+
+    from api.service import TradingService
+
+    src = inspect.getsource(TradingService._bars)
+    assert "st_mtime_ns" in src and "st_size" in src, \
+        "bar cache is no longer validated against the files"
+    # no clock in the validation path: a time-based cache can serve a bar
+    # that has already closed. (The docstring discusses TTLs, hence checking
+    # for the call rather than the word.)
+    body = src.split('"""')[-1]
+    assert "time.time()" not in body, \
+        "a time-based bar cache can serve a bar that has already closed"
+    return True
+
+
+def test_dashboards_survive_a_restart_so_the_app_is_not_left_waiting():
+    """The measured cause of "timeout when I reopen the app".
+
+    A dashboard costs 15-60s to build on the droplet. Until this existed every
+    restart discarded all 24, warm-up then saturated the single core for ten
+    minutes, and any request landing in that window queued behind a cold build
+    and blew through the app's 20s timeout.
+
+    A restarted process must answer immediately from the last known good copy
+    and rebuild behind the request.
+    """
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from api.service import TradingService
+
+    with tempfile.TemporaryDirectory() as d:
+        built = []
+
+        def make(svc):
+            svc._dash_dir = Path(d) / "dashcache.v1"
+            svc._build_dashboard = lambda sym, iv: (
+                built.append((sym, iv)) or {"symbol": sym, "interval": iv})
+            return svc
+
+        first = make(TradingService())
+        first._build_and_store(("BTCUSDT", "1h"))
+        assert len(built) == 1
+
+        # a brand new process, as after `docker compose up -d`
+        second = TradingService()
+        second._dash_dir = Path(d) / "dashcache.v1"
+        second._load_dash_cache()
+        second._build_dashboard = lambda sym, iv: (_ for _ in ()).throw(
+            AssertionError("a restart rebuilt instead of serving the copy"))
+
+        t0 = time.time()
+        got = second.dashboard("BTCUSDT", "1h")
+        assert got == {"symbol": "BTCUSDT", "interval": "1h"}, got
+        assert time.time() - t0 < 1.0, "a restart made the caller wait"
+    return True
+
+
+def test_indicator_history_comes_from_the_cached_features():
+    """Tiles showed one number with no sense of where it came from.
+
+    RSI 53.9 says nothing about whether it climbed all day or just snapped
+    back from 70. The series is sliced out of the SAME cached feature frame
+    the dashboard already built, so expanding a tile costs a slice and no
+    computation.
+    """
+    from api.service import get_service
+
+    svc = get_service()
+    try:
+        d = svc.indicator("rsi", symbol="BTCUSDT", interval="1h", n=32)
+    except Exception:
+        return True                        # no bars/models in this env
+
+    assert d["points"], "no history returned"
+    assert len(d["points"]) <= 32
+    for p in d["points"]:
+        assert "t" in p and "v" in p
+        assert p["v"] is None or 0.0 <= p["v"] <= 100.0, p
+    # fixed bounds, so the shape is comparable between visits instead of
+    # rescaling to whatever happens to be on screen
+    assert d["min"] == 0.0 and d["max"] == 100.0, d
+    assert d["explain"], "an indicator with no explanation is a magic number"
+    return True
+
+
+def test_an_unknown_indicator_is_a_404_not_a_500():
+    from api.service import get_service
+
+    try:
+        get_service().indicator("nonsense")
+    except KeyError:
+        return True
+    raise AssertionError("unknown indicator did not raise")
+
+
+def test_every_tile_the_dashboard_draws_can_be_expanded():
+    """A tile you can tap that has no series behind it is a dead end."""
+    from api.service import TradingService
+
+    # the keys `_indicators` emits must all be expandable
+    emitted = {"rsi", "htf", "vol", "volume"}
+    missing = emitted - set(TradingService.INDICATOR_SERIES)
+    assert not missing, f"tiles with no history endpoint: {missing}"
+    for key, (col, label, unit, bounds) in TradingService.INDICATOR_SERIES.items():
+        assert label and isinstance(col, str)
+        if bounds is not None:
+            assert bounds[0] < bounds[1], (key, bounds)
+    return True

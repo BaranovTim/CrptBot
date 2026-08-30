@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -89,12 +90,22 @@ class TradingService:
         self._building: set = set()
         self._build_cost: Dict[Tuple[str, str], float] = {}
         self._last_seen: Dict[Tuple[str, str], float] = {}
+        self._charts: Dict[Tuple[str, str, int, Any], Dict[str, Any]] = {}
+        self._bars_cache: Dict[Tuple[str, str], Tuple[Any, Any]] = {}
+        # v1: bump the directory name if the dashboard payload shape changes,
+        # so an old cache is ignored rather than served to a new app
+        self._dash_dir = Path("data_cache") / "dashcache.v1"
         self._refresh_q: "queue.Queue" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self._monitors: Dict[Tuple[str, str], Any] = {}
         self._tickers: Dict[str, _Cached] = {}
         self._dash: Dict[Tuple[str, str], _Cached] = {}
         self._forming: Dict[Tuple[str, str], Any] = {}
+        # LAST. It populates `self._dash`, so every field it touches has to
+        # exist first — it did not, and the broad except below turned that
+        # AttributeError into 24 "corrupt cache file" warnings instead of a
+        # crash, which is why it failed silently.
+        self._load_dash_cache()
 
     def _pair(self, symbol: Optional[str], interval: Optional[str]):
         return (symbol or self.symbol).upper(), interval or self.interval
@@ -120,8 +131,50 @@ class TradingService:
 
     def _bars(self, symbol: Optional[str] = None,
               interval: Optional[str] = None) -> pd.DataFrame:
+        """The bar store, cached until the files underneath it change.
+
+        THIS WAS THE REAL COST. Every caller re-read and re-parsed the whole
+        store: 175,000 rows of CSV for a 1m pair, measured at 2.4-5.9s
+        depending on timeframe, on every chart request and every dashboard
+        build. On a one-core box with four pairs being prefetched that is
+        tens of seconds of work queued behind whatever the phone is waiting
+        for, which is what produced the client timeouts.
+
+        Validated by MTIME AND SIZE of the files, not by a clock. A stat is
+        microseconds against seconds of parsing, and it is exact: the moment
+        the collector appends a bar the signature changes and the next read
+        reloads. A time-based TTL would either serve a stale bar or reload
+        for nothing.
+
+        The frame is returned as-is rather than copied. Callers here treat it
+        as read-only; copying 175,000 rows per call would give back most of
+        what the cache saves.
+        """
+        sym, iv = self._pair(symbol, interval)
         from livefeed import BarStore
-        return BarStore(*self._pair(symbol, interval)).load()
+
+        store = BarStore(sym, iv)
+        try:
+            sig = tuple(sorted(
+                (f.name, f.stat().st_mtime_ns, f.stat().st_size)
+                for f in store.dir.glob("*.csv")))
+        except OSError:
+            sig = None                      # unreadable: fall through to load
+
+        if sig is not None:
+            with self._lock:
+                hit = self._bars_cache.get((sym, iv))
+            if hit is not None and hit[0] == sig:
+                return hit[1]
+
+        bars = store.load()
+        if sig is not None:
+            with self._lock:
+                # one frame per pair; 24 pairs of bars is the working set the
+                # dashboards already hold references to, so this adds no
+                # meaningful memory beyond what warm-up keeps alive anyway
+                self._bars_cache[(sym, iv)] = (sig, bars)
+        return bars
 
     # ---------------------------------------------------- the universe
     def symbols(self, q: Optional[str] = None,
@@ -339,6 +392,56 @@ class TradingService:
             })
         return out
 
+    # ------------------------------------------------- surviving a restart
+    #
+    # Building a dashboard costs 15-60s on the droplet, and until this existed
+    # every restart threw all 24 of them away. Warm-up then saturated the one
+    # core for ten minutes, and any request landing in that window queued
+    # behind a cold build and blew through the app's 20s timeout - which is
+    # exactly the "timeout when I reopen the app" people were seeing.
+    #
+    # The payloads are small JSON and already carry their own staleness flag,
+    # so writing them out and reading them back on boot means the app is
+    # answered IMMEDIATELY after a restart, from the last known good copy,
+    # while the real rebuild happens behind it. Nothing is served that the
+    # process would not have served a moment before it restarted.
+
+    def _dash_path(self, key: Tuple[str, str]) -> Path:
+        return self._dash_dir / f"{key[0]}_{key[1]}.json"
+
+    def _load_dash_cache(self) -> None:
+        if not self._dash_dir.exists():
+            return
+        loaded = 0
+        for f in self._dash_dir.glob("*.json"):
+            try:
+                raw = json.loads(f.read_text())
+                sym, iv = raw["symbol"], raw["interval"]
+                self._dash[(sym, iv)] = _Cached(float(raw["at"]),
+                                                raw["payload"])
+                loaded += 1
+            except (KeyError, ValueError, TypeError, OSError) as e:
+                # A malformed or half-written file must not stop the rest
+                # loading. Deliberately NOT a bare Exception: that swallowed
+                # an AttributeError from this method being called too early
+                # and reported it as a corrupt cache, 24 times.
+                log.warning("dash cache %s ignored: %s", f.name, e)
+        if loaded:
+            log.info("restored %d dashboards from disk", loaded)
+
+    def _save_dash(self, key: Tuple[str, str], value: Dict[str, Any],
+                   at: float) -> None:
+        try:
+            self._dash_dir.mkdir(parents=True, exist_ok=True)
+            tmp = self._dash_path(key).with_suffix(".tmp")
+            tmp.write_text(json.dumps(
+                {"symbol": key[0], "interval": key[1], "at": at,
+                 "payload": value}, allow_nan=False))
+            os.replace(tmp, self._dash_path(key))
+        except (OSError, ValueError) as e:
+            # a cache that cannot be written is a slow restart, not a failure
+            log.warning("could not persist %s %s: %s", key[0], key[1], e)
+
     # -------------------------------------------------------- dashboard
     def _dash_ttl(self, key: Tuple[str, str]) -> float:
         """How long a built dashboard is served before a refresh is kicked off.
@@ -376,9 +479,11 @@ class TradingService:
             t0 = time.time()
             v = self._build_dashboard(*key)
             cost = time.time() - t0
+            now = time.time()
             with self._lock:
-                self._dash[key] = _Cached(time.time(), v)
+                self._dash[key] = _Cached(now, v)
                 self._build_cost[key] = cost
+            self._save_dash(key, v, now)
             return v
 
     # How long after somebody last asked for a pair it keeps refreshing itself.
@@ -711,15 +816,114 @@ class TradingService:
     # ------------------------------------------------------------ chart
     def chart(self, symbol: Optional[str] = None,
               interval: Optional[str] = None, n: int = 96) -> Dict[str, Any]:
+        """The last `n` closes. Cached, because it was the slowest thing here.
+
+        MEASURED, and it was the cause of the app's timeouts. This returned at
+        most 500 points but re-read and re-parsed the WHOLE bar store to get
+        them - 175,000 rows of CSV for a 1m pair - on every single call:
+
+            1m 5.9s   5m 5.3s   15m 3.8s   1h 2.6s   4h 3.0s   1d 2.4s
+
+        while the dashboard beside it answered in 7ms. Worse, the app
+        prefetches its neighbouring pairs, so opening a screen fired six of
+        these and put 11.4s of work on a one-core box, queued behind the
+        request the phone was actually waiting on. The 20s client timeout did
+        not stand a chance.
+
+        Keyed on the newest bar, so it is exact rather than time-based: a new
+        bar closes, the key changes, the chart rebuilds. Nothing serves a
+        stale candle.
+        """
         sym, iv = self._pair(symbol, interval)
+        want = max(2, min(n, 500))
         bars = self._bars(sym, iv)
         if bars.empty:
             return {"points": [], "interval": iv}
-        tail = bars.tail(max(2, min(n, 500)))
-        return {
+
+        key = (sym, iv, want, bars.index[-1])
+        with self._lock:
+            hit = self._charts.get(key)
+            if hit is not None:
+                return hit
+
+        tail = bars.tail(want)
+        out = {
             "interval": iv,
             "points": [{"t": t.isoformat(), "c": _num(c)}
                        for t, c in zip(tail.index, tail["close"])],
+        }
+        with self._lock:
+            # bounded: one entry per pair, timeframe and length, and the key
+            # moves every time a bar closes. Without a cap a 1m pair would
+            # leave a dead entry behind every minute.
+            if len(self._charts) > 64:
+                self._charts.clear()
+            self._charts[key] = out
+        return out
+
+    # ------------------------------------------------- indicator history
+    #
+    # The dashboard tiles showed one number each with no sense of where it
+    # came from: RSI 53.9 says nothing about whether it has been climbing for
+    # a day or just snapped back from 70.
+    #
+    # The series come straight out of the SAME cached feature frame the
+    # dashboard already built, so this costs a slice and no computation.
+    # Overlaying them on the price chart was the alternative and would have
+    # been worse: RSI is 0-100, volume is a ratio around 1, and structure is
+    # +1/-1 — sharing a price axis with BTC at 78,000 would either flatten
+    # them to a line or need a second axis nobody reads correctly.
+
+    # tile key -> (feature column, human label, unit, sensible fixed bounds)
+    INDICATOR_SERIES = {
+        "rsi": ("rsi_14", "RSI (14)", "", (0.0, 100.0)),
+        "vol": ("vol_pctile", "Volatility percentile", "%", (0.0, 1.0)),
+        "volume": ("volume_vs_baseline", "Volume vs baseline", "x", None),
+        "htf": ("trend_direction_4h", "Higher-timeframe structure", "",
+                (-1.0, 1.0)),
+        "flow": ("taker_buy_ratio", "Taker buy ratio", "", (0.0, 1.0)),
+        "atr": ("atr_pct", "ATR (% of price)", "%", None),
+    }
+
+    def indicator(self, key: str, symbol: Optional[str] = None,
+                  interval: Optional[str] = None,
+                  n: int = 96) -> Dict[str, Any]:
+        """Recent history of one indicator, for the tile to expand into."""
+        spec = self.INDICATOR_SERIES.get(key)
+        if spec is None:
+            raise KeyError(f"unknown indicator {key!r}")
+        column, label, unit, bounds = spec
+
+        sym, iv = self._pair(symbol, interval)
+        mon = self._mon(sym, iv)
+        bars = self._bars(sym, iv)
+        if bars.empty:
+            return {"key": key, "label": label, "points": []}
+
+        X = mon.features(mon.live_window(bars))
+        if X is None or column not in X.columns:
+            # a model fitted without that block simply has no such column;
+            # an empty series is the honest answer, not a fabricated one
+            return {"key": key, "label": label, "unit": unit, "points": [],
+                    "note": "not produced by this model"}
+
+        want = max(2, min(n, 500))
+        tail = X[column].tail(want)
+        pts = [{"t": t.isoformat(), "v": _num(v)}
+               for t, v in zip(tail.index, tail.to_numpy())]
+        finite = [p["v"] for p in pts if p["v"] is not None]
+        return {
+            "key": key,
+            "label": label,
+            "unit": unit,
+            "interval": iv,
+            "symbol": sym,
+            "points": pts,
+            # bounds so a sparkline is comparable between visits rather than
+            # rescaling to whatever happens to be on screen
+            "min": bounds[0] if bounds else (min(finite) if finite else None),
+            "max": bounds[1] if bounds else (max(finite) if finite else None),
+            "explain": _INDICATOR_HELP.get(key, ""),
         }
 
     # ----------------------------------------------------------- whales
@@ -743,6 +947,9 @@ class TradingService:
                 "mechanical": impact.startswith("MECHANICAL"),
                 "conviction": _num(getattr(e, "conviction", float("nan"))),
                 "code": getattr(e, "transaction_code", ""),
+                # the filing itself on sec.gov, so "explain this" can end at
+                # the primary source rather than at our paraphrase of it
+                "url": getattr(e, "url", "") or "",
                 "published_at": e.published_at.isoformat(),
                 # when the trade actually happened, which is up to five days
                 # before it was disclosed. a notification that shows only the
@@ -769,6 +976,9 @@ class TradingService:
             out.append({
                 "headline": getattr(it, "headline", str(it)),
                 "source": getattr(it, "source", ""),
+                # the article itself. Without this the app can tell you
+                # something happened and not show you what.
+                "url": getattr(it, "url", "") or "",
                 "published_at": getattr(it, "published_at", None)
                 and it.published_at.isoformat(),
             })
@@ -820,6 +1030,30 @@ class TradingService:
 
 
 # ------------------------------------------------------------- helpers
+# Written for somebody who has not read a textbook, and honest about what
+# each one cannot tell you. A tile that explains itself beats a tile that
+# looks authoritative.
+_INDICATOR_HELP = {
+    "rsi": "Momentum over the last 14 bars, 0-100. Above 70 is usually called "
+           "overbought and below 30 oversold — but a strong trend can sit at "
+           "an extreme for a long time, so this describes speed, not a turn.",
+    "vol": "Where current volatility sits against its own recent range. High "
+           "means moves are larger than usual, which widens both the target "
+           "and the stop; it says nothing about direction.",
+    "volume": "Traded volume against a 30-day baseline. Above 1x means more "
+              "participation than normal. A move on low volume is easier to "
+              "reverse than the same move on high volume.",
+    "htf": "Direction of the last confirmed break of structure on the higher "
+           "timeframe: +1 after a higher high, -1 after a lower low. It is "
+           "the chart's shape, not a recommendation.",
+    "flow": "Share of volume executed by buyers lifting the offer. Above 0.5 "
+            "means buyers were more aggressive over that bar.",
+    "atr": "Average true range as a percentage of price — the size of a "
+           "typical bar. Targets and stops are set in multiples of this, "
+           "which is why they widen when it does.",
+}
+
+
 def _num(v) -> Optional[float]:
     """NaN and inf are not JSON. None means 'absent', which is the truth."""
     try:
@@ -859,12 +1093,38 @@ def _indicators(snap: Dict[str, float], interval: str = "1h",
                     "value": f"{rsi:.1f}",
                     "note": f"{note} · 14 × {interval} bars", "tone": tone})
 
+    # WHY THIS CAN READ "BULL" WHILE THE RECOMMENDATION SAYS WAIT
+    #
+    # They measure different things and are not in conflict. Structure is a
+    # fact about the chart: the direction of the last confirmed break of a
+    # swing high or low. `trend_direction` is +1 or -1 by construction and is
+    # NEVER 0 - before the first break it is NaN and this tile is omitted
+    # entirely - so it cannot say FLAT, and forcing it to would be inventing
+    # a state the indicator does not have.
+    #
+    # The recommendation is a probability and an expected value, and it says
+    # WAIT whenever the edge does not clear costs. A market can be in an
+    # uptrend that is not worth paying to enter.
+    #
+    # What the tile CAN honestly do is stop overstating. Once price has drifted
+    # back to the middle of the range, the last break is no longer being
+    # extended, and "RANGE" describes that better than a direction does.
     d4 = snap.get("trend_direction_4h")
     if d4 is not None and np.isfinite(d4):
+        pos = snap.get("position_in_range_4h")
+        mid = (pos is not None and np.isfinite(pos) and 0.4 <= pos <= 0.6)
+        if mid:
+            value, tone = "RANGE", "flat"
+            note = (f"Last {htf} break was {'up' if d4 > 0 else 'down'}, but "
+                    f"price sits mid-range and is not extending it")
+        else:
+            value = "BULL" if d4 > 0 else "BEAR"
+            tone = "up" if d4 > 0 else "down"
+            note = (f"Direction of the last confirmed {htf} break. This is "
+                    f"the chart's shape, not the recommendation — a trend can "
+                    f"be real and still not worth paying to enter")
         out.append({"key": "htf", "label": f"{htf.upper()} STRUCTURE",
-                    "value": "BULL" if d4 > 0 else "BEAR",
-                    "note": f"Trend on {htf} bars, above the {interval} chart",
-                    "tone": "up" if d4 > 0 else "down"})
+                    "value": value, "note": note, "tone": tone})
 
     vp = snap.get("vol_pctile")
     if vp is not None and np.isfinite(vp):

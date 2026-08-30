@@ -232,11 +232,70 @@ class WhaleEvent {
         mechanical = j['mechanical'] as bool? ?? false,
         code = j['code'] as String? ?? '',
         note = j['note'] as String? ?? '',
-        conviction = _d(j['conviction']);
+        conviction = _d(j['conviction']),
+        url = j['url'] as String? ?? '',
+        publishedAt = j['published_at'] == null
+            ? null
+            : DateTime.parse(j['published_at'] as String),
+        eventTime = j['event_time'] == null
+            ? null
+            : DateTime.parse(j['event_time'] as String);
 
-  final String describe, impact, side, code, note;
+  final String describe, impact, side, code, note, url;
   final bool mechanical;
   final double? conviction;
+
+  /// When the filing was DISCLOSED. Insider filings lag the trade by 24-120
+  /// hours, so this is the moment the market could have known — which is the
+  /// only honest basis for calling something recent.
+  final DateTime? publishedAt;
+
+  /// When the trade actually happened, which is earlier and sometimes much
+  /// earlier. Shown alongside, never instead.
+  final DateTime? eventTime;
+
+  /// How long this stays worth pinning to the top of the screen.
+  ///
+  /// Bigger convictions earn a longer window: a chief executive selling two
+  /// million dollars is still context two days later, while a small routine
+  /// disposal stops being news within half a day. Before this, ONE whale was
+  /// pinned permanently regardless of age — the dashboard led with a filing
+  /// from days ago every time it opened.
+  Duration get relevantFor {
+    final c = conviction ?? 0.0;
+    if (c >= 0.75) return const Duration(hours: 72);
+    if (c >= 0.4) return const Duration(hours: 36);
+    return const Duration(hours: 12);
+  }
+
+  bool get isRecent {
+    final at = publishedAt;
+    if (at == null) return false;
+    return DateTime.now().toUtc().difference(at.toUtc()) < relevantFor;
+  }
+}
+
+class NewsItem {
+  NewsItem.fromJson(Map<String, dynamic> j)
+      : headline = j['headline'] as String? ?? '',
+        source = j['source'] as String? ?? '',
+        url = j['url'] as String? ?? '',
+        publishedAt = j['published_at'] == null
+            ? null
+            : DateTime.parse(j['published_at'] as String);
+
+  final String headline, source, url;
+  final DateTime? publishedAt;
+
+  /// News ages faster than a filing: by the next day it is priced in and
+  /// everybody has seen it.
+  static const relevantFor = Duration(hours: 8);
+
+  bool get isRecent {
+    final at = publishedAt;
+    if (at == null) return false;
+    return DateTime.now().toUtc().difference(at.toUtc()) < relevantFor;
+  }
 }
 
 class TrainingInfo {
@@ -424,4 +483,33 @@ class Account {
   final DateTime? subscriptionEnds;
 
   bool get signedIn => identifier.isNotEmpty || operator;
+}
+
+/// One indicator's recent history, for the tile that expands into it.
+class IndicatorSeries {
+  IndicatorSeries.fromJson(Map<String, dynamic> j)
+      : key = j['key'] as String? ?? '',
+        label = j['label'] as String? ?? '',
+        unit = j['unit'] as String? ?? '',
+        explain = j['explain'] as String? ?? '',
+        note = j['note'] as String? ?? '',
+        min = (j['min'] as num?)?.toDouble(),
+        max = (j['max'] as num?)?.toDouble(),
+        values = ((j['points'] as List?) ?? const [])
+            .map((p) => (p as Map<String, dynamic>)['v'] as num?)
+            .map((v) => v?.toDouble())
+            .toList();
+
+  final String key, label, unit, explain, note;
+
+  /// Fixed bounds where the indicator has them (RSI is always 0-100), so the
+  /// shape is comparable between visits rather than rescaling to whatever
+  /// happens to be on screen. Null means "scale to the data".
+  final double? min, max;
+
+  /// Nulls are kept, not dropped: a gap in an indicator is information, and
+  /// closing it would draw a line through data that does not exist.
+  final List<double?> values;
+
+  bool get isEmpty => values.where((v) => v != null).length < 2;
 }

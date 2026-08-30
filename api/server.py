@@ -220,7 +220,8 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/consensus", "/api/symbols",
                                           "/api/me", "/api/auth/login",
                                           "/api/auth/register",
-                                          "/api/billing/plans"]})
+                                          "/api/billing/plans",
+                                          "/api/indicator"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -250,6 +251,14 @@ class Handler(BaseHTTPRequestHandler):
                                          interval=opt("interval")))
             elif route == "/api/consensus":
                 self._send(svc.consensus(opt("symbol")))
+            elif route == "/api/indicator":
+                key = opt("key") or "rsi"
+                try:
+                    self._send(svc.indicator(key, symbol=opt("symbol"),
+                                             interval=opt("interval"),
+                                             n=arg("n", 96)))
+                except KeyError as e:
+                    self._send({"error": str(e), "path": route}, status=404)
             elif route == "/api/chart":
                 self._send(svc.chart(symbol=opt("symbol"),
                                      interval=opt("interval"),

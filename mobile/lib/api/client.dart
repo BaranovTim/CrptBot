@@ -181,6 +181,25 @@ class ApiClient {
   ///
   /// The sign-in screen probes this rather than a gated route, so a bad
   /// password cannot be reported as a broken network.
+  /// One indicator's recent history.
+  Future<IndicatorSeries> indicator(String key,
+      {String? symbol, String? interval, int n = 96}) async {
+    final q = [
+      'key=$key',
+      if (symbol != null) 'symbol=$symbol',
+      if (interval != null) 'interval=$interval',
+      'n=$n',
+    ].join('&');
+    return IndicatorSeries.fromJson(await _get('/api/indicator?$q'));
+  }
+
+  Future<List<NewsItem>> news({int limit = 20}) async {
+    final j = await _get('/api/news?limit=$limit');
+    return ((j['items'] as List?) ?? const [])
+        .map((e) => NewsItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<Map<String, dynamic>> health() async => _get('/api/health');
 
   Future<Map<String, dynamic>> plans() async => _get('/api/billing/plans');
