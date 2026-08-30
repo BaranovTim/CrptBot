@@ -156,6 +156,105 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  ScheduledEvent? _major;
+
+  /// The next market-moving release, fetched once per screen load.
+  ///
+  /// Deliberately NOT inside the main `Future.wait`: it is context, and a
+  /// calendar fetch failing must not stop the dashboard from rendering.
+  Future<void> _loadMajor() async {
+    try {
+      final m = await widget.client.nextMajor();
+      if (mounted) setState(() => _major = m);
+    } catch (_) {
+      // no banner is the correct failure here
+    }
+  }
+
+  /// A countdown banner for the next big scheduled event.
+  ///
+  /// Shown from three days out. Non-Farm Payrolls is the largest scheduled
+  /// volatility event of the month — the whole market repositions around it —
+  /// and knowing it lands on Friday changes whether you open a position on
+  /// Thursday. A notification an hour before is too late for that decision,
+  /// which is why this sits on the screen you already look at.
+  List<Widget> _majorEvent() {
+    final e = _major;
+    if (e == null) return const [];
+    final away = e.away;
+    if (away.isNegative || away.inDays > 3) return const [];
+
+    final hours = away.inHours;
+    final when = hours >= 48
+        ? 'in ${away.inDays} days'
+        : hours >= 1
+            ? 'in ${hours}h ${away.inMinutes % 60}m'
+            : 'in ${away.inMinutes} min';
+    // inside two hours it stops being a diary note and starts being a warning
+    final imminent = hours < 2;
+    final tone = imminent ? Obsidian.redSoft : Obsidian.primary;
+
+    return [
+      GlassPanel(
+        glow: imminent ? Obsidian.red : null,
+        glowOpacity: 0.25,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.event_rounded, size: 16, color: tone),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('HIGH-IMPACT RELEASE',
+                      style: Obsidian.labelSm(size: 10.5, color: tone)),
+                ),
+                Text(when,
+                    style: Obsidian.dataTable(
+                        size: 13, color: tone, w: FontWeight.w700)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(e.title,
+                style:
+                    Obsidian.bodyLg().copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Text(
+                '${_localTime(e.at)} · known to the whole market. '
+                'Expect volatility, not direction.',
+                style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+            if (e.estimated) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded,
+                      size: 13, color: Obsidian.outline),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                        'Date estimated from the publisher\'s rule — it can '
+                        'shift for holidays.',
+                        style: Obsidian.body(
+                            color: Obsidian.outline, size: 10.5)),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+      const SizedBox(height: Obsidian.gutter),
+    ];
+  }
+
+  static String _localTime(DateTime utc) {
+    final t = utc.toLocal();
+    final d = '${t.day.toString().padLeft(2, '0')}/'
+        '${t.month.toString().padLeft(2, '0')}';
+    return '$d at ${t.hour.toString().padLeft(2, '0')}:'
+        '${t.minute.toString().padLeft(2, '0')} your time';
+  }
+
   Future<void> _loadConsensus() async {
     try {
       final c = await widget.client.consensus(symbol: widget.symbol);
@@ -225,6 +324,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _error = null;
           _untrained = null;
         });
+        unawaited(_loadMajor());
       } catch (e) {
         if (!mounted || quiet) return;
         setState(() => _error = e.toString());
@@ -256,6 +356,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // the same Future.wait held the whole screen on a spinner for twelve
       // seconds. It is supporting context, so it arrives when it arrives.
       unawaited(_loadConsensus());
+      unawaited(_loadMajor());
     } on UntrainedException catch (e) {
       // a normal state, not a fault: this timeframe simply has no model yet
       if (!mounted) return;
@@ -314,6 +415,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           _header(d),
           const SizedBox(height: 14),
+          ..._majorEvent(),
           TimeframeBar(
             timeframes: d.timeframes,
             selected: d.interval,
@@ -373,6 +475,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
           const SizedBox(height: 18),
+          // shown on the free tier too: a scheduled public release is not
+          // part of the product, it is a fact about the market
+          ..._majorEvent(),
           GlassPanel(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

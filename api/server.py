@@ -131,8 +131,12 @@ class Handler(BaseHTTPRequestHandler):
     # here because the paywall is meant to show the graph and withhold the
     # analysis — a paywall that renders an empty screen tells you nothing
     # about what you would be buying.
-    FREE = OPEN + ("/api/chart", "/api/me", "/api/auth/logout",
-                   "/api/billing/checkout")
+    # /api/calendar is free deliberately. The date of a US payrolls release
+    # is a public fact published by the government, not analysis anyone is
+    # paying for, and warning an unsubscribed user that the market is about
+    # to move is the right thing to do regardless of whether they pay.
+    FREE = OPEN + ("/api/chart", "/api/calendar", "/api/me",
+                   "/api/auth/logout", "/api/billing/checkout")
 
     def _bearer(self) -> str:
         header = self.headers.get("Authorization", "")
@@ -269,10 +273,16 @@ class Handler(BaseHTTPRequestHandler):
                             "cursor": _ENGINE.cursor(),
                             "server_time": _now_iso()})
             elif route == "/api/calendar":
-                from newsfeed.schedule import upcoming
+                from newsfeed.schedule import next_major, upcoming
                 days = arg("days", 21)
+                major = next_major(within_days=max(days, 45))
+                # `next_major` is carried separately from the list because the
+                # two answer different questions: the list is a calendar in
+                # time order, this is "the next thing that will actually move
+                # the market", which may be three weeks down the list.
                 self._send({"events": [e.to_json()
-                                       for e in upcoming(within_days=days)]})
+                                       for e in upcoming(within_days=days)],
+                            "next_major": major.to_json() if major else None})
             elif route == "/api/training":
                 self._send(svc.training(opt("symbol") or svc.symbol,
                                         interval=opt("interval")))

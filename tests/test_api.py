@@ -360,6 +360,10 @@ def test_an_unsubscribed_account_gets_the_chart_and_not_the_analysis():
             assert gate_as(free, "/api/chart") is None
             assert gate_as(free, "/api/me") is None
             assert gate_as(free, "/api/billing/plans") is None
+            # a government release date is a public fact, not the product —
+            # warning an unpaid user that the market is about to move is
+            # right regardless of whether they pay
+            assert gate_as(free, "/api/calendar") is None
 
             for route in ("/api/dashboard", "/api/consensus", "/api/news",
                           "/api/whales", "/api/alerts", "/api/training"):

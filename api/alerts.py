@@ -42,6 +42,11 @@ log = logging.getLogger(__name__)
 # How far ahead of a scheduled event to warn. Two windows, deliberately: the
 # hour lets you flatten or size down, the five minutes is the "it is about to
 # happen" nudge. More than two and it becomes nagging.
+# Fallback only. Each event now names its own windows through
+# `ScheduledEvent.lead_minutes`, because one tuple cannot serve both a routine
+# print and Non-Farm Payrolls: NFP is the largest scheduled volatility event
+# of the month and an hour's notice is not enough to act on, while giving
+# every minor release a day's notice would be noise.
 LEAD_MINUTES = (60, 5)
 
 MAX_LOG = 300
@@ -226,9 +231,12 @@ class AlertEngine:
 
         now = utc_now()
         out = []
-        for e in upcoming(within_days=2, now=now):
+        # 3 days, not 2: the top-priority events warn a full day ahead, and a
+        # 2-day horizon left no margin for a clock that wakes up late.
+        for e in upcoming(within_days=3, now=now):
             mins = e.minutes_until(now)
-            for lead in LEAD_MINUTES:
+            leads = e.lead_minutes
+            for lead in leads:
                 # fire when we are inside the window but have not passed the
                 # event; the id pins it to this lead so it cannot repeat
                 if not (0 < mins <= lead):
@@ -236,15 +244,24 @@ class AlertEngine:
                 cid = _hash("cal", e.key, lead)
                 if cid in self._seen:
                     continue
+                # "in 1440 min" is unreadable. Say it the way a person would.
+                if mins >= 90:
+                    when = f"in {mins / 60:.0f}h"
+                else:
+                    when = f"in {int(round(mins))} min"
                 out.append(Alert(
                     id=cid, kind="calendar",
                     severity="high" if e.impact == "high" else "medium",
-                    title=f"{e.title} in {int(round(mins))} min",
+                    title=f"{e.title} {when}",
                     body=(e.note or "Scheduled event.")
                          + " Known to the whole market — expect volatility, "
-                           "not direction.",
+                           "not direction."
+                         + (" Date is estimated; confirm it."
+                            if e.estimated else ""),
                     at=e.at, detected_at=now, url=e.url,
-                    extra={"impact": e.impact, "lead_minutes": str(lead)}))
+                    extra={"impact": e.impact, "lead_minutes": str(lead),
+                           "priority": str(e.priority),
+                           "estimated": str(e.estimated).lower()}))
 
                 # Every OTHER lead window that also applies right now is moot:
                 # the user has just been told. Without this, an event first
@@ -255,7 +272,7 @@ class AlertEngine:
                 # against `_seen` AFTER this runs, so marking the lead being
                 # fired would delete the very alert just created — the
                 # notification would never be sent and nothing would say why.
-                for other in LEAD_MINUTES:
+                for other in leads:
                     if other != lead and 0 < mins <= other:
                         self._seen.add(_hash("cal", e.key, other))
                 break

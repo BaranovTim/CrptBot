@@ -152,3 +152,103 @@ def test_the_real_fed_page_parses(**_):
     hours = {e.at.astimezone(timezone.utc).hour for e in evs}
     assert hours <= {18, 19}, f"unexpected statement hours {hours}"
     return True
+
+
+def test_payrolls_land_on_the_real_release_dates():
+    """The BLS rule, checked against releases that actually happened.
+
+    BLS serves 403 to scripted requests (re-tested 2026-08-30, browser
+    User-Agent included), so the date is computed from their published rule:
+    the third Friday after the reference week, the week containing the 12th.
+    """
+    from newsfeed.schedule import NfpSource
+
+    known = {
+        (2025, 8): "2025-09-05",
+        (2025, 9): "2025-10-03",
+        (2024, 11): "2024-12-06",
+    }
+    for (y, m), expect in known.items():
+        got = NfpSource.release_for(y, m)
+        assert got.strftime("%Y-%m-%d") == expect, (y, m, got, expect)
+    return True
+
+
+def test_the_payroll_date_is_flagged_estimated_because_it_can_be_wrong():
+    """This is the reason the flag exists, not a hypothetical.
+
+    The December 2024 report was released on 10 January 2025; the rule gives
+    3 January. A week early on the biggest scheduled move of the month is
+    worse than no entry, so every computed date says so and a calendar.json
+    row with the same key replaces it.
+    """
+    from newsfeed.schedule import NfpSource
+
+    got = NfpSource.release_for(2024, 12)
+    assert got.strftime("%Y-%m-%d") == "2025-01-03"      # the rule
+    assert got.strftime("%Y-%m-%d") != "2025-01-10"      # what happened
+
+    for e in NfpSource().events():
+        assert e.estimated is True, e
+        assert "estimated" in e.note.lower(), e.note
+    return True
+
+
+def test_payrolls_outrank_everything_and_warn_furthest_ahead():
+    """"Prioritise NFP the most" has to mean something operational."""
+    from newsfeed.schedule import FomcSource, NfpSource
+
+    nfp = NfpSource().events()[0]
+    assert nfp.priority == 100
+    assert nfp.lead_minutes[0] == 1440, "NFP must warn a full day ahead"
+
+    # and it must warn EARLIER than anything else on the calendar
+    for e in FomcSource().events():
+        assert nfp.priority > e.priority, (nfp.priority, e.priority)
+        assert nfp.lead_minutes[0] > e.lead_minutes[0]
+    return True
+
+
+def test_release_time_follows_daylight_saving():
+    """08:30 New York is a fixed local time, so the UTC instant must move.
+
+    Hardcoding 12:30 UTC would be an hour wrong for half the year — and an
+    hour late for NFP is the entire move.
+    """
+    from newsfeed.schedule import NfpSource
+
+    summer = NfpSource.release_for(2025, 8)      # released in September, EDT
+    winter = NfpSource.release_for(2024, 11)     # released in December, EST
+    assert summer.strftime("%H:%M") == "12:30", summer
+    assert winter.strftime("%H:%M") == "13:30", winter
+    return True
+
+
+def test_a_hand_entered_date_beats_the_computed_one():
+    """The correction path has to actually work, or the estimate is a trap."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from newsfeed.schedule import LocalSource, NfpSource, upcoming
+    from core import utc_now
+
+    nfp = NfpSource().events()
+    target = [e for e in nfp if e.at > utc_now()][0]
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "calendar.json"
+        corrected = target.at.replace(day=min(target.at.day + 7, 28))
+        path.write_text(json.dumps([{
+            "key": target.key,                  # same key -> replaces it
+            "title": "US Non-Farm Payrolls (corrected)",
+            "at": corrected.isoformat(),
+            "impact": "high", "priority": 100,
+        }]))
+        got = upcoming(within_days=90,
+                       sources=[LocalSource(path), NfpSource()])
+        rows = [e for e in got if e.key == target.key]
+        assert len(rows) == 1, rows
+        assert rows[0].title.endswith("(corrected)"), rows[0].title
+        assert rows[0].estimated is False
+    return True

@@ -35,7 +35,7 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
@@ -57,6 +57,9 @@ _MONTHS = {m: i for i, m in enumerate(
     ["january", "february", "march", "april", "may", "june", "july",
      "august", "september", "october", "november", "december"], start=1)}
 _ABBR = {m[:3]: i for m, i in _MONTHS.items()}
+_MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November",
+                "December"]
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,32 @@ class ScheduledEvent:
     source: str
     url: str = ""
     note: str = ""
+
+    # How far ahead this deserves to be shouted about. Higher wins.
+    #
+    # `impact` is about the event; this is about how much warning is useful.
+    # Non-Farm Payrolls is the single largest scheduled volatility event for
+    # crypto - the whole market repositions ahead of it - so it earns a day's
+    # notice, while a routine high-impact print earns an hour.
+    priority: int = 0
+
+    # True when the date was COMPUTED rather than read from a publisher.
+    # BLS serves 403 to anything scripted (re-tested 2026-08-30, including
+    # with a browser User-Agent), so payroll dates are derived from BLS's own
+    # rule and can be wrong when a holiday shifts them. Being a week out on
+    # NFP is worse than having no entry, so this is surfaced, not hidden.
+    estimated: bool = False
+
+    @property
+    def lead_minutes(self) -> tuple:
+        """The warning windows this event gets, most distant first."""
+        if self.priority >= 100:            # NFP
+            return (1440, 120, 30, 5)      # a day, two hours, half an hour, 5
+        if self.priority >= 80:             # FOMC and the like
+            return (720, 60, 10)           # half a day, an hour, ten minutes
+        if self.impact == "high":
+            return (60, 5)
+        return (30,)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -133,7 +162,8 @@ def parse_fomc(page: str) -> List[ScheduledEvent]:
             out.append(ScheduledEvent(
                 key=f"fomc-{at:%Y-%m-%d}",
                 title="FOMC rate decision",
-                at=at, impact="high", source="federalreserve.gov", url=FOMC_URL,
+                at=at, impact="high", priority=80,
+                source="federalreserve.gov", url=FOMC_URL,
                 note="Statement at 14:00 ET; the press conference follows at 14:30."))
     return out
 
@@ -144,7 +174,13 @@ class FomcSource:
     def __init__(self, cache_dir: Path = CACHE, ttl_hours: int = 24):
         self.dir = Path(cache_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.path = self.dir / "fomc.json"
+        # VERSIONED. The cache holds serialised ScheduledEvents, so adding a
+        # field to that dataclass makes every existing row silently supply the
+        # default instead — which is exactly what happened when `priority`
+        # was added: FOMC kept reporting priority 0 from a cache written
+        # before the field existed, and would have done for 24 hours.
+        # Bump this whenever ScheduledEvent gains or renames a field.
+        self.path = self.dir / "fomc.v2.json"
         self.ttl = timedelta(hours=ttl_hours)
 
     def _fresh(self) -> bool:
@@ -181,8 +217,84 @@ class FomcSource:
             raw = json.loads(self.path.read_text())
         except (ValueError, OSError):
             return []
-        return [ScheduledEvent(**{**d, "at": datetime.fromisoformat(d["at"])})
-                for d in raw]
+        try:
+            return [ScheduledEvent(**{**d, "at": datetime.fromisoformat(d["at"])})
+                    for d in raw]
+        except TypeError as e:
+            # a cache written by a different shape of the dataclass. Treat it
+            # as absent rather than crashing the whole calendar.
+            log.warning("fomc cache has an old shape (%s); ignoring", e)
+            return []
+
+
+class NfpSource:
+    """US Non-Farm Payrolls — the Employment Situation release.
+
+    WHY IT IS COMPUTED AND NOT FETCHED
+        BLS returns 403 to scripted requests, browser User-Agent or not
+        (re-tested 2026-08-30). There is no keyless feed for the release
+        calendar, so the date comes from BLS's own published rule:
+
+            "released on the third Friday following the conclusion of the
+             reference week, i.e. the week which includes the 12th"
+
+        with weeks running Sunday to Saturday.
+
+    WHY EVERY ONE IS MARKED ESTIMATED
+        That rule is what BLS says it *normally* does, and holidays move it.
+        Checked against a case it gets wrong: the December 2024 report was
+        released on 10 January 2025, while the rule gives 3 January. One
+        week early on the biggest scheduled move of the month is worse than
+        no entry at all — so the app says "estimated", and a row in
+        `calendar.json` carrying the same key silently replaces it.
+
+    TIME OF DAY is not estimated: 08:30 America/New_York has been fixed for
+    decades, and the zone handles daylight saving so the UTC instant shifts
+    with it rather than drifting an hour twice a year.
+    """
+
+    RELEASE_ET = (8, 30)
+
+    def __init__(self, months_ahead: int = 4):
+        self.months_ahead = months_ahead
+
+    @staticmethod
+    def release_for(ref_year: int, ref_month: int) -> datetime:
+        """When the report covering `ref_year`-`ref_month` is published."""
+        twelfth = date(ref_year, ref_month, 12)
+        # BLS weeks are Sunday-Saturday. Python's weekday(): Monday=0..Sunday=6
+        days_to_saturday = (5 - twelfth.weekday()) % 7
+        week_ends = twelfth + timedelta(days=days_to_saturday)
+        # first Friday strictly after the reference week closes, then +2 weeks
+        days_to_friday = (4 - week_ends.weekday()) % 7 or 7
+        third_friday = week_ends + timedelta(days=days_to_friday + 14)
+        et = ZoneInfo("America/New_York")
+        local = datetime(third_friday.year, third_friday.month,
+                         third_friday.day, *NfpSource.RELEASE_ET, tzinfo=et)
+        return local.astimezone(ZoneInfo("UTC"))
+
+    def events(self, now: Optional[datetime] = None) -> List[ScheduledEvent]:
+        now = now or utc_now()
+        out = []
+        y, m = now.year, now.month
+        for i in range(-1, self.months_ahead):
+            mm = m + i
+            yy, mm = y + (mm - 1) // 12, (mm - 1) % 12 + 1
+            at = self.release_for(yy, mm)
+            label = f"{_MONTH_NAMES[mm - 1]} {yy}"
+            out.append(ScheduledEvent(
+                key=f"nfp-{yy}-{mm:02d}",
+                title=f"US Non-Farm Payrolls ({label})",
+                at=at,
+                impact="high",
+                priority=100,
+                estimated=True,
+                source="BLS release rule",
+                url="https://www.bls.gov/schedule/news_release/empsit.htm",
+                note="08:30 ET. The largest scheduled volatility event of the "
+                     "month — the whole market repositions around it. Date is "
+                     "estimated from the BLS rule and can shift for holidays."))
+        return out
 
 
 class LocalSource:
@@ -222,6 +334,8 @@ class LocalSource:
                     key=str(d.get("key") or f"local-{at:%Y-%m-%dT%H%M}-{title[:24]}"),
                     title=title, at=at.astimezone(ZoneInfo("UTC")),
                     impact=str(d.get("impact", "medium")),
+                    priority=int(d.get("priority", 0)),
+                    estimated=bool(d.get("estimated", False)),
                     source=str(d.get("source", "calendar.json")),
                     url=str(d.get("url", "")), note=str(d.get("note", ""))))
             except (KeyError, ValueError, TypeError) as e:
@@ -234,7 +348,12 @@ def upcoming(within_days: int = 21, now: Optional[datetime] = None,
     """Everything scheduled between now and `within_days`, soonest first."""
     now = now or utc_now()
     horizon = now + timedelta(days=within_days)
-    srcs = sources if sources is not None else [FomcSource(), LocalSource()]
+    # LocalSource FIRST, deliberately. Dedupe keeps whichever key it sees
+    # first, so anything you enter by hand beats a computed estimate carrying
+    # the same key — which is how a wrong payroll date gets corrected without
+    # touching code.
+    srcs = sources if sources is not None else [
+        LocalSource(), NfpSource(), FomcSource()]
 
     seen, out = set(), []
     for s in srcs:
@@ -243,4 +362,20 @@ def upcoming(within_days: int = 21, now: Optional[datetime] = None,
                 continue
             seen.add(e.key)
             out.append(e)
+    # Chronological, because it is a calendar and the next thing to happen is
+    # the next row. Priority decides how loudly each one is announced, not
+    # where it sits in the list; re-sorting by importance would put an event
+    # three weeks out above one starting in ten minutes.
     return sorted(out, key=lambda e: e.at)
+
+
+def next_major(within_days: int = 45, now: Optional[datetime] = None,
+               sources=None) -> Optional[ScheduledEvent]:
+    """The soonest high-priority event, for the app to pin to the top.
+
+    Separate from `upcoming()` on purpose: that stays a plain chronological
+    calendar, and this answers the different question of "what is the next
+    thing that will actually move the market".
+    """
+    best = [e for e in upcoming(within_days, now, sources) if e.priority >= 100]
+    return best[0] if best else None

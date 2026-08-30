@@ -331,10 +331,24 @@ class ScheduledEvent {
         source = j['source'] as String? ?? '',
         url = j['url'] as String? ?? '',
         note = j['note'] as String? ?? '',
+        priority = (j['priority'] as num?)?.toInt() ?? 0,
+        estimated = j['estimated'] as bool? ?? false,
         at = DateTime.parse(j['at'] as String);
 
   final String key, title, impact, source, url, note;
   final DateTime at;
+
+  /// How loudly this deserves to be announced. Non-Farm Payrolls is 100,
+  /// FOMC 80, everything else lower. Set on the server so the ranking is one
+  /// decision in one place rather than a list of special cases in the UI.
+  final int priority;
+
+  /// The date was computed from a publisher's rule rather than read from
+  /// them. Shown, never hidden — a payroll date that is quietly a week wrong
+  /// is worse than no date.
+  final bool estimated;
+
+  bool get major => priority >= 100;
 
   Duration get away => at.difference(DateTime.now());
 }

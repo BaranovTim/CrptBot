@@ -280,4 +280,14 @@ class ApiClient {
         .map((e) => ScheduledEvent.fromJson(e as Map<String, dynamic>))
         .toList();
   }
+
+  /// The next event big enough to reposition the market, which may be well
+  /// down the chronological list. Null when there is none in range.
+  Future<ScheduledEvent?> nextMajor({int days = 45}) async {
+    final j = await _get('/api/calendar?days=$days');
+    final m = j['next_major'];
+    return m == null
+        ? null
+        : ScheduledEvent.fromJson(m as Map<String, dynamic>);
+  }
 }
