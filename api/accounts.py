@@ -24,10 +24,20 @@ EVERY COMPARISON IS CONSTANT TIME
     returns as soon as two bytes differ, and the timing difference is
     measurable across a network.
 
-SESSIONS ARE RANDOM, NOT SIGNED
+SESSIONS ARE RANDOM, NOT SIGNED - AND STORED AS HASHES
     A `secrets.token_urlsafe(32)` looked up in a table, not a JWT. Nothing
     here needs stateless verification across machines, and a token that can be
     revoked by deleting a row beats one that is valid until it expires.
+
+    The table is persisted, because it was not and that was wrong: sessions
+    lived only in memory, so every `docker compose up -d` signed out every
+    account. Harmless while the only user was the operator; on a subscription
+    product it means each deploy makes every customer re-enter a password.
+
+    Only the SHA-256 of each token is written. A session token is a bearer
+    credential - whoever holds it is signed in - so a readable sessions file
+    would be as good as a password file. Hashing costs one hash per request
+    and makes the file worthless if copied.
 
 WHAT IS DELIBERATELY NOT HERE
     No password reset (it needs email you do not have), no "remember me"
@@ -133,11 +143,14 @@ class Accounts:
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path or
                          Path("data_cache") / "accounts.json")
+        self.sessions_path = self.path.with_name(
+            self.path.stem + "_sessions.json")
         self._lock = threading.Lock()
         self._users: Dict[str, User] = {}
         self._sessions: Dict[str, tuple] = {}     # token -> (identifier, exp)
         self._mtime = 0.0
         self._load()
+        self._load_sessions()
 
     # ------------------------------------------------------------ storage
     def _maybe_reload(self) -> None:
@@ -269,8 +282,9 @@ class Accounts:
             u.algo = _DEFAULT_ALGO
             self._save()
             # every existing session for this account dies with the password
-            self._sessions = {t: v for t, v in self._sessions.items()
+            self._sessions = {d: v for d, v in self._sessions.items()
                               if v[0] != u.identifier}
+            self._save_sessions()
             return u
 
     def delete(self, identifier: str) -> None:
@@ -285,39 +299,82 @@ class Accounts:
             if u is None:
                 raise AuthError("no such account")
             self._users.pop(u.identifier.lower(), None)
-            self._sessions = {t: v for t, v in self._sessions.items()
+            self._sessions = {d: v for d, v in self._sessions.items()
                               if v[0] != u.identifier}
+            self._save_sessions()
             self._save()
 
     # ----------------------------------------------------------- sessions
+    @staticmethod
+    def _digest(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _load_sessions(self) -> None:
+        if not self.sessions_path.exists():
+            return
+        try:
+            raw = json.loads(self.sessions_path.read_text())
+        except Exception as e:
+            # Losing the session table signs everyone out, which is
+            # recoverable. Refusing to start over it would not be.
+            log.warning("sessions unreadable, starting empty: %s", e)
+            return
+        now = time.time()
+        self._sessions = {d: (ident, exp)
+                          for d, (ident, exp) in raw.items() if exp > now}
+
+    def _save_sessions(self) -> None:
+        try:
+            self.sessions_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.sessions_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._sessions))
+            os.replace(tmp, self.sessions_path)
+            os.chmod(self.sessions_path, 0o600)
+        except OSError as e:
+            # An unsaved session still works until restart. Do not fail a
+            # sign-in over it.
+            log.warning("could not persist sessions: %s", e)
+
+    def _prune(self) -> None:
+        # drop expired rows; caller holds the lock
+        now = time.time()
+        self._sessions = {d: v for d, v in self._sessions.items()
+                          if v[1] > now}
+
     def start_session(self, u: User) -> str:
         token = secrets.token_urlsafe(32)
         with self._lock:
-            self._sessions[token] = (u.identifier, time.time() + SESSION_TTL)
-        return token
+            self._sessions[self._digest(token)] = (u.identifier,
+                                                   time.time() + SESSION_TTL)
+            self._prune()
+            self._save_sessions()
+        return token                  # the only moment the raw token exists
 
     def session_user(self, token: str) -> Optional[User]:
         if not token:
             return None
+        want = self._digest(token)
         with self._lock:
-            # scan rather than dict-lookup, to compare in constant time. The
-            # table is small; a timing side channel on session tokens is not
-            # worth the microseconds saved.
+            # Constant-time even though both sides are already hashes: the
+            # comparison is cheap, and the habit is what keeps a plain `==`
+            # from creeping back in somewhere it would matter.
             found = None
-            for t, (ident, exp) in self._sessions.items():
-                if hmac.compare_digest(t, token):
-                    found = (t, ident, exp)
+            for d, (ident, exp) in self._sessions.items():
+                if hmac.compare_digest(d, want):
+                    found = (d, ident, exp)
             if found is None:
                 return None
-            t, ident, exp = found
+            d, ident, exp = found
             if exp < time.time():
-                self._sessions.pop(t, None)
+                self._sessions.pop(d, None)
+                self._save_sessions()
                 return None
         return self.get(ident)
 
     def end_session(self, token: str) -> None:
         with self._lock:
-            self._sessions.pop(token, None)
+            if self._sessions.pop(self._digest(token), None) is not None:
+                self._save_sessions()
 
 
 _accounts: Optional[Accounts] = None

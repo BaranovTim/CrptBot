@@ -322,20 +322,34 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         from api.accounts import AuthError, get_accounts
+        from api.throttle import client_ip, get_throttle, retry_payload
         acc = get_accounts()
         body = self._body()
         ident = str(body.get("identifier") or "")
         password = str(body.get("password") or "")
 
+        # Only the credential routes. Throttling logout or checkout would
+        # punish normal use to defend against nothing.
+        ip = client_ip(self)
+        throttle = get_throttle()
+        if route in ("/api/auth/login", "/api/auth/register"):
+            wait = throttle.check(ip, ident)
+            if wait is not None:
+                payload, status = retry_payload(wait)
+                self._send(payload, status=status)
+                return
+
         try:
             if route == "/api/auth/register":
                 u = acc.register(ident, password)
+                throttle.forget(ip, ident)
                 self._send({"token": acc.start_session(u),
                             "user": u.public()}, status=201)
             elif route == "/api/auth/login":
                 u = acc.verify(ident, password)
-                self._send({"token": acc.start_session(u),
-                            "user": u.public()})
+                throttle.forget(ip, ident)   # a mistyped password must not
+                self._send({"token": acc.start_session(u),   # count against
+                            "user": u.public()})             # the real owner
             elif route == "/api/auth/logout":
                 acc.end_session(self._bearer())
                 self._send({"ok": True})

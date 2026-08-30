@@ -9,12 +9,14 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/client.dart';
 import '../api/live_price.dart';
 import '../api/models.dart';
 import '../api/settings.dart';
 import '../api/muted.dart';
+import '../api/watchlist.dart';
 import '../api/notifications.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/frosted_nav.dart';
@@ -23,7 +25,6 @@ import 'dashboard_screen.dart';
 import 'market_screen.dart';
 import 'profile_screen.dart';
 import 'subscribe_screen.dart';
-import 'training_screen.dart';
 
 class Shell extends StatefulWidget {
   const Shell({
@@ -70,6 +71,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _live.start();
     _startAlerts();
+    _loadOrder();
     // prime the mute set: `isMuted` is synchronous by necessity and
     // reports nothing muted until this lands
     Muted.instance.load().then((_) => mounted ? setState(() {}) : null);
@@ -201,18 +203,104 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       ));
   }
 
+  /// Which pairs the swipe moves through, in the order Market shows them.
+  List<String> _order = const [];
+
+  Future<void> _loadOrder() async {
+    final list = await Watchlist.instance.load();
+    if (mounted) setState(() => _order = List<String>.from(list));
+  }
+
   void _pick(Coin c) {
-    setState(() {
-      _symbol = c.symbol;
-      // an untrained pair has no probability to show, so send it where the
-      // truthful answer lives instead of to an empty dashboard
-      _tab = c.trained ? NavTab.dashboard : NavTab.training;
-    });
+    _setSymbol(c.symbol);
+    setState(() => _tab = NavTab.dashboard);
+  }
+
+  /// Point everything at a different pair.
+  ///
+  /// The socket has to move with it. Leaving it on the old pair would show
+  /// the previous coin's live price under the new coin's name — which reads
+  /// as correct and is not.
+  void _setSymbol(String s) {
+    if (s == _symbol) return;
+    setState(() => _symbol = s);
+    _live.switchTo(s);
+  }
+
+  /// Swipe to the neighbouring pair, wrapping at both ends.
+  ///
+  /// The TIMEFRAME IS DELIBERATELY UNTOUCHED. Looking at 15m on BTC and
+  /// swiping to ETH means you want ETH's 15m — being dropped back to 1h
+  /// every time would make the gesture useless for comparing pairs, which is
+  /// the whole reason to swipe.
+  void _swipe(int delta) {
+    if (_order.length < 2) return;
+    final i = _order.indexOf(_symbol);
+    if (i < 0) {
+      _setSymbol(_order.first);
+      return;
+    }
+    _setSymbol(_order[(i + delta) % _order.length]);
+  }
+
+  /// Android's back gesture, in two steps.
+  ///
+  /// Anywhere but the first tab, back goes to the first tab — the same thing
+  /// the hardware button does in almost every tabbed app, and the thing that
+  /// makes a four-tab app feel navigable rather than one press from gone.
+  ///
+  /// On the first tab it asks before leaving. Losing a screen you were
+  /// reading because your thumb was near the edge is a small thing that feels
+  /// like the app is broken.
+  Future<void> _onBack(bool didPop) async {
+    if (didPop) return;                    // the framework already handled it
+
+    if (_tab != NavTab.dashboard) {
+      setState(() => _tab = NavTab.dashboard);
+      return;
+    }
+
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Obsidian.rLg)),
+        title: Text('Close ThusIldy?', style: Obsidian.headlineMd()),
+        content: Text(
+            'Alerts only arrive while the app is running, so closing it '
+            'stops notifications until you open it again.',
+            style: Obsidian.body(color: Obsidian.outline)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Stay', style: Obsidian.body())),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Close',
+                  style: Obsidian.body(color: Obsidian.redSoft))),
+        ],
+      ),
+    );
+
+    if (leave == true) {
+      // SystemNavigator.pop, not exit(0): this asks the platform to move the
+      // app to the background the way the home button does, so it can be
+      // resumed. exit(0) kills the process, and Android treats a process that
+      // kills itself as a crash for the purposes of restart behaviour.
+      await SystemNavigator.pop();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      // canPop stays false so the pop is always ours to decide. Returning
+      // true here would let the first back press close the app before the
+      // dialog could be answered.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) => _onBack(didPop),
+      child: Scaffold(
       body: MeshBackground(
         child: SafeArea(
           bottom: false,
@@ -232,25 +320,25 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                   NavTab.dashboard => DashboardScreen(
                       client: widget.client,
                       live: _live,
+                      symbol: _symbol,
+                      onSwipe: _swipe,
                       entitled: _entitled,
                       onSubscribe: () =>
                           setState(() => _tab = NavTab.profile),
                       interval: _interval,
                       onPickInterval: (iv) => setState(() => _interval = iv),
-                      // an untrained timeframe has no probability to show, so
-                      // it goes where the truthful answer lives
-                      onNeedsTraining: (iv) => setState(() {
-                        _interval = iv;
-                        _tab = NavTab.training;
-                      }),
+                      // Selecting an untrained timeframe still selects it —
+                      // the dashboard draws the "no model" panel with the
+                      // train command in place. It used to jump to a separate
+                      // tab, which meant losing your place to read one line.
+                      onNeedsTraining: (iv) =>
+                          setState(() => _interval = iv),
                     ),
                   NavTab.market =>
-                    MarketScreen(client: widget.client, onPick: _pick),
-                  NavTab.training => TrainingScreen(
+                    MarketScreen(
                       client: widget.client,
-                      symbol: _symbol,
-                      interval: _interval,
-                      onPickInterval: (iv) => setState(() => _interval = iv),
+                      onPick: _pick,
+                      onOrderChanged: _loadOrder,
                     ),
                   // "the last page to buy the subscription" — for an
                   // unsubscribed account this tab IS the paywall, and it is
@@ -276,18 +364,14 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       extendBody: true,
       bottomNavigationBar: FrostedNav(
         current: _tab,
-        locked: _entitled
-            ? const {}
-            : const {NavTab.market, NavTab.training},
+        locked: _entitled ? const {} : const {NavTab.market},
         // A locked tab still responds — it takes you to the page that
         // explains why it is locked. A padlock that does nothing when pressed
         // reads as a broken app rather than a paywall.
-        onSelect: (t) => setState(() => _tab =
-            (!_entitled && (t == NavTab.market || t == NavTab.training))
-                ? NavTab.profile
-                : t),
+        onSelect: (t) => setState(() =>
+            _tab = (!_entitled && t == NavTab.market) ? NavTab.profile : t),
       ),
-    );
+    ));
   }
 
   /// Tapping the bell silences the pair currently selected.
@@ -375,12 +459,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               Text(_symbol, style: Obsidian.labelSm(size: 10.5,
                   color: Obsidian.outline)),
             const Spacer(),
-            // only on Training, because that is the one screen driven by the
-            // pair you picked. The dashboard serves BTCUSDT whatever is
-            // selected, so showing "ETHUSDT" above BTC data would be a
-            // contradiction the user has no way to resolve — and the
-            // dashboard names its own pair in the header anyway
-            if (_tab == NavTab.training)
+            // The dashboard names its own pair in its header, so repeating
+            // it here would be noise on the screen that needs it least.
+            if (_tab == NavTab.market)
               Text('$_symbol · $_interval',
                   style: Obsidian.labelSm(size: 11)),
           ],

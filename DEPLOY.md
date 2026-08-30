@@ -95,7 +95,40 @@ docker compose logs -f api
 
 The collector keeps every interval current from then on.
 
-## Reaching it from your phone — pick one
+## How it is actually deployed (2026-08-29)
+
+Public HTTPS, no VPN. Caddy terminates TLS on 443 with a Let's Encrypt
+certificate and proxies to the API on loopback; `BIND_ADDR=127.0.0.1` in
+`.env` means Caddy is the only route in and port 8787 is closed from outside.
+
+The hostname is `165.232.127.165.sslip.io` — sslip.io resolves any IP embedded
+in the name back to that IP, which gets a real certificate with no domain
+purchase. **It also embeds the server address, so moving the droplet changes
+the URL and breaks every installed app.** Buy a real domain before shipping
+this to anyone else; it is a one-line change in the Caddyfile and a rebuild of
+the app.
+
+Because the login endpoint is now reachable by anyone, `api/throttle.py`
+limits sign-in attempts per IP *and* per identifier — the second is what stops
+a botnet spread across many addresses grinding one account. Caddy passes
+`X-Forwarded-For`, and the API trusts that header only from loopback.
+
+### Deploying a code change — read this first
+
+`api/` is **not** a bind mount. The code is baked into the image by
+`COPY . .`, so:
+
+```bash
+rsync -az api/ bot:/root/tradingbot/api/
+ssh bot 'cd /root/tradingbot && docker compose up -d --build'
+```
+
+Without `--build` the container restarts on the *old* image and the change
+silently does not exist. That has already happened once here: rate limiting
+was rsynced, the container restarted, and twelve wrong passwords in a row
+were still accepted at full speed.
+
+## The older option: Tailscale
 
 The compose file publishes the port on **127.0.0.1 only**, deliberately.
 Binding `0.0.0.0` in Docker writes iptables rules that bypass `ufw`, so a

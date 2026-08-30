@@ -18,7 +18,16 @@ numpy>=1.24
 # anthropic>=0.60
 
 # Agent 5 (the judge) needs these:
-scikit-learn>=1.3          # logistic baseline, isotonic calibration, metrics
+# Upper bound is not caution, it is a pickle-compatibility boundary. The
+# frozen judges are pickled estimators: models fitted on the dev Mac (1.6.1)
+# are loaded by the container (1.9.0), and sklearn warns that unpickling
+# across versions "might lead to breaking code or invalid results".
+#
+# Verified 2026-08-30: same model, same deterministic input, both versions
+# produce byte-identical probabilities (sha256 b28613be...). It is fine TODAY.
+# A major version could change that silently — wrong numbers, no error — so
+# the door is held shut until someone re-runs that comparison.
+scikit-learn>=1.3,<2       # logistic baseline, isotonic calibration, metrics
 joblib>=1.3                # freezing the fitted model to disk (ships with sklearn)
 
 # Optional but recommended: gradient boosting for the interaction terms.

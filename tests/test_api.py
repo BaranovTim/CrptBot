@@ -197,10 +197,26 @@ def test_dashboard_payload_survives_strict_json():
     return True
 
 
+def _an_untrained_symbol() -> str:
+    """A pair with no fitted model, found rather than hardcoded.
+
+    These two tests used to name ETHUSDT. Training ETH then broke both of
+    them — a false failure that says nothing about the code, and the kind
+    that teaches you to ignore a red suite. Which pairs are trained is a
+    property of `output/`, so ask it.
+    """
+    from core import TIMEFRAMES, is_trained
+
+    for sym in ("XRPUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "TESTUSDT"):
+        if not any(is_trained(sym, tf) for tf in TIMEFRAMES):
+            return sym
+    raise AssertionError("no untrained pair left to test with")
+
+
 def test_untrained_pairs_are_reported_as_untrained():
     """The app routes on this. Getting it wrong shows odds with no model."""
     from api.service import get_service
-    info = get_service().training("ETHUSDT")
+    info = get_service().training(_an_untrained_symbol())
     assert info["trained"] is False, info
     assert "train.py" in info.get("command", ""), info.get("command")
     return True
@@ -211,11 +227,16 @@ def test_training_is_reported_per_timeframe_not_per_symbol():
     and BTCUSDT having a 1h model says nothing about its 5m."""
     from api.service import get_service
     svc = get_service()
-    rows = {t["interval"]: t["trained"] for t in svc.timeframes("ETHUSDT")}
+    rows = {t["interval"]: t["trained"]
+            for t in svc.timeframes(_an_untrained_symbol())}
     assert rows and not any(rows.values()), rows
 
     btc = svc.training("BTCUSDT", interval="1h")
     assert btc["interval"] == "1h" and btc["htf"] == "4h", btc
+
+    # and a trained one really does report per timeframe
+    eth = {t["interval"]: t["trained"] for t in svc.timeframes("ETHUSDT")}
+    assert all(eth.values()), eth
     return True
 
 
@@ -577,4 +598,129 @@ def test_a_grant_from_another_process_reaches_the_running_api():
         assert writer.get("alice").entitled
         assert reader.get("alice").entitled, \
             "the running API cannot see a grant made by the CLI"
+    return True
+
+
+def test_the_login_endpoint_cannot_be_ground_through():
+    """Public exposure makes /api/auth/login a brute-force target.
+
+    scrypt costs ~60ms a guess, which alone still allows ~1.4M attempts a day
+    from one client. Two windows: per-IP so one attacker cannot grind a
+    dictionary, and per-identifier so a botnet spread over many addresses
+    cannot grind one account either.
+    """
+    from api.throttle import ID_LIMIT, IP_LIMIT, Throttle
+
+    t = Throttle()
+    for i in range(IP_LIMIT):
+        assert t.check("1.2.3.4", f"user{i}") is None, i
+    assert t.check("1.2.3.4", "userX") is not None, "per-IP limit never bit"
+
+    # a different address is a different bucket, but ONE account is still
+    # protected across all of them
+    t2 = Throttle()
+    for i in range(ID_LIMIT):
+        assert t2.check(f"10.0.0.{i}", "victim") is None, i
+    assert t2.check("10.0.0.99", "victim") is not None, \
+        "a spread-out attack on one account was not limited"
+    return True
+
+
+def test_a_successful_sign_in_clears_the_counters():
+    """Otherwise mistyping your password three times then getting it right
+    still counts against you, and a shared address locks out the innocent."""
+    from api.throttle import ID_LIMIT, Throttle
+
+    t = Throttle()
+    # right up to the edge of the per-identifier window, which is the tighter
+    # of the two and therefore the one that bites first for one account
+    for _ in range(ID_LIMIT - 1):
+        assert t.check("1.2.3.4", "tim") is None
+    t.forget("1.2.3.4", "tim")
+    # the whole budget is back, not merely one more attempt
+    for i in range(ID_LIMIT - 1):
+        assert t.check("1.2.3.4", "tim") is None, i
+    return True
+
+
+def test_a_forwarded_ip_is_trusted_only_from_loopback():
+    """Behind Caddy every request arrives from 127.0.0.1, so the header has to
+    be honoured — but honouring it from a direct connection would let one
+    client mint a fresh identity per request and bypass the limit entirely."""
+    from api.throttle import client_ip
+
+    class FakeHandler:
+        def __init__(self, peer, fwd):
+            self.client_address = (peer, 0)
+            self.headers = {"X-Forwarded-For": fwd} if fwd else {}
+
+    assert client_ip(FakeHandler("127.0.0.1", "9.9.9.9")) == "9.9.9.9"
+    assert client_ip(FakeHandler("127.0.0.1", "9.9.9.9, 10.0.0.1")) == "9.9.9.9"
+    # a direct caller does NOT get to name itself
+    assert client_ip(FakeHandler("203.0.113.7", "9.9.9.9")) == "203.0.113.7"
+    assert client_ip(FakeHandler("203.0.113.7", None)) == "203.0.113.7"
+    return True
+
+
+def test_a_session_survives_a_restart_and_is_never_stored_in_the_clear():
+    """Restarting the API used to sign everybody out.
+
+    Sessions lived only in memory, so every `docker compose up -d` invalidated
+    every token. Observed in testing on 2026-08-30: a redeploy mid-session
+    produced "The server rejected the token" on a phone that had signed in
+    two minutes earlier. On a subscription product that is every customer,
+    every deploy.
+
+    The file must also be useless if copied: a session token is a bearer
+    credential, so only its SHA-256 is written.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from api.accounts import Accounts
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "accounts.json"
+        acc = Accounts(path)
+        u = acc.register("tim", "password-long-enough")
+        token = acc.start_session(u)
+        assert acc.session_user(token).identifier == "tim"
+
+        # the raw token must not be recoverable from disk
+        raw = acc.sessions_path.read_text()
+        assert token not in raw, "session token written in the clear"
+
+        # a brand new process reading the same files
+        restarted = Accounts(path)
+        again = restarted.session_user(token)
+        assert again is not None, "restart signed the user out"
+        assert again.identifier == "tim"
+
+        # and signing out still revokes, across processes
+        restarted.end_session(token)
+        assert Accounts(path).session_user(token) is None
+    return True
+
+
+def test_changing_a_password_kills_sessions_everywhere():
+    """A password change has to invalidate tokens on OTHER devices too, or
+    'change your password' does not mean what anybody thinks it means."""
+    import tempfile
+    from pathlib import Path
+
+    from api.accounts import Accounts
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "accounts.json"
+        acc = Accounts(path)
+        u = acc.register("tim", "password-long-enough")
+        phone = acc.start_session(u)
+        tablet = acc.start_session(u)
+
+        acc.set_password("tim", "a-different-password")
+
+        assert acc.session_user(phone) is None
+        assert acc.session_user(tablet) is None
+        # and it survives a restart as revoked, not as forgotten-then-restored
+        assert Accounts(path).session_user(phone) is None
     return True

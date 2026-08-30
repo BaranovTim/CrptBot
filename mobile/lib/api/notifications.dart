@@ -193,6 +193,102 @@ class Notifications {
     );
   }
 
+  /// Fire one notification of every kind, so you can see what they look like.
+  ///
+  /// POSTED IMMEDIATELY, NOT SCHEDULED
+  ///     The first version booked these 8s apart through `zonedSchedule`, to
+  ///     leave time to lock the phone. That is the wrong mechanism for a
+  ///     test: `AndroidScheduleMode.inexactAllowWhileIdle` maps to
+  ///     `setAndAllowWhileIdle`, which Android is free to batch and defer —
+  ///     correct for a news alert two hours out, unusable for "show me now",
+  ///     where a delay is indistinguishable from a bug.
+  ///
+  ///     `show()` posting immediately was verified on an Android 15 emulator:
+  ///     all five appear in the shade, correctly grouped, within a second.
+  ///
+  ///     `show()` posts straight to the shade. A high-importance channel makes
+  ///     it a heads-up banner, which is exactly the thing worth looking at.
+  ///
+  ///     They are spaced ~1.4s so they arrive as separate banners instead of
+  ///     collapsing into one group you cannot read. That delay is a plain
+  ///     `await`, so keep the app open while it runs.
+  ///
+  ///     The bodies are real examples with real-looking numbers, because the
+  ///     thing worth checking is whether a glanceable notification tells you
+  ///     enough to act — and that depends on the wording, not on whether the
+  ///     plumbing fires.
+  Future<int> sendTestSuite({String symbol = 'BTCUSDT'}) async {
+    if (!_ready) await init();
+    final now = DateTime.now().toUtc();
+
+    final samples = <Map<String, dynamic>>[
+      {
+        'kind': 'signal',
+        'severity': 'high',
+        'title': 'BUY · $symbol 1h',
+        'body': 'p(up) 0.68 · EV +0.42R · entry 77,940 · '
+            'stop 76,180 · target 81,460',
+      },
+      {
+        'kind': 'spike',
+        'severity': 'high',
+        'title': 'Spike · $symbol',
+        'body': '+2.4% in 3 minutes on 4.1x volume. '
+            'The 1h analysis is being recomputed.',
+      },
+      {
+        'kind': 'whale',
+        'severity': 'medium',
+        'title': 'Whale · MSTR',
+        'body': 'Form 4: open-market purchase, 12,400 shares (~\$4.1M) '
+            'by an officer.',
+      },
+      {
+        'kind': 'news',
+        'severity': 'medium',
+        'title': 'News · crypto',
+        'body': 'SEC closes its inquiry without action. '
+            'Novelty 0.81, magnitude 0.64.',
+      },
+      {
+        'kind': 'calendar',
+        'severity': 'high',
+        'title': 'FOMC in 60 minutes',
+        'body': 'Rate decision at 14:00 New York. '
+            'Spreads usually widen beforehand.',
+      },
+    ];
+
+    for (var i = 0; i < samples.length; i++) {
+      final m = samples[i];
+      final at = now.subtract(Duration(minutes: 2 + i));
+      final a = Alert.fromJson({
+        'id': 'test-${m['kind']}-${now.millisecondsSinceEpoch}',
+        'kind': m['kind'],
+        'title': m['title'],
+        'body': m['body'],
+        'severity': m['severity'],
+        'symbol': symbol,
+        'url': '',
+        'seq': 0,
+        'at': at.toIso8601String(),
+        'detected_at': at.toIso8601String(),
+        'extra': <String, String>{},
+      });
+      await _plugin.show(
+        _idFor(a.id),
+        a.title,
+        '${a.body}\n${a.whenLine()}',
+        _details(a.kind, a.severity),
+        payload: a.id,
+      );
+      if (i < samples.length - 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 1400));
+      }
+    }
+    return samples.length;
+  }
+
   /// Books the pre-event warnings the OS will deliver even if the app is gone.
   ///
   /// Re-booked wholesale on every calendar refresh: the Fed occasionally moves

@@ -23,10 +23,16 @@ class MarketScreen extends StatefulWidget {
     super.key,
     required this.client,
     required this.onPick,
+    required this.onOrderChanged,
   });
 
   final ApiClient client;
   final void Function(Coin coin) onPick;
+
+  /// The dashboard swipes through this list, so the shell has to be told
+  /// when the order changes — otherwise a drag here would silently disagree
+  /// with what a swipe there does.
+  final VoidCallback onOrderChanged;
 
   @override
   State<MarketScreen> createState() => _MarketScreenState();
@@ -93,17 +99,23 @@ class _MarketScreenState extends State<MarketScreen> {
       onRefresh: _load,
       backgroundColor: Obsidian.surfaceContainer,
       color: Obsidian.primary,
-      child: ListView(
-        // addRepaintBoundaries: a BackdropFilter samples what is painted
-        // BEHIND it, and ListView puts every child in its own RepaintBoundary
-        // by default. Inside that layer the backdrop is empty, so the glass
-        // panels blur nothing and paint nothing — the screen comes up blank
-        // with no error anywhere. Opting out gives the filter a real backdrop.
-        addRepaintBoundaries: false,
+      // ReorderableListView, because the order is now functional: the
+      // dashboard swipes through this list, so dragging a coin up decides
+      // which pair is one flick away.
+      //
+      // buildDefaultDragHandles is false and each row carries its own handle.
+      // The default on mobile is long-press-anywhere, which collides with the
+      // card's own tap target and is invisible until you discover it — the
+      // same mistake swipe-to-delete made on this screen.
+      child: ReorderableListView(
+        buildDefaultDragHandles: false,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
             Obsidian.containerPadding, Obsidian.navClearance + 24),
-        children: [
+        onReorderItem: _onReorder,
+        header: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
           Row(
             children: [
               Expanded(
@@ -127,42 +139,45 @@ class _MarketScreenState extends State<MarketScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 22),
-          if (_error != null)
-            Text(_error!, style: Obsidian.body(color: Obsidian.error)),
-          for (final c in _coins) ...[
-            Dismissible(
-              key: ValueKey(c.symbol),
-              direction: DismissDirection.endToStart,
-              background: Container(
-                alignment: Alignment.centerRight,
-                padding: const EdgeInsets.only(right: 24),
-                decoration: BoxDecoration(
-                  color: Obsidian.red.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(Obsidian.rLg),
-                ),
-                child: const Icon(Icons.delete_outline_rounded,
-                    color: Obsidian.redSoft),
-              ),
-              onDismissed: (_) => _remove(c),
-              child: _coinCard(c),
-            ),
-            const SizedBox(height: Obsidian.gutter),
+            const SizedBox(height: 22),
+            if (_error != null)
+              Text(_error!, style: Obsidian.body(color: Obsidian.error)),
           ],
-          if (_coins.isNotEmpty)
-            Text(
-              'Tap the bell to silence a pair\'s alerts, × to stop '
-              'following it, or swipe a row. Only pairs with a fitted model '
-              'produce a probability — the rest are shown so you can see '
-              'what has not been trained.',
-              style: Obsidian.body(color: Obsidian.outline, size: 11.5),
+        ),
+        footer: _coins.isEmpty
+            ? null
+            : Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Drag ⠿ to reorder — the dashboard swipes through this list '
+                  'in this order. Tap the bell to silence a pair, × to stop '
+                  'following it. Only pairs with a fitted model produce a '
+                  'probability.',
+                  style: Obsidian.body(color: Obsidian.outline, size: 11.5),
+                ),
+              ),
+        children: [
+          for (var i = 0; i < _coins.length; i++)
+            Padding(
+              key: ValueKey(_coins[i].symbol),
+              padding: const EdgeInsets.only(bottom: Obsidian.gutter),
+              child: _coinCard(_coins[i], i),
             ),
         ],
       ),
     );
   }
 
-  Widget _coinCard(Coin c) {
+  /// `newIndex` is post-removal — `onReorderItem` has already adjusted it.
+  Future<void> _onReorder(int oldIndex, int newIndex) async {
+    // Move the visible list first so the row lands where the finger left it.
+    // The store is the source of truth; a later _load() reconciles.
+    setState(() => _coins.insert(newIndex, _coins.removeAt(oldIndex)));
+    await Watchlist.instance.reorder(oldIndex, newIndex);
+    widget.onOrderChanged();
+  }
+
+  Widget _coinCard(Coin c, int index) {
     final up = (c.changePct ?? 0) >= 0;
     return GlassPanel(
       padding: const EdgeInsets.all(16),
@@ -170,8 +185,8 @@ class _MarketScreenState extends State<MarketScreen> {
       child: Row(
         children: [
           Container(
-            width: 52,
-            height: 52,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
               color: Obsidian.surfaceLowest,
               shape: BoxShape.circle,
@@ -181,14 +196,21 @@ class _MarketScreenState extends State<MarketScreen> {
             child: Text(c.short,
                 style: Obsidian.labelSm(color: Obsidian.onSurface, size: 12)),
           ),
-          const SizedBox(width: 14),
+          const SizedBox(width: 11),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${c.name} / USDT',
-                    style: Obsidian.bodyLg()
-                        .copyWith(fontWeight: FontWeight.w600)),
+                // Explicit size, not the bodyLg default. Once the row gained
+                // a drag handle, a bell and a close button the name column is
+                // ~93dp wide, and bodyLg needs more than that for eight
+                // characters — so the longest-priced pair, BTC, was the one
+                // rendering as "BTC/US…".
+                Text('${c.short}/USDT',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Obsidian.bodyLg().copyWith(
+                        fontWeight: FontWeight.w600, fontSize: 14.5)),
                 const SizedBox(height: 6),
                 Row(
                   children: [
@@ -225,21 +247,47 @@ class _MarketScreenState extends State<MarketScreen> {
               ],
             ),
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(_price(c.price),
-                  style: Obsidian.dataTable(size: 15, w: FontWeight.w700)),
-              const SizedBox(height: 4),
-              Text(
-                  '${up ? '+' : ''}${(c.changePct ?? 0).toStringAsFixed(2)}%',
-                  style: Obsidian.dataTable(
-                      size: 12.5,
-                      color: up ? Obsidian.green : Obsidian.red,
-                      w: FontWeight.w700)),
-            ],
+          // Bounded, and scaled down rather than allowed to grow.
+          //
+          // BTC's price is several characters wider than SOL's, and an
+          // unbounded price column took that width out of the pair name —
+          // so the row that mattered most read "BTC/US…". The identity of a
+          // row must never be the thing that gets clipped to make room for
+          // a number that can shrink instead.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 104),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(_price(c.price),
+                      maxLines: 1,
+                      style:
+                          Obsidian.dataTable(size: 15, w: FontWeight.w700)),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                    '${up ? '+' : ''}${(c.changePct ?? 0).toStringAsFixed(2)}%',
+                    maxLines: 1,
+                    style: Obsidian.dataTable(
+                        size: 12.5,
+                        color: up ? Obsidian.green : Obsidian.red,
+                        w: FontWeight.w700)),
+              ],
+            ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 2),
+          ReorderableDragStartListener(
+            index: index,
+            child: const SizedBox(
+              width: 34,
+              height: 40,
+              child: Icon(Icons.drag_handle_rounded,
+                  size: 19, color: Obsidian.outline),
+            ),
+          ),
           // Swipe-to-delete already worked, and was invisible: the only hint
           // sat BELOW every row, so on a list longer than a screen you would
           // never meet it. A gesture nobody discovers is not a feature.
@@ -283,9 +331,9 @@ class _MarketScreenState extends State<MarketScreen> {
           // 40px: below ~44 a target next to a tappable card gets hit by
           // accident, and this one removes a coin
           child: SizedBox(
-              width: 40,
+              width: 36,
               height: 40,
-              child: Icon(icon, size: 19, color: color)),
+              child: Icon(icon, size: 18, color: color)),
         ),
       );
 

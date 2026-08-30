@@ -64,7 +64,11 @@ class LiveTick {
 class LivePriceService {
   LivePriceService({this.symbol = 'BTCUSDT', this.emitEvery = const Duration(milliseconds: 120)});
 
-  final String symbol;
+  /// Not final: the dashboard can now be swiped between pairs, and each pair
+  /// is a different Binance socket. Recreating the whole service per swipe
+  /// would drop the pump and watchdog timers and rebuild them, which is a lot
+  /// of churn for a URL change.
+  String symbol;
 
   /// How often the UI is allowed to hear about a new quote.
   final Duration emitEvery;
@@ -181,6 +185,29 @@ class LivePriceService {
     final delay = Duration(seconds: (1 << _attempt).clamp(1, 30));
     _attempt = (_attempt + 1).clamp(0, 5);
     _retry = Timer(delay, _connect);
+  }
+
+  /// Point the socket at a different pair.
+  ///
+  /// The old price is cleared immediately rather than left on screen. Showing
+  /// the previous coin's price under a new coin's name for the second or two
+  /// before the first frame arrives is the kind of wrong that looks right —
+  /// far worse than a dash.
+  Future<void> switchTo(String next) async {
+    final want = next.trim().toUpperCase();
+    if (want.isEmpty || want == symbol) return;
+    symbol = want;
+    _retry?.cancel();
+    await _sub?.cancel();
+    _sub = null;
+    await _ch?.sink.close();
+    _ch = null;
+    _connecting = false;
+    _pending = null;
+    _last = LiveTick(at: DateTime.now());
+    _lastFrame = DateTime.fromMillisecondsSinceEpoch(0);
+    if (!_out.isClosed) _out.add(_last);      // blank the display at once
+    if (!_closed) _connect();
   }
 
   Future<void> dispose() async {

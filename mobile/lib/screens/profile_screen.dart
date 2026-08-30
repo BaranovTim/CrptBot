@@ -42,6 +42,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _checking = true;
   bool _linked = false;
+  bool _testing = false;
   int _muted = 0;
 
   @override
@@ -77,15 +78,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _muted = following.where((s) => muted.contains(s)).length);
   }
 
+  /// Fire one of every notification kind so they can be seen for real.
+  ///
+  /// Keep the app open while this runs: the spacing between them is an
+  /// `await`, not a scheduled alarm. Scheduling was tried first and Android
+  /// silently never delivered it — see `sendTestSuite`.
+  Future<void> _sendTests() async {
+    if (!Notifications.instance.granted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Obsidian.surfaceHigh,
+        content: Text(
+            'Notifications are turned off for ThusIldy in system settings, '
+            'so nothing would be delivered.',
+            style: Obsidian.body()),
+      ));
+      return;
+    }
+    final n = await Notifications.instance.sendTestSuite();
+    if (!mounted) return;
+    setState(() => _testing = true);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      backgroundColor: Obsidian.surfaceHigh,
+      duration: const Duration(seconds: 6),
+      content: Text(
+          '$n test alerts booked. Lock your phone now — the first arrives in '
+          '8 seconds, then one every 7.',
+          style: Obsidian.body()),
+    ));
+  }
+
   Future<void> _editHost() async {
     final ctrl = TextEditingController(text: widget.client.base);
     final saved = await _prompt(
       title: 'Server address',
-      body: 'Where your ThusIldy server is reachable. Over Tailscale this is '
-          'the 100.x.y.z address, and Tailscale has to stay connected on '
-          'this phone.',
+      body: 'Where your ThusIldy server is reachable. Use the https:// '
+          'address — over plain http your password and session token travel '
+          'in clear text.',
       ctrl: ctrl,
-      hint: 'http://100.64.0.1:8787',
+      hint: 'https://your-server',
     );
     if (saved == null) return;
     widget.client.base = saved;
@@ -214,6 +245,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             _divider(),
             _tile(
+              icon: Icons.send_rounded,
+              title: 'Send test notifications',
+              subtitle: _testing
+                  ? 'Sent — pull down the shade to see them'
+                  : 'One of each kind, right now',
+              trailing: _testing
+                  ? const Icon(Icons.check_rounded,
+                      size: 18, color: Obsidian.greenDim)
+                  : const Icon(Icons.chevron_right_rounded,
+                      size: 18, color: Obsidian.outline),
+              onTap: _sendTests,
+            ),
+            _divider(),
+            _tile(
               icon: Icons.notifications_paused_rounded,
               title: 'Silenced pairs',
               subtitle: _muted == 0
@@ -260,8 +305,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _tile(
               icon: Icons.query_stats_rounded,
               title: 'Accuracy',
-              subtitle: 'Backtested at or near chance (AUC 0.43–0.53, where '
-                  '0.5 is a coin flip). Treat every number as a hypothesis.',
+              subtitle: 'Most timeframes backtest at or near chance (AUC '
+                  '0.46–0.53, where 0.5 is a coin flip). The 1h models are '
+                  'the exception at 0.52–0.54 across four assets. Small and '
+                  'consistent is not the same as reliable.',
             ),
           ]),
           const SizedBox(height: 26),

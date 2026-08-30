@@ -39,8 +39,17 @@ services:
     build: .
     image: tradingbot:latest
     restart: unless-stopped
+    # Every pair that has fitted models must be named here. `--symbol`
+    # defaults to BTCUSDT alone, so ETH/SOL/ADA were served from a store that
+    # nothing was updating — the app correctly showed STALE and there was no
+    # process whose job it was to fix that.
+    #
+    # Adding a coin in the app does NOT make the server collect it. The
+    # watchlist is a device preference; this list is what the server records.
     command: >
       python3 collect.py
+      --symbol BTCUSDT --symbol ETHUSDT
+      --symbol SOLUSDT --symbol ADAUSDT
       --interval 1m --interval 5m --interval 15m
       --interval 1h --interval 4h --interval 1d
     healthcheck:

@@ -8,6 +8,7 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
+import 'package:tradingbot_app/api/watchlist.dart';
 import 'package:tradingbot_app/main.dart';
 
 void main() {
@@ -105,5 +106,43 @@ void main() {
       'trained': false,
     });
     expect(c.trained, isFalse);
+  });
+
+  test('dragging a coin down lands it where it was dropped', () async {
+    // The off-by-one that makes drag-to-reorder feel broken: with the old
+    // `onReorder` the framework reported a PRE-removal index, so removing
+    // first and inserting at the raw value put every downward drag one row
+    // short. `onReorderItem` adjusts it, and Watchlist.reorder must therefore
+    // NOT adjust it again — double-correcting is the same bug mirrored.
+    SharedPreferences.setMockInitialValues({});
+    final w = Watchlist.instance;
+
+    await w.load();
+    // start from a known order
+    for (final s in ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'ADAUSDT']) {
+      await w.add(s);
+    }
+    final start = await w.load();
+    expect(start.first, 'BTCUSDT');
+
+    // drag the first item to position 2 (post-removal coordinates)
+    final moved = await w.reorder(0, 2);
+    expect(moved[2], start.first,
+        reason: 'the dragged pair did not land at the index it was dropped on');
+    expect(moved.length, start.length, reason: 'reorder changed the count');
+    expect(moved.toSet(), start.toSet(), reason: 'reorder lost or added a pair');
+
+    // and dragging it back restores the original order exactly
+    final back = await w.reorder(2, 0);
+    expect(back, start);
+  });
+
+  test('reordering survives an out-of-range index instead of throwing', () async {
+    // The list can be reloaded underneath a drag in flight.
+    SharedPreferences.setMockInitialValues({});
+    final w = Watchlist.instance;
+    final before = await w.load();
+    final after = await w.reorder(99, 0);
+    expect(after, before);
   });
 }

@@ -78,11 +78,20 @@ INCLUDED = [
 
 # Said on the paywall, deliberately. Somebody about to pay is entitled to know
 # what the numbers behind the paywall are worth.
+# Updated 2026-08-30 after fitting four symbols across six timeframes. The
+# earlier wording ("at or near chance, AUC 0.43-0.53") was drawn partly from a
+# BTC 1h fit that used a shorter window than the rest; refitted on the same
+# 2023-2026 span it scores 0.540, not 0.430. Saying less than is true is as
+# much a misrepresentation as saying more, so this states both halves.
 DISCLOSURE = (
     "This is analysis software, not financial advice, and it places no "
-    "orders. Model accuracy is currently at or near chance on backtests "
-    "(AUC 0.43-0.53, where 0.5 is a coin flip). Do not trade money you "
-    "cannot afford to lose."
+    "orders. Most timeframes score at or near chance on backtests (AUC "
+    "0.46-0.53, where 0.5 is a coin flip). The 1-hour models are the "
+    "exception: 0.52-0.54 across BTC, ETH, SOL and ADA over 2023-2026, with "
+    "clean shuffle controls. That is a small and consistent edge, not a "
+    "reliable one -- it has not been validated on a period held out from "
+    "fitting, and no result here has been shown to survive trading costs. "
+    "Do not trade money you cannot afford to lose."
 )
 
 

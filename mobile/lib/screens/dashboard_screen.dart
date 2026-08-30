@@ -21,6 +21,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:url_launcher/url_launcher.dart';
 
@@ -38,6 +39,8 @@ class DashboardScreen extends StatefulWidget {
     super.key,
     required this.client,
     required this.live,
+    required this.symbol,
+    required this.onSwipe,
     required this.entitled,
     required this.onSubscribe,
     required this.interval,
@@ -46,6 +49,18 @@ class DashboardScreen extends StatefulWidget {
   });
 
   final ApiClient client;
+
+  /// The pair being shown.
+  ///
+  /// This did not exist until 2026-08-30, and its absence was the bug: the
+  /// screen called `client.dashboard(interval:)` with no symbol, so the
+  /// server answered with ITS default — BTCUSDT — no matter what you picked
+  /// in Market. Selecting ETH set the shell's `_symbol`, the top bar agreed,
+  /// and the dashboard quietly served BTC.
+  final String symbol;
+
+  /// Swipe left/right to the next or previous followed pair. -1 or +1.
+  final ValueChanged<int> onSwipe;
 
   /// Whether this account may see the analysis, or only the graph.
   ///
@@ -61,8 +76,9 @@ class DashboardScreen extends StatefulWidget {
   final String interval;
   final ValueChanged<String> onPickInterval;
 
-  /// Called when the chosen timeframe has no model — the training screen is
-  /// the honest destination, not an error panel.
+  /// Called when the chosen timeframe has no model. It no longer navigates
+  /// anywhere — the panel explaining it is drawn in place — but the shell
+  /// still wants to know, so the timeframe bar can mark the gap.
   final ValueChanged<String> onNeedsTraining;
 
   /// Price arrives here from Binance directly, not through the server. The
@@ -102,7 +118,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _loadConsensus() async {
     try {
-      final c = await widget.client.consensus();
+      final c = await widget.client.consensus(symbol: widget.symbol);
       if (mounted) setState(() => _consensus = c);
     } catch (_) {
       // supporting context; its absence is not worth an error state
@@ -112,7 +128,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void didUpdateWidget(covariant DashboardScreen old) {
     super.didUpdateWidget(old);
-    if (old.interval != widget.interval) {
+    // a swipe changes the pair; a timeframe tap changes the interval. Both
+    // invalidate everything on screen, and neither may leave the previous
+    // coin's numbers visible under the new coin's name.
+    if (old.interval != widget.interval || old.symbol != widget.symbol) {
       setState(() {
         _data = null;
         _series = const [];
@@ -152,7 +171,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // hammer the server with calls whose answer is known in advance.
     if (!widget.entitled) {
       try {
-        final series = await widget.client.chart(interval: iv, n: 96);
+        final series =
+            await widget.client.chart(symbol: widget.symbol, interval: iv, n: 96);
         if (!mounted) return;
         setState(() {
           _series = series;
@@ -168,8 +188,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     try {
       final results = await Future.wait([
-        widget.client.dashboard(interval: iv),
-        widget.client.chart(interval: iv, n: 96),
+        widget.client.dashboard(symbol: widget.symbol, interval: iv),
+        widget.client.chart(symbol: widget.symbol, interval: iv, n: 96),
         widget.client.whales(limit: 6),
       ]);
       if (!mounted) return;
@@ -200,14 +220,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  /// Horizontal drag -> previous/next pair.
+  ///
+  /// `onHorizontalDragEnd` rather than a PageView: the body is a ListView
+  /// inside a RefreshIndicator, and nesting that in a horizontal PageView
+  /// makes both gestures fight — the vertical scroll starts stealing
+  /// horizontal drags and pull-to-refresh becomes unreliable. Flutter's
+  /// arena already separates a horizontal drag from a vertical one, so
+  /// listening for the one we want leaves scrolling and refresh untouched.
+  ///
+  /// The threshold is on VELOCITY, not distance: a slow diagonal drag while
+  /// scrolling should not change coin, and a quick flick should.
+  Widget _swipeable(Widget child) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragEnd: (d) {
+          final v = d.primaryVelocity ?? 0;
+          if (v.abs() < 240) return;          // too slow to be deliberate
+          widget.onSwipe(v < 0 ? 1 : -1);     // drag left = next
+        },
+        child: child,
+      );
+
   @override
   Widget build(BuildContext context) {
-    if (!widget.entitled) return _freeBody();
-    if (_untrained != null) return _untrainedPanel();
+    if (!widget.entitled) return _swipeable(_freeBody());
+    if (_untrained != null) return _swipeable(_untrainedPanel());
     final d = _data;
-    if (d == null) return _placeholder();
+    if (d == null) return _swipeable(_placeholder());
 
-    return RefreshIndicator(
+    return _swipeable(RefreshIndicator(
       onRefresh: _load,
       backgroundColor: Obsidian.surfaceContainer,
       color: Obsidian.primary,
@@ -246,7 +287,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _note(d),
         ],
       ),
-    );
+    ));
   }
 
   /// What an unsubscribed account sees: the graph, and an honest account of
@@ -894,13 +935,54 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 style: Obsidian.body(size: 13.5),
               ),
               const SizedBox(height: 18),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                    backgroundColor: Obsidian.primary,
-                    foregroundColor: Obsidian.onPrimary),
-                onPressed: () => widget.onNeedsTraining(widget.interval),
-                child: const Text('How to train it'),
+              // The command, in place. This used to be a button into a whole
+              // Training tab; the tab is gone, and the only part of it anyone
+              // needed was this line.
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Obsidian.surfaceLowest.withValues(alpha: 0.8),
+                  borderRadius: BorderRadius.circular(Obsidian.rMd),
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SelectableText(
+                        'python3 train.py --symbol ${widget.symbol} '
+                        '--intervals ${widget.interval}',
+                        style: Obsidian.dataTable(size: 11.5),
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(
+                            text: 'python3 train.py --symbol ${widget.symbol} '
+                                '--intervals ${widget.interval}'));
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          backgroundColor: Obsidian.surfaceHigh,
+                          duration: const Duration(seconds: 2),
+                          content:
+                              Text('Copied', style: Obsidian.body()),
+                        ));
+                      },
+                      child: const Padding(
+                        padding: EdgeInsets.only(left: 10),
+                        child: Icon(Icons.copy_rounded,
+                            size: 16, color: Obsidian.outline),
+                      ),
+                    ),
+                  ],
+                ),
               ),
+              const SizedBox(height: 10),
+              Text('Runs on the server, not the phone — fitting is a batch '
+                  'job measured in minutes.',
+                  textAlign: TextAlign.center,
+                  style: Obsidian.body(color: Obsidian.outline, size: 11)),
             ],
           ),
         ),

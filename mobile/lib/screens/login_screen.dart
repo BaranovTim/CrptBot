@@ -136,13 +136,13 @@ class _LoginScreenState extends State<LoginScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'The address of your ThusIldy server. If it is reachable over '
-              'Tailscale, use the 100.x.y.z address and keep Tailscale '
-              'connected on this phone.',
+              'The address of your ThusIldy server. Use the https:// '
+              'address — over plain http your password would travel in clear '
+              'text.',
               style: Obsidian.body(),
             ),
             const SizedBox(height: 16),
-            GlassField(controller: ctrl, hint: 'http://100.64.0.1:8787'),
+            GlassField(controller: ctrl, hint: 'https://your-server'),
           ],
         ),
         actions: [

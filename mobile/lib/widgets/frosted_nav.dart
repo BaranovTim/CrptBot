@@ -10,7 +10,11 @@ import 'package:flutter/material.dart';
 
 import '../theme/liquid_obsidian.dart';
 
-enum NavTab { dashboard, market, training, profile }
+// `training` was removed on 2026-08-30. It explained what a fitted model
+// is and handed over the train command; the command now sits on the
+// dashboard panel that actually needs it, and nothing else on the screen
+// was used.
+enum NavTab { dashboard, market, profile }
 
 class FrostedNav extends StatelessWidget {
   const FrostedNav({
@@ -29,7 +33,6 @@ class FrostedNav extends StatelessWidget {
   static const _items = <NavTab, (IconData, String)>{
     NavTab.dashboard: (Icons.grid_view_rounded, 'Dashboard'),
     NavTab.market: (Icons.query_stats_rounded, 'Market'),
-    NavTab.training: (Icons.model_training_rounded, 'Training'),
     NavTab.profile: (Icons.person_rounded, 'Profile'),
   };
 

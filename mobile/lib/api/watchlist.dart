@@ -74,6 +74,29 @@ class Watchlist {
     return List.unmodifiable(_cache!);
   }
 
+  /// Move a pair to a different position and persist it.
+  ///
+  /// The order is not cosmetic any more: the dashboard swipes through this
+  /// list, so dragging a coin up changes which pair is one flick away. That
+  /// is the reason it is worth storing rather than sorting by volume.
+  ///
+  /// `newIndex` is the FINAL position, after the dragged row is removed.
+  ///
+  /// Flutter's older `onReorder` reported a pre-removal index that every
+  /// caller had to decrement itself for downward drags — the classic
+  /// off-by-one that makes a drag land one row short. `onReorderItem`
+  /// supersedes it and adjusts the index already, so this takes the adjusted
+  /// value and does the obvious thing. Do not add a correction here.
+  Future<List<String>> reorder(int oldIndex, int newIndex) async {
+    final list = List<String>.from(await load());
+    if (oldIndex < 0 || oldIndex >= list.length) return List.unmodifiable(list);
+    newIndex = newIndex.clamp(0, list.length - 1);
+    list.insert(newIndex, list.removeAt(oldIndex));
+    _cache = list;
+    await _persist();
+    return List.unmodifiable(list);
+  }
+
   Future<bool> contains(String symbol) async =>
       (await load()).contains(symbol.trim().toUpperCase());
 }
