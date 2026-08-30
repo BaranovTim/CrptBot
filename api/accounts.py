@@ -81,7 +81,14 @@ try:
 except (AttributeError, ValueError):
     _DEFAULT_ALGO = "pbkdf2"
 
-SESSION_TTL = 30 * 24 * 3600.0          # 30 days
+SESSION_TTL = 30 * 24 * 3600.0          # 30 days, from LAST USE
+
+# How stale a session may get before using it extends it. Renewing on every
+# request would mean a disk write per request; renewing only past the halfway
+# point costs one write every ~15 days per device and makes the expiry
+# effectively "30 days of not opening the app" rather than "30 days since you
+# typed your password".
+_RENEW_AFTER = SESSION_TTL / 2
 MIN_PASSWORD = 8
 
 # What a tier may see. `free` gets the chart and nothing else, which is the
@@ -365,10 +372,17 @@ class Accounts:
             if found is None:
                 return None
             d, ident, exp = found
-            if exp < time.time():
+            now = time.time()
+            if exp < now:
                 self._sessions.pop(d, None)
                 self._save_sessions()
                 return None
+            # Sliding expiry: someone who opens the app every day should never
+            # be asked for a password again. A fixed window from sign-in logs
+            # active users out on a schedule they cannot see a reason for.
+            if exp - now < _RENEW_AFTER:
+                self._sessions[d] = (ident, now + SESSION_TTL)
+                self._save_sessions()
         return self.get(ident)
 
     def end_session(self, token: str) -> None:

@@ -88,6 +88,7 @@ class TradingService:
         self._locks: Dict[Tuple[str, str], threading.Lock] = {}
         self._building: set = set()
         self._build_cost: Dict[Tuple[str, str], float] = {}
+        self._last_seen: Dict[Tuple[str, str], float] = {}
         self._refresh_q: "queue.Queue" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self._monitors: Dict[Tuple[str, str], Any] = {}
@@ -380,6 +381,20 @@ class TradingService:
                 self._build_cost[key] = cost
             return v
 
+    # How long after somebody last asked for a pair it keeps refreshing itself.
+    #
+    # MEASURED, and the reason this exists: warming all 24 pairs and then
+    # refreshing all 24 forever does not fit on one core. The 1m tier alone
+    # needs ~30s of rebuild per coin against a 120s TTL - 100% of a core for
+    # four coins, before the other five timeframes or the collector get a
+    # look in. CPU sat at 100% and everything queued behind it.
+    #
+    # So refresh follows attention. A pair nobody has opened for half an hour
+    # stops rebuilding and simply goes stale; the next request serves the
+    # stale copy instantly and schedules one rebuild. Nothing is lost except
+    # work nobody was waiting for.
+    ATTENTION_WINDOW = 1800.0
+
     def _refresh_soon(self, key: Tuple[str, str]) -> None:
         """Queue `key` for rebuild off the request path. Caller holds _lock.
 
@@ -388,6 +403,10 @@ class TradingService:
         and briefly doubles resident memory. One worker drains this serially.
         """
         if key in self._building:
+            return
+        # only keep refreshing what somebody is actually looking at
+        seen = self._last_seen.get(key, 0.0)
+        if time.time() - seen > self.ATTENTION_WINDOW:
             return
         self._building.add(key)
         self._refresh_q.put(key)
@@ -431,6 +450,7 @@ class TradingService:
         key = self._pair(symbol, interval)
         ttl = self._dash_ttl(key) if ttl is None else ttl
         with self._lock:
+            self._last_seen[key] = time.time()
             hit = self._dash.get(key)
             if hit:
                 if time.time() - hit.at >= ttl:
@@ -438,23 +458,66 @@ class TradingService:
                 return hit.value
         return self._build_and_store(key)
 
-    def warm(self, symbol: Optional[str] = None) -> None:
-        """Build every trained timeframe once, in the background, at startup.
+    def trained_symbols(self) -> List[str]:
+        """Every pair with at least one fitted model, from `output/`.
 
-        Without this the first phone request after a restart pays the full
-        cold build - 120s for 1h on the droplet - which no client timeout
-        will sit through.
+        The server has no watchlist - that lives on each device - so the
+        honest definition of "a pair this server serves" is "a pair it has a
+        model for".
         """
-        sym = (symbol or self.symbol).upper()
+        from core import model_paths
+
+        found = set()
+        out = Path("output")
+        if not out.exists():
+            return [self.symbol]
+        for f in out.glob("judge_*_h1.joblib"):
+            # judge_<SYMBOL>_<interval>_h1.joblib
+            parts = f.stem.split("_")
+            if len(parts) >= 4:
+                found.add(parts[1].upper())
+        # the legacy judge_h1.joblib carries no symbol; it is BTCUSDT's
+        if (out / "judge_h1.joblib").exists():
+            found.add(self.symbol)
+        del model_paths
+        return sorted(found) or [self.symbol]
+
+    def warm(self, symbol: Optional[str] = None) -> None:
+        """Build every trained pair and timeframe in the background at startup.
+
+        This used to warm ONE symbol - whichever was the service default - and
+        the effect was measured on the droplet: BTCUSDT answered in 14ms while
+        the first tap on ETHUSDT 15m took 76 SECONDS, because it was still
+        cold. Adding coins quietly made the app feel broken for three
+        quarters of them.
+
+        CHEAPEST INTERVAL FIRST, ACROSS ALL SYMBOLS. Warming symbol-by-symbol
+        would leave the last pair cold for the whole run; going interval by
+        interval means every pair has its 1d, then its 4h, then its 1h, and so
+        on. The slow ones (1m costs ~100s each) come last, when the screens
+        people actually open are already warm.
+        """
+        syms = [symbol.upper()] if symbol else self.trained_symbols()
 
         def run() -> None:
-            for tf in self.trained_intervals(sym):
-                try:
-                    t0 = time.time()
-                    self._build_and_store((sym, tf))
-                    log.info("warmed %s %s in %.1fs", sym, tf, time.time() - t0)
-                except Exception as e:
-                    log.warning("warm %s %s: %s", sym, tf, e)
+            # dearest last: 1m is ~100s a pair, 1d is ~22s
+            order = ["1d", "4h", "1h", "15m", "5m", "1m"]
+            t_start = time.time()
+            done = 0
+            for tf in order:
+                for sym in syms:
+                    if not is_trained(sym, tf):
+                        continue
+                    try:
+                        t0 = time.time()
+                        self._build_and_store((sym, tf))
+                        done += 1
+                        log.info("warmed %s %s in %.1fs (%d done)",
+                                 sym, tf, time.time() - t0, done)
+                    except Exception as e:
+                        log.warning("warm %s %s: %s", sym, tf, e)
+            log.info("warm-up complete: %d pairs in %.0fs",
+                     done, time.time() - t_start)
 
         threading.Thread(target=run, daemon=True, name="warm").start()
 

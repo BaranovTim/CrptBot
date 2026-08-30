@@ -322,6 +322,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                       live: _live,
                       symbol: _symbol,
                       onSwipe: _swipe,
+                      neighbours:
+                          _order.where((s) => s != _symbol).toList(),
                       entitled: _entitled,
                       onSubscribe: () =>
                           setState(() => _tab = NavTab.profile),
@@ -410,7 +412,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   /// Re-ask the server who we are. Called after a checkout returns.
   Future<void> _refreshAccount() async {
     try {
-      widget.onAccountChanged(await widget.client.me());
+      final me = await widget.client.me();
+      await Settings.instance.saveAccount(me);
+      widget.onAccountChanged(me);
     } catch (_) {
       // leave the account as-is; the paywall stays up, which is the safe
       // direction to fail in
@@ -419,7 +423,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   Future<void> _signOut() async {
     await widget.client.logout();
-    await Settings.instance.saveToken('');
+    // the cached account goes with the token, or the next cold start would
+    // open straight into a session that no longer exists
+    await Settings.instance.clearSession();
     widget.onSignOut();
   }
 

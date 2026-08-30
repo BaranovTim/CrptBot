@@ -40,6 +40,20 @@ class PaywallException implements Exception {
   String toString() => 'subscription required';
 }
 
+/// The server rejected the credential — 401.
+///
+/// Separate from a network failure ON PURPOSE. They are opposite situations:
+/// this one means the session is genuinely dead and you must sign in again;
+/// an unreachable server means the session is probably fine and the phone
+/// just has no route yet. Treating both as "signed out" is what made the app
+/// demand a password every time it was opened before wifi settled.
+class UnauthorizedException implements Exception {
+  UnauthorizedException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 class ApiException implements Exception {
   ApiException(this.message);
   final String message;
@@ -90,7 +104,7 @@ class ApiClient {
           'Cannot reach $base\n\nStart it on your Mac:\n  python3 serve.py\n\n($e)');
     }
     if (r.statusCode == 401) {
-      throw ApiException(
+      throw UnauthorizedException(
           'The server rejected the token.\n\nProfile → Bearer token, and '
           'paste the value from the server\'s .env file.');
     }

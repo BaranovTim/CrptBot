@@ -45,23 +45,39 @@ class _ThusIldyAppState extends State<ThusIldyApp> {
 
   /// Saved host and token first, then ask the server who that token belongs to.
   ///
-  /// The token is asked ABOUT rather than trusted. A session can be revoked,
-  /// expire, or have been issued by a server the app is no longer pointed at;
-  /// in every one of those cases `me()` fails and the app shows the sign-in
-  /// screen, which is the honest outcome. Deciding locally that a stored token
-  /// means "signed in" produces an app that looks logged in and 401s on every
-  /// screen.
+  /// THREE OUTCOMES, NOT TWO. Collapsing them is what made the app ask for a
+  /// password every time it was opened:
+  ///
+  ///   confirmed      the server answered; use and cache what it said.
+  ///   rejected (401) the session is genuinely dead. Clear it, sign in again.
+  ///   unreachable    the phone has no route yet — which on a phone is most
+  ///                  cold starts, before wifi or data settles. The session is
+  ///                  probably fine, so fall back to the last confirmed
+  ///                  account and let the screens show their own retry.
+  ///
+  /// The previous version caught every failure identically and dropped to the
+  /// sign-in screen, so a one-second network delay was indistinguishable from
+  /// being logged out.
+  ///
+  /// Falling back to a cached account is safe because it is a cache and not an
+  /// authority: it decides which tabs are drawn, never what they return. Every
+  /// gated endpoint is still checked server-side on each request.
   Future<void> _restore() async {
     await Settings.instance.restore(_client);
     if (_client.token.isNotEmpty) {
       try {
         final me = await _client.me();
-        if (me.signedIn) _account = me;
+        if (me.signedIn) {
+          _account = me;
+          await Settings.instance.saveAccount(me);
+        }
+      } on UnauthorizedException {
+        // genuinely signed out — do not keep a token the server refuses
+        _client.token = '';
+        await Settings.instance.clearSession();
       } catch (_) {
-        // unreachable server or a dead session: either way, sign-in screen.
-        // Not clearing the token here on purpose — the server may simply be
-        // down, and wiping a good session because of a flaky network would
-        // make the user re-enter a password for no reason.
+        // unreachable, not unauthorised. Keep the session and open the app.
+        _account = await Settings.instance.cachedAccount();
       }
     }
     if (mounted) setState(() => _restored = true);

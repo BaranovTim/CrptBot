@@ -724,3 +724,138 @@ def test_changing_a_password_kills_sessions_everywhere():
         # and it survives a restart as revoked, not as forgotten-then-restored
         assert Accounts(path).session_user(phone) is None
     return True
+
+
+def test_an_active_session_never_expires_on_a_schedule():
+    """"Stay logged in" has to mean 30 days of NOT using it, not 30 days
+    since you typed your password. A fixed window signs an active user out on
+    a timetable they have no way to anticipate."""
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from api.accounts import SESSION_TTL, Accounts
+
+    with tempfile.TemporaryDirectory() as d:
+        acc = Accounts(Path(d) / "accounts.json")
+        u = acc.register("tim", "password-long-enough")
+        token = acc.start_session(u)
+
+        # wind the clock forward to just past the renewal point
+        digest = next(iter(acc._sessions))
+        acc._sessions[digest] = (u.identifier, time.time() + SESSION_TTL * 0.4)
+
+        assert acc.session_user(token) is not None
+        _, exp = acc._sessions[next(iter(acc._sessions))]
+        assert exp > time.time() + SESSION_TTL * 0.9, \
+            "using a session did not extend it"
+
+        # but a genuinely expired one is still refused, not resurrected
+        acc._sessions[next(iter(acc._sessions))] = (u.identifier,
+                                                    time.time() - 1)
+        assert acc.session_user(token) is None
+    return True
+
+
+def test_warm_up_covers_every_trained_pair_not_just_the_default():
+    """Adding coins used to make the app feel broken for most of them.
+
+    `warm()` warmed only the service's default symbol, so on the droplet
+    BTCUSDT answered in 14ms while the first tap on ETHUSDT 15m took 76
+    seconds building from cold. Every pair with a model has to be warmed, or
+    the ones you added are exactly the slow ones.
+    """
+    from api.service import get_service
+
+    svc = get_service()
+    syms = svc.trained_symbols()
+    assert "BTCUSDT" in syms, syms
+    # anything with a fitted model must be discoverable from output/ alone,
+    # because the server has no watchlist - that lives on the device
+    for s in syms:
+        assert s.endswith("USDT"), s
+    assert len(syms) >= 1
+    return True
+
+
+def test_the_warm_order_puts_the_cheap_timeframes_first():
+    """Cheapest interval first, ACROSS symbols.
+
+    Warming symbol-by-symbol leaves the last pair cold for the whole run. 1m
+    costs ~100s per pair and 1d ~22s, so interval-major ordering means every
+    pair has its slow-moving timeframes ready while the expensive ones are
+    still building.
+    """
+    import inspect
+
+    from api.service import TradingService
+
+    src = inspect.getsource(TradingService.warm)
+    order = re.search(r'order = \[([^\]]+)\]', src)
+    assert order, "warm() no longer declares an explicit order"
+    got = [x.strip().strip('"\'') for x in order.group(1).split(",")]
+    assert got == ["1d", "4h", "1h", "15m", "5m", "1m"], got
+    # and the symbol loop must be INSIDE the interval loop
+    assert src.index("for tf in order") < src.index("for sym in syms"), \
+        "warming is symbol-major again; the last pair stays cold"
+    return True
+
+
+def test_only_pairs_somebody_is_watching_keep_refreshing():
+    """Warming 24 pairs and refreshing all 24 forever does not fit on one core.
+
+    Measured on the droplet: with every pair warm, the 1m tier alone wants
+    ~30s of rebuild per coin against a 120s TTL, which is 100% of a core for
+    four coins before the other five timeframes or the collector get a look
+    in. CPU pegged and refreshes queued behind each other.
+
+    A pair nobody has opened recently must stop refreshing. It still serves
+    instantly from its stale copy - it just stops doing work in the dark.
+    """
+    import time as _time
+
+    from api.service import TradingService, _Cached
+
+    svc = TradingService()
+    svc._build_dashboard = lambda sym, iv: {"symbol": sym, "interval": iv}
+
+    watched = ("BTCUSDT", "1m")
+    forgotten = ("ADAUSDT", "1m")
+    for k in (watched, forgotten):
+        svc._dash[k] = _Cached(_time.time() - 10_000, {"stale": True})
+
+    # someone is looking at BTC right now; nobody has opened ADA in an hour
+    svc._last_seen[watched] = _time.time()
+    svc._last_seen[forgotten] = _time.time() - (svc.ATTENTION_WINDOW + 60)
+
+    with svc._lock:
+        svc._refresh_soon(watched)
+        svc._refresh_soon(forgotten)
+
+    assert watched in svc._building, "the watched pair stopped refreshing"
+    assert forgotten not in svc._building, \
+        "a pair nobody has opened for an hour is still burning CPU"
+
+    # and the forgotten one still ANSWERS instantly, from its stale copy
+    t0 = _time.time()
+    got = svc.dashboard(*forgotten)
+    assert got == {"stale": True}, got
+    assert _time.time() - t0 < 1.0
+    return True
+
+
+def test_asking_for_a_pair_counts_as_attention():
+    """Otherwise the window never reopens and nothing refreshes again."""
+    import time as _time
+
+    from api.service import TradingService, _Cached
+
+    svc = TradingService()
+    svc._build_dashboard = lambda sym, iv: {"symbol": sym, "interval": iv}
+    key = ("SOLUSDT", "15m")
+    svc._dash[key] = _Cached(_time.time() - 10_000, {"stale": True})
+    svc._last_seen[key] = _time.time() - (svc.ATTENTION_WINDOW + 60)
+
+    svc.dashboard(*key)                     # a phone opens it again
+    assert _time.time() - svc._last_seen[key] < 5.0
+    return True

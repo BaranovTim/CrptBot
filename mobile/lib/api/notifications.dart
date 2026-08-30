@@ -29,7 +29,7 @@
 /// long ago it was, plus — for filings — the disclosure lag.
 library;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
@@ -101,29 +101,44 @@ class Notifications {
       tz.setLocalLocation(tz.getLocation('UTC'));
     }
 
-    await _plugin.initialize(const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      iOS: DarwinInitializationSettings(
-        requestAlertPermission: true,
-        requestBadgePermission: true,
-        requestSoundPermission: true,
-      ),
-    ));
+    // The whole plugin is wrapped, not just the permission request.
+    //
+    // `flutter_local_notifications` throws a LateInitializationError when no
+    // platform implementation is registered — under `flutter test`, and on
+    // any host where the plugin is unavailable. That exception was escaping
+    // into `Shell.initState`, which takes the entire app down: a phone that
+    // cannot do notifications would show a dead screen rather than an app
+    // without alerts. Alerts are a feature; the app is not.
+    try {
+      await _plugin.initialize(const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
+        ),
+      ));
 
-    final android = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-    if (android != null) {
-      for (final c in [_channelSignals, _channelMarket, _channelCalendar]) {
-        await android.createNotificationChannel(c);
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (android != null) {
+        for (final c in [_channelSignals, _channelMarket, _channelCalendar]) {
+          await android.createNotificationChannel(c);
+        }
+        granted = await android.requestNotificationsPermission() ?? false;
       }
-      granted = await android.requestNotificationsPermission() ?? false;
-    }
-    final ios = _plugin.resolvePlatformSpecificImplementation<
-        IOSFlutterLocalNotificationsPlugin>();
-    if (ios != null) {
-      granted = await ios.requestPermissions(
-              alert: true, badge: true, sound: true) ??
-          false;
+      final ios = _plugin.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+      if (ios != null) {
+        granted = await ios.requestPermissions(
+                alert: true, badge: true, sound: true) ??
+            false;
+      }
+    } catch (e) {
+      // `granted` stays false, so the bell renders as off and the Profile
+      // screen reports the truth: nothing will be delivered.
+      granted = false;
+      debugPrint('[notifications] unavailable on this platform: $e');
     }
     _ready = true;
   }

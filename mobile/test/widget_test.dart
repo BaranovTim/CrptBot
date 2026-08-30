@@ -8,6 +8,8 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
+import 'dart:convert';
+
 import 'package:tradingbot_app/api/watchlist.dart';
 import 'package:tradingbot_app/main.dart';
 
@@ -106,6 +108,51 @@ void main() {
       'trained': false,
     });
     expect(c.trained, isFalse);
+  });
+
+  testWidgets('a saved session opens the app even with no network',
+      (tester) async {
+    // THE BUG THIS PINS. `_restore()` used to catch every failure from
+    // `me()` identically and fall through to the sign-in screen. In a test
+    // — and on a phone opened before wifi settles — that call cannot reach
+    // the server, so a perfectly good session looked exactly like being
+    // logged out, and the app asked for a password on every cold start.
+    //
+    // No network is available here, so this exercises the unreachable path
+    // specifically: the cached account must carry the app into the shell.
+    SharedPreferences.setMockInitialValues({
+      'api.token.v1': 'a-session-token',
+      'api.account.v1': json.encode({
+        'identifier': 'tim',
+        'tier': 'admin',
+        'entitled': true,
+        'operator': false,
+      }),
+    });
+
+    await tester.pumpWidget(const ThusIldyApp());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('SIGN IN'), findsNothing,
+        reason: 'an unreachable server was treated as a dead session');
+    expect(find.text('Dashboard'), findsOneWidget);
+  });
+
+  testWidgets('a token with no cached account still asks for a password',
+      (tester) async {
+    // The other side of it: falling back to a cache is only defensible when
+    // there IS one. A token alone says nothing about who it belongs to, and
+    // guessing would put someone in a session that may not be theirs.
+    SharedPreferences.setMockInitialValues({
+      'api.token.v1': 'a-session-token',
+    });
+
+    await tester.pumpWidget(const ThusIldyApp());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('SIGN IN'), findsOneWidget);
   });
 
   test('dragging a coin down lands it where it was dropped', () async {

@@ -152,6 +152,8 @@ class _AddCoinSheetState extends State<_AddCoinSheet> {
                 controller: _search,
                 hint: 'Search BTC, SOL, DOGE…',
                 onChanged: _onQuery,
+                // the one place caps are right: pairs are upper-case
+                capitalization: TextCapitalization.characters,
               ),
               const SizedBox(height: 8),
               Text(

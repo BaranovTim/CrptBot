@@ -41,6 +41,7 @@ class DashboardScreen extends StatefulWidget {
     required this.live,
     required this.symbol,
     required this.onSwipe,
+    required this.neighbours,
     required this.entitled,
     required this.onSubscribe,
     required this.interval,
@@ -61,6 +62,9 @@ class DashboardScreen extends StatefulWidget {
 
   /// Swipe left/right to the next or previous followed pair. -1 or +1.
   final ValueChanged<int> onSwipe;
+
+  /// The other pairs being followed, so they can be fetched before you swipe.
+  final List<String> neighbours;
 
   /// Whether this account may see the analysis, or only the graph.
   ///
@@ -116,6 +120,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _timer = Timer.periodic(const Duration(seconds: 10), (_) => _load(quiet: true));
   }
 
+  /// Payloads already fetched this session, keyed by pair and timeframe.
+  ///
+  /// The point is the swipe: moving between four coins used to mean a full
+  /// round trip and a spinner every time, even going back to one seen a
+  /// second earlier. Bounded by the watchlist times six timeframes, so a few
+  /// dozen small JSON objects at most.
+  final Map<String, Dashboard> _cache = {};
+  final Map<String, List<double>> _seriesCache = {};
+
+  String get _key => '${widget.symbol}:${widget.interval}';
+
+  /// Fetch the neighbouring pairs at the current timeframe, quietly.
+  ///
+  /// Runs AFTER the visible pair has loaded and one at a time, so it never
+  /// competes with the screen you are looking at. On a warmed server each of
+  /// these is milliseconds; the first swipe is then instant instead of
+  /// paying a round trip.
+  Future<void> _prefetchNeighbours() async {
+    if (!widget.entitled) return;
+    for (final sym in widget.neighbours) {
+      final k = '$sym:${widget.interval}';
+      if (_cache.containsKey(k)) continue;
+      try {
+        final d = await widget.client
+            .dashboard(symbol: sym, interval: widget.interval);
+        final series =
+            await widget.client.chart(symbol: sym, interval: widget.interval);
+        if (!mounted) return;
+        _cache[k] = d;
+        _seriesCache[k] = series;
+      } catch (_) {
+        // a prefetch that fails costs nothing; the real load will report it
+      }
+    }
+  }
+
   Future<void> _loadConsensus() async {
     try {
       final c = await widget.client.consensus(symbol: widget.symbol);
@@ -131,13 +171,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // a swipe changes the pair; a timeframe tap changes the interval. Both
     // invalidate everything on screen, and neither may leave the previous
     // coin's numbers visible under the new coin's name.
+    //
+    // But a pair already seen this session does not need a spinner. Showing
+    // the cached payload for the pair being switched TO is not stale data
+    // under the wrong name — it is that pair's own last answer, replaced the
+    // moment the refresh lands.
     if (old.interval != widget.interval || old.symbol != widget.symbol) {
+      final hit = _cache[_key];
       setState(() {
-        _data = null;
-        _series = const [];
+        _data = hit;
+        _series = _seriesCache[_key] ?? const [];
         _untrained = null;
       });
-      _load();
+      _load(quiet: hit != null);
     }
   }
 
@@ -200,6 +246,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _error = null;
         _untrained = null;
       });
+      _cache[_key] = _data!;
+      _seriesCache[_key] = _series;
+      unawaited(_prefetchNeighbours());
       // Deliberately NOT awaited with the rest.
       //
       // Consensus builds a dashboard per trained timeframe, and each one is a

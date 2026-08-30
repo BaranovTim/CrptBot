@@ -103,8 +103,10 @@ class _LoginScreenState extends State<LoginScreen> {
       final account = _register
           ? await widget.client.register(id, pw)
           : await widget.client.login(id, pw);
-      // persist the SESSION, not the password
+      // persist the SESSION, not the password — plus the account itself, so
+      // a later cold start with no network can still open the app
       await Settings.instance.saveToken(widget.client.token);
+      await Settings.instance.saveAccount(account);
       if (!mounted) return;
       widget.onEnter(account);
     } on ApiException catch (e) {

@@ -114,6 +114,7 @@ class GlassField extends StatefulWidget {
     this.keyboardType,
     this.trailing,
     this.onChanged,
+    this.capitalization = TextCapitalization.none,
   });
 
   final TextEditingController controller;
@@ -122,6 +123,15 @@ class GlassField extends StatefulWidget {
   final TextInputType? keyboardType;
   final Widget? trailing;
   final ValueChanged<String>? onChanged;
+
+  /// Defaults to NONE.
+  ///
+  /// This was hardcoded to `characters`, which suited the one screen it was
+  /// written for — typing a pair like BTCUSDT — and was wrong for every other
+  /// use of a shared widget. On the sign-in form it upper-cased handles and,
+  /// worse, passwords: a case-sensitive secret silently retyped for you.
+  /// Only the symbol picker asks for caps now.
+  final TextCapitalization capitalization;
 
   @override
   State<GlassField> createState() => _GlassFieldState();
@@ -165,7 +175,11 @@ class _GlassFieldState extends State<GlassField> {
               obscureText: widget.obscure,
               keyboardType: widget.keyboardType,
               onChanged: widget.onChanged,
-              textCapitalization: TextCapitalization.characters,
+              textCapitalization: widget.capitalization,
+              // A password field must not be autocorrected or offered to the
+              // keyboard's suggestion strip, and neither must a handle.
+              autocorrect: false,
+              enableSuggestions: false,
               style: Obsidian.dataTable(size: 16),
               cursorColor: Obsidian.primary,
               decoration: InputDecoration(
