@@ -221,7 +221,8 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/me", "/api/auth/login",
                                           "/api/auth/register",
                                           "/api/billing/plans",
-                                          "/api/indicator"]})
+                                          "/api/indicator",
+                                          "/api/track"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -251,6 +252,9 @@ class Handler(BaseHTTPRequestHandler):
                                          interval=opt("interval")))
             elif route == "/api/consensus":
                 self._send(svc.consensus(opt("symbol")))
+            elif route == "/api/track":
+                self._send(svc.track(symbol=opt("symbol"),
+                                     interval=opt("interval")))
             elif route == "/api/indicator":
                 key = opt("key") or "rsi"
                 try:
@@ -432,6 +436,10 @@ def serve(host: str = "0.0.0.0", port: int = 8787,
     # otherwise pay all of it while the app sits on a timeout.
     try:
         get_service().warm()
+        # the forward record has to accumulate whether or not anyone is
+        # looking, or it measures when the app gets opened rather than how
+        # the model performs
+        get_service().start_recorder()
     except Exception as e:                  # a warm failure is not fatal - the
         log.warning("warm-up skipped: %s", e)   # request path still builds
 

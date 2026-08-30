@@ -572,12 +572,37 @@ class Monitor:
         from agent5.labels import LabelResult
         from newsfeed.store import JSONLNewsStore
 
+        # Agent 4's tape and derivatives inputs, read from the SAME store
+        # training fills. This matters more than it looks: Agent 4's rolling
+        # baselines span hundreds of bars, so serving needs the tape across
+        # the whole live window, not just the newest bar. Training with the
+        # tape and serving without it would leave the model predicting on
+        # zeros where it learned on real flow — no exception, no failed test,
+        # just a model quietly worse than its backtest.
+        #
+        # backfill=False: a serving request must never block on a download.
+        # Whatever the collector and the training run have put on disk is
+        # what it gets, and `tape_coverage_24h` tells the model how much
+        # that was.
+        try:
+            from marketdata.flow_inputs import flow_inputs
+            extra = flow_inputs(self.symbol, self.interval, bars,
+                                backfill=False)
+        except Exception as e:
+            # monitor.py has no logger by design - it is a library used by
+            # both the CLI and the API. A print here would pollute the API's
+            # stdout, and a missing tape is already reported to the model
+            # through Agent 4's coverage column.
+            _ = e
+            extra = {}
+
         frames, warmups = {}, []
         for key, agent in (("agent1", PatternAgent()), ("agent2", IndicatorAgent()),
                            ("agent4", FlowAgent())):
             need = getattr(agent, "required_bars", lambda _b: agent.warmup_bars)(bars)
             if len(bars) > need:
-                frames[key] = agent.compute(bars)
+                frames[key] = (agent.compute(bars, **extra) if key == "agent4"
+                               else agent.compute(bars))
                 warmups.append(agent.warmup_bars)
 
         # agent 3 must run whenever the model was trained with it, even on an

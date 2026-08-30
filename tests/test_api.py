@@ -1013,3 +1013,221 @@ def test_every_tile_the_dashboard_draws_can_be_expanded():
         if bounds is not None:
             assert bounds[0] < bounds[1], (key, bounds)
     return True
+
+
+def test_agent4_actually_receives_the_tape_in_both_paths():
+    """Agent 4 had 20 of 22 features empty because nothing supplied its inputs.
+
+    Measured on 6,000 real bars: only `taker_buy_ratio` carried data, and
+    that one is derivable from klines. `FlowAgent.compute()` has always
+    accepted `tape`, `open_interest` and `liquidations`; they were never
+    passed. A quarter of the judge's 88 columns were NaN.
+
+    Both callers must now supply them, and must do it through the SAME
+    assembler — training with the tape and serving without it would leave the
+    model predicting on zeros where it learned on real flow, with nothing
+    raising and no test failing.
+    """
+    import inspect
+
+    import monitor
+    import train
+
+    train_src = inspect.getsource(train.compute_frames)
+    live_src = inspect.getsource(monitor.Monitor._compute_features)
+
+    for name, src in (("train", train_src), ("serve", live_src)):
+        assert "flow_inputs" in src, f"{name} no longer assembles flow inputs"
+        assert "**extra" in src, f"{name} computes agent4 without them"
+
+    # the live path must never block on a download
+    assert "backfill=False" in live_src, \
+        "serving would fetch archives inside a request"
+    assert "backfill=True" in train_src, \
+        "training would silently train on whatever happened to be cached"
+    return True
+
+
+def test_the_tape_store_round_trips_and_dedupes():
+    """The store is written by two producers - a backfill and a live
+    collector - so a bar written twice must not become two rows."""
+    import tempfile
+    from pathlib import Path
+
+    import pandas as pd
+
+    from marketdata.tape_store import TapeStore
+
+    with tempfile.TemporaryDirectory() as d:
+        st = TapeStore("BTCUSDT", "1h", Path(d))
+        idx = pd.date_range("2026-08-01", periods=4, freq="h", tz="UTC")
+        st.append(pd.DataFrame({"buy_notional": [1.0, 2, 3, 4]}, index=idx))
+        # the same bars again, with corrected values, as a re-reduction would
+        st.append(pd.DataFrame({"buy_notional": [9.0, 9, 9, 9]}, index=idx))
+
+        got = st.load()
+        assert len(got) == 4, got
+        # last write wins: a re-reduced day is better than a partial live one
+        assert set(got["buy_notional"]) == {9.0}, got
+        assert len(st.covered_days()) == 1
+    return True
+
+
+def test_the_forward_record_resolves_with_the_same_rule_that_trained_it():
+    """A forward record measured by a different rule than the backtest is
+    not a comparison, it is two different questions.
+
+    Resolution calls `triple_barrier` itself with the config off the fitted
+    model, so this checks the wiring end to end: predictions written against
+    historical bars must settle to exactly the labels training would assign.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import pandas as pd
+
+    from agent5.config import Agent5Config
+    from agent5.labels import triple_barrier
+    from agent5.track import Prediction, TrackRecord
+    from core import utc_now
+    from livefeed import BarStore
+
+    bars = BarStore("BTCUSDT", "1h").load()
+    if len(bars) < 500:
+        return True                        # no history in this environment
+
+    cfg = Agent5Config(k_up=1.0, k_dn=1.0, max_hold_bars=2)
+    truth = triple_barrier(bars, cfg)
+
+    # pick bars whose windows have definitely closed
+    picks = [t for t in bars.index[-200:-50]
+             if not pd.isna(truth.y.loc[t])][:40]
+    assert picks, "no closed windows to test against"
+
+    with tempfile.TemporaryDirectory() as d:
+        rec = TrackRecord("BTCUSDT", "1h", Path(d))
+        for t in picks:
+            rec.record(Prediction(
+                symbol="BTCUSDT", interval="1h", horizon="h2",
+                bar_close=t.isoformat(), logged_at=utc_now().isoformat(),
+                model_id="test", p_up=0.5, action="WAIT"))
+
+        n = rec.resolve(bars, {"h2": cfg})
+        assert n == len(picks), (n, len(picks))
+
+        for p in rec.load():
+            expect = float(truth.y.loc[pd.Timestamp(p.bar_close)])
+            assert p.outcome == expect, (p.bar_close, p.outcome, expect)
+            assert p.touch in ("upper", "lower", "timeout", "ambiguous")
+    return True
+
+
+def test_one_bar_produces_one_row_however_often_the_dashboard_rebuilds():
+    """The dashboard rebuilds dozens of times per bar and each rebuild makes
+    the same call. Logging every one would multiply the sample count without
+    a single extra independent observation, and every metric downstream
+    would be wrong in the flattering direction."""
+    import tempfile
+    from pathlib import Path
+
+    from agent5.track import Prediction, TrackRecord
+
+    with tempfile.TemporaryDirectory() as d:
+        rec = TrackRecord("BTCUSDT", "1h", Path(d))
+        p = Prediction(symbol="BTCUSDT", interval="1h", horizon="h1",
+                       bar_close="2026-08-30T13:59:59.999+00:00",
+                       logged_at="2026-08-30T14:00:00+00:00",
+                       model_id="abc", p_up=0.55, action="ENTER LONG")
+        assert rec.record(p) is True
+        for _ in range(25):
+            assert rec.record(p) is False
+        assert len(rec.load()) == 1
+    return True
+
+
+def test_a_retrain_starts_a_new_series_instead_of_polluting_the_old_one():
+    """Mixing predictions from three different models into one hit rate is a
+    track record of nothing. Each row carries the fingerprint of the model
+    that produced it."""
+    import tempfile
+    from pathlib import Path
+
+    from agent5.track import Prediction, TrackRecord, model_fingerprint
+
+    with tempfile.TemporaryDirectory() as d:
+        rec = TrackRecord("BTCUSDT", "1h", Path(d))
+        for i, mid in enumerate(("model-a", "model-a", "model-b")):
+            rec.record(Prediction(
+                symbol="BTCUSDT", interval="1h", horizon="h1",
+                bar_close=f"2026-08-30T0{i}:00:00+00:00",
+                logged_at="x", model_id=mid, p_up=0.6, action="ENTER LONG",
+                outcome=1.0))
+        assert rec.metrics()["models"] == ["model-a", "model-b"]
+        assert rec.metrics(model_id="model-a")["resolved"] == 2
+        assert rec.metrics(model_id="model-b")["resolved"] == 1
+
+        # and the fingerprint must be content-based, not timestamp-based:
+        # rsyncing a model to the droplet changes its mtime, not its
+        # behaviour, and a fingerprint that moved on deploy would split one
+        # series in two for no reason
+        f = Path(d) / "m.joblib"
+        f.write_bytes(b"weights")
+        first = model_fingerprint(f)
+        f.touch()
+        assert model_fingerprint(f) == first
+    return True
+
+
+def test_the_record_is_taken_on_a_clock_not_on_attention():
+    """Dashboards only rebuild when somebody looks at them — that is what
+    keeps the box idle. If the forward record inherited that, it would hold
+    exactly the bars the app was opened for, and people open trading apps
+    when something is happening. Every metric would then be measuring that
+    selection, not the model."""
+    import inspect
+
+    from api.service import TradingService
+
+    src = inspect.getsource(TradingService.start_recorder)
+    assert "_build_and_store" in src, "the recorder no longer builds"
+    assert "_last_seen" not in src, "the recorder is attention-gated again"
+
+    # and it must wait past the close, not fire on it: a bar is only in the
+    # store once the collector has written it
+    sleep_src = inspect.getsource(TradingService._sleep_to_next_close)
+    assert "45" in sleep_src, "no margin after the bar close"
+
+    for iv in TradingService.RECORD_INTERVALS:
+        assert iv in ("1m", "5m", "15m", "1h", "4h", "1d"), iv
+    return True
+
+
+def test_the_recorder_waits_for_the_next_close_not_a_fixed_delay():
+    from api.service import TradingService
+
+    d = TradingService._sleep_to_next_close(("1h",))
+    assert 45.0 <= d <= 3600.0 + 45.0, d
+    # a shorter interval must produce a sooner wake-up
+    assert TradingService._sleep_to_next_close(("5m",)) <= 300.0 + 45.0
+    return True
+
+
+def test_only_clock_covered_intervals_are_recorded():
+    """`_build_dashboard` runs for any reason — someone opening the app, a
+    cache refresh, warm-up. Recording those puts sporadic attention-driven
+    rows in the file, and a record that is dense when you were watching and
+    empty when you were not measures your habits rather than the model.
+
+    Caught in production within minutes: a 1d row appeared for a timeframe
+    the recorder does not cover.
+    """
+    import inspect
+
+    from api.service import TradingService
+
+    src = inspect.getsource(TradingService._record_forward)
+    assert "RECORD_INTERVALS" in src, \
+        "any build can write to the forward record again"
+    assert src.index("RECORD_INTERVALS") < src.index("TrackRecord"), \
+        "the guard must come before anything is written"
+    return True

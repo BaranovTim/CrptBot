@@ -654,6 +654,18 @@ class TradingService:
         b = evaluate(mon.h2, bars, X, "ANALYSIS B", opened_at=last_close,
                      ends_at=last_close + n2 * mon.delta, bars_left=n2)
 
+        # THE FORWARD RECORD.
+        #
+        # Written here because this is the moment the forecast exists and the
+        # outcome does not. Anything reconstructed later — however carefully —
+        # is a backtest wearing a track record's clothes.
+        #
+        # Deduped on the closed bar, so the dozens of dashboard rebuilds per
+        # bar produce one row, not dozens of copies of the same call inflating
+        # every metric downstream.
+        self._record_forward(symbol, interval, mon, last_close, close_price,
+                             a, b)
+
         # the same staleness rule the terminal uses. a window whose follower
         # has already closed is history, and the app must not paint it green
         # stale once the shorter window's own span has fully elapsed
@@ -860,6 +872,139 @@ class TradingService:
                 self._charts.clear()
             self._charts[key] = out
         return out
+
+    # ------------------------------------------------------ forward record
+    #
+    # RECORDED ON A CLOCK, NOT ON ATTENTION.
+    #
+    # Dashboards only rebuild when somebody looks at them - that is what keeps
+    # the one-core box idle. If the forward record inherited that, it would
+    # contain exactly the bars Tim happened to open the app for, and people
+    # open trading apps when something is happening. The sample would be
+    # biased toward volatile bars and every metric computed from it would be
+    # measuring that bias.
+    #
+    # So a separate loop wakes on each bar close and records for every pair,
+    # whether or not anyone is watching. Only the timeframes named here: 1h
+    # is where the measured edge is, and four builds an hour at ~20s each is
+    # about 2% of one core. Recording 1m for four symbols would be 100%.
+    RECORD_INTERVALS = ("1h",)
+
+    def start_recorder(self, intervals: Optional[Tuple[str, ...]] = None,
+                       symbols: Optional[List[str]] = None) -> None:
+        ivs = tuple(intervals or self.RECORD_INTERVALS)
+        syms = symbols or self.trained_symbols()
+
+        def loop() -> None:
+            import time as _t
+            while True:
+                try:
+                    delay = self._sleep_to_next_close(ivs)
+                    _t.sleep(delay)
+                    for iv in ivs:
+                        for sym in syms:
+                            if not is_trained(sym, iv):
+                                continue
+                            try:
+                                # a real build, which records as a side
+                                # effect and refreshes the cache too
+                                self._build_and_store((sym, iv))
+                            except Exception as e:
+                                log.warning("record %s %s: %s", sym, iv, e)
+                    log.info("forward record updated for %s", ", ".join(ivs))
+                except Exception as e:
+                    log.warning("recorder loop: %s", e)
+                    _t.sleep(60)
+
+        threading.Thread(target=loop, daemon=True, name="recorder").start()
+        log.info("forward recorder started for %s on %s",
+                 ", ".join(ivs), ", ".join(syms))
+
+    @staticmethod
+    def _sleep_to_next_close(intervals: Tuple[str, ...]) -> float:
+        """Seconds until the next bar closes, plus a margin.
+
+        The margin is not politeness: a bar labelled 13:00-13:59:59.999 is
+        only in the store once the collector has fetched and written it, and
+        building at exactly 14:00:00 would read the previous bar and record a
+        forecast for a bar that has already been recorded.
+        """
+        now = utc_now().timestamp()
+        step = min(interval_seconds(iv) for iv in intervals)
+        return (step - (now % step)) + 45.0
+
+
+    def _record_forward(self, symbol: str, interval: str, mon,
+                        last_close, close_price: float, a, b) -> None:
+        """Log both horizons' calls for this closed bar, and settle old ones.
+
+        Never raises into the dashboard. A track record that can take the app
+        down is a track record that gets switched off.
+        """
+        # ONLY the intervals the clock covers.
+        #
+        # `_build_dashboard` runs for any reason — somebody opening the app,
+        # a cache refresh, warm-up. Recording those would put sporadic,
+        # attention-driven rows in the file for every other timeframe, and a
+        # record that is dense when you were watching and empty when you were
+        # not measures your habits, not the model. Observed immediately: a
+        # 1d row appeared for a timeframe the recorder does not cover.
+        #
+        # For 1h this changes nothing — the clock has already written that
+        # bar and `record()` dedupes — but it guarantees every row in the
+        # file arrived on a schedule.
+        if interval not in self.RECORD_INTERVALS:
+            return
+        try:
+            from agent5.track import Prediction, TrackRecord, model_fingerprint
+            from core import model_paths, utc_now
+
+            h1p, h2p = model_paths(symbol, interval)
+            rec = TrackRecord(symbol, interval)
+            now_iso = utc_now().isoformat()
+            wrote = 0
+            for horizon, analysis, path, model in (
+                    ("h1", a, h1p, mon.h1), ("h2", b, h2p, mon.h2)):
+                p_up = getattr(analysis, "p_up", None)
+                if p_up is None or not np.isfinite(p_up):
+                    continue
+                cfg = getattr(model, "cfg", None)
+                wrote += rec.record(Prediction(
+                    symbol=symbol, interval=interval, horizon=horizon,
+                    bar_close=last_close.isoformat(), logged_at=now_iso,
+                    model_id=model_fingerprint(path),
+                    p_up=float(p_up),
+                    action=str(getattr(analysis, "action", "")),
+                    ev=_num(getattr(analysis, "ev", float("nan"))),
+                    close=close_price,
+                    k_up=getattr(cfg, "k_up", None),
+                    k_dn=getattr(cfg, "k_dn", None),
+                    max_hold_bars=getattr(cfg, "max_hold_bars", None)))
+
+            # settle whatever has come due. Cheap: it only relabels when
+            # there is something unresolved, and only once per new bar.
+            if wrote:
+                bars = self._bars(symbol, interval)
+                rec.resolve(bars, {"h1": getattr(mon.h1, "cfg", None),
+                                   "h2": getattr(mon.h2, "cfg", None)})
+        except Exception as e:
+            log.warning("forward record %s %s: %s", symbol, interval, e)
+
+    def track(self, symbol: Optional[str] = None,
+              interval: Optional[str] = None) -> Dict[str, Any]:
+        """The forward record for one pair, resolved up to now."""
+        from agent5.track import TrackRecord
+
+        sym, iv = self._pair(symbol, interval)
+        rec = TrackRecord(sym, iv)
+        try:
+            mon = self._mon(sym, iv)
+            rec.resolve(self._bars(sym, iv),
+                        {"h1": getattr(mon.h1, "cfg", None),
+                         "h2": getattr(mon.h2, "cfg", None)})
+        except Exception as e:
+            log.warning("track resolve %s %s: %s", sym, iv, e)
+        return rec.metrics()
 
     # ------------------------------------------------- indicator history
     #

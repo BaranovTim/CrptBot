@@ -107,7 +107,7 @@ def ensure_bars(symbol: str, interval: str, seed: bool) -> "object":
     return store
 
 
-def compute_frames(bars, htf: str):
+def compute_frames(bars, htf: str, symbol: str, interval: str):
     """Detector features for these bars. Computed ONCE per timeframe.
 
     Agent 1 is ~370 microseconds a bar, so 175,000 one-minute bars is a
@@ -124,12 +124,29 @@ def compute_frames(bars, htf: str):
     agents = (("agent1", PatternAgent(Agent1Config(htf_rule=htf))),
               ("agent2", IndicatorAgent(Agent2Config(htf_rule=htf))),
               ("agent4", FlowAgent()))
+
+    # Agent 4 was measured producing 20 all-NaN columns out of 22 because
+    # nothing ever passed it the tape or the derivatives feeds. Its
+    # `compute()` has always accepted them; they were simply never supplied,
+    # so a quarter of the judge's feature space was empty.
+    #
+    # Assembled through `flow_inputs` so training and serving read the same
+    # sources in the same shape — see that module on why that is not
+    # optional.
+    from marketdata.flow_inputs import describe, flow_inputs
+
+    extra = flow_inputs(symbol, interval, bars, backfill=True)
+    print(f"  flow inputs: {describe(extra)}")
+
     frames, warm = {}, []
     for key, agent in agents:
         need = getattr(agent, "required_bars", lambda _b: agent.warmup_bars)(bars)
         if len(bars) <= need:
             return None, 0, f"only {len(bars):,} bars; {key} needs {need:,}"
-        frames[key] = agent.compute(bars)
+        if key == "agent4":
+            frames[key] = agent.compute(bars, **extra)
+        else:
+            frames[key] = agent.compute(bars)
         warm.append(agent.warmup_bars)
     return frames, max(warm), ""
 
@@ -192,7 +209,7 @@ def main(argv=None) -> int:
               f"{bars.index[-1]:%Y-%m-%d}", flush=True)
 
         t0 = time.time()
-        frames, warm, why = compute_frames(bars, htf)
+        frames, warm, why = compute_frames(bars, htf, a.symbol, interval)
         if frames is None:
             print(f"  SKIPPED - {why}", flush=True)
             for h in (1, 2):
