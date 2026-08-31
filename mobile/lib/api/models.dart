@@ -299,12 +299,34 @@ class NewsItem {
       : headline = j['headline'] as String? ?? '',
         source = j['source'] as String? ?? '',
         url = j['url'] as String? ?? '',
+        summary = j['summary'] as String? ?? '',
+        bias = j['bias'] as String? ?? 'NO READING',
+        impact = j['impact'] as String? ?? 'NO READING',
+        assets = ((j['assets'] as List?) ?? const []).cast<String>(),
+        macro = j['macro'] as bool? ?? false,
         publishedAt = j['published_at'] == null
             ? null
             : DateTime.parse(j['published_at'] as String);
 
   final String headline, source, url;
+
+  /// The publisher's own excerpt. Deliberately not the full article — that
+  /// would be republishing their work, which is why every summary ends with
+  /// a link to the source instead.
+  final String summary;
+
+  /// BULL | BEAR | MIXED | NO READING, and STRONG/MEDIUM/ALMOST NO IMPACT.
+  ///
+  /// "NO READING" is not the same claim as neutral. The scorer is a keyword
+  /// count and stays silent on roughly 40% of headlines; saying MIXED there
+  /// would assert balance it never measured.
+  final String bias, impact;
+
+  final List<String> assets;
+  final bool macro;
   final DateTime? publishedAt;
+
+  bool get hasReading => bias != 'NO READING';
 
   /// News ages faster than a filing: by the next day it is priced in and
   /// everybody has seen it.

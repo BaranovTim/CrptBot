@@ -14,7 +14,7 @@ import '../theme/liquid_obsidian.dart';
 // is and handed over the train command; the command now sits on the
 // dashboard panel that actually needs it, and nothing else on the screen
 // was used.
-enum NavTab { dashboard, market, profile }
+enum NavTab { dashboard, market, news, profile }
 
 class FrostedNav extends StatelessWidget {
   const FrostedNav({
@@ -33,6 +33,7 @@ class FrostedNav extends StatelessWidget {
   static const _items = <NavTab, (IconData, String)>{
     NavTab.dashboard: (Icons.grid_view_rounded, 'Dashboard'),
     NavTab.market: (Icons.query_stats_rounded, 'Market'),
+    NavTab.news: (Icons.article_outlined, 'News'),
     NavTab.profile: (Icons.person_rounded, 'Profile'),
   };
 

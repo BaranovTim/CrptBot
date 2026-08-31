@@ -221,3 +221,38 @@ def test_lead_windows_are_ordered_widest_first():
     wait, so the list has to be descending for the break to pick it."""
     assert list(LEAD_MINUTES) == sorted(LEAD_MINUTES, reverse=True), LEAD_MINUTES
     return True
+
+
+def test_a_headline_drives_the_bias_and_the_excerpt_cannot_invert_it():
+    """A measured failure, pinned.
+
+    "Ireland bars crypto from new tax-advantaged scheme" was labelled BULL
+    because its excerpt read "Shares, bonds, funds, ETFs and insurance
+    products will qualify" — a list of what crypto is being EXCLUDED from.
+    One bullish word in the body inverted the story.
+
+    Headlines carry the story; excerpts wander into context, comparisons and
+    things that did not happen. The body may add weight to a reading and may
+    never create one.
+    """
+    from datetime import datetime, timezone
+
+    from agent3.scorers import LexiconScorer
+    from newsfeed.events import NewsItem
+
+    def item(headline, body=""):
+        return NewsItem(headline=headline, source="test", body=body,
+                        published_at=datetime(2026, 8, 31, tzinfo=timezone.utc))
+
+    inverted = item("Ireland bars crypto from new tax-advantaged scheme",
+                    "Shares, bonds, funds, ETFs and insurance products "
+                    "will qualify for the accounts.")
+    sc = LexiconScorer().score([inverted])[0]
+    assert sc.magnitude == 0.0, (
+        "an excerpt created a reading the headline does not support")
+
+    # and a headline that IS directional still scores
+    clear = item("Bitcoin And Ethereum ETFs Add $492M As Inflow Streak Continues")
+    sc2 = LexiconScorer().score([clear])[0]
+    assert sc2.direction > 0.15 and sc2.magnitude > 0, sc2
+    return True

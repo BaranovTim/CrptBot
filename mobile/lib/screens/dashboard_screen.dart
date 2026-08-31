@@ -30,6 +30,7 @@ import '../api/live_price.dart';
 import '../api/models.dart';
 import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
+import '../widgets/article_sheet.dart';
 import '../widgets/glass.dart';
 import '../widgets/indicator_sheet.dart';
 import '../widgets/sparkline.dart';
@@ -748,13 +749,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return _whaleCard(whale);
   }
 
+  static Color _biasTone(String bias) => switch (bias) {
+        'BULL' => Obsidian.green,
+        'BEAR' => Obsidian.red,
+        'MIXED' => Obsidian.primary,
+        _ => Obsidian.outline,
+      };
+
+  Widget _newsChip(String text, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(5),
+        ),
+        child: Text(text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Obsidian.labelSm(size: 8.5, color: c)),
+      );
+
   List<Widget> _newsCard(NewsItem n) {
     return [
       GlassPanel(
         padding: const EdgeInsets.all(18),
-        // straight to the article: the app has no more to say about a
-        // headline than the publisher does
-        onTap: n.url.isEmpty ? null : () => _openUrl(n.url),
+        // The summary opens IN the app; the link to the publisher sits at
+        // the bottom of it. Jumping straight to a browser meant leaving the
+        // app to find out whether the story was worth leaving the app for.
+        onTap: () => showModalBottomSheet<void>(
+          context: context,
+          backgroundColor: Colors.transparent,
+          isScrollControlled: true,
+          builder: (_) => ArticleSheet(item: n),
+        ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -777,22 +803,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Row(
                     children: [
-                      Expanded(
-                        child: Text('News',
-                            style: Obsidian.bodyLg()
-                                .copyWith(fontWeight: FontWeight.w600)),
-                      ),
+                      // Direction and size, up front. "News" alone told you
+                      // something had happened and nothing about whether it
+                      // mattered or which way.
+                      _newsChip(n.bias, _biasTone(n.bias)),
+                      const SizedBox(width: 6),
+                      Flexible(
+                          child: _newsChip(n.impact, Obsidian.outline)),
+                      const Spacer(),
                       Text(_ago(n.publishedAt),
                           style: Obsidian.labelSm(size: 10)),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   Text(n.headline, style: Obsidian.body(size: 14)),
+                  if (n.summary.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(n.summary,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Obsidian.body(
+                            color: Obsidian.outline, size: 12)),
+                  ],
                   const SizedBox(height: 6),
-                  Text(
-                      n.url.isEmpty
-                          ? n.source
-                          : '${n.source} · tap to read',
+                  Text('${n.source} · tap to read here',
                       style: Obsidian.labelSm(
                           color: Obsidian.outline, size: 10.5)),
                 ],

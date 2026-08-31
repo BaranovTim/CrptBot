@@ -24,6 +24,7 @@ import '../widgets/frosted_nav.dart';
 import '../widgets/mesh_background.dart';
 import 'dashboard_screen.dart';
 import 'market_screen.dart';
+import 'news_screen.dart';
 import 'profile_screen.dart';
 import 'subscribe_screen.dart';
 
@@ -347,6 +348,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                       onNeedsTraining: (iv) =>
                           setState(() => _interval = iv),
                     ),
+                  NavTab.news => NewsScreen(
+                      client: widget.client, symbol: _symbol),
                   NavTab.market =>
                     MarketScreen(
                       client: widget.client,
@@ -377,12 +380,17 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       extendBody: true,
       bottomNavigationBar: FrostedNav(
         current: _tab,
-        locked: _entitled ? const {} : const {NavTab.market},
+        locked: _entitled
+            ? const {}
+            : const {NavTab.market, NavTab.news},
         // A locked tab still responds — it takes you to the page that
         // explains why it is locked. A padlock that does nothing when pressed
         // reads as a broken app rather than a paywall.
         onSelect: (t) => setState(() =>
-            _tab = (!_entitled && t == NavTab.market) ? NavTab.profile : t),
+            _tab = (!_entitled &&
+                    (t == NavTab.market || t == NavTab.news))
+                ? NavTab.profile
+                : t),
       ),
     ));
   }

@@ -193,8 +193,9 @@ class ApiClient {
     return IndicatorSeries.fromJson(await _get('/api/indicator?$q'));
   }
 
-  Future<List<NewsItem>> news({int limit = 20}) async {
-    final j = await _get('/api/news?limit=$limit');
+  Future<List<NewsItem>> news({int limit = 20, String? symbol}) async {
+    final q = symbol == null ? '' : '&symbol=$symbol';
+    final j = await _get('/api/news?limit=$limit$q');
     return ((j['items'] as List?) ?? const [])
         .map((e) => NewsItem.fromJson(e as Map<String, dynamic>))
         .toList();

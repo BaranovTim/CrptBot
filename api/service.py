@@ -1155,6 +1155,26 @@ class TradingService:
             base = symbol.upper().replace("USDT", "").replace("USD", "")
             asset = base or None
 
+        # Direction and size, from Agent 3's offline scorer.
+        #
+        # It is a keyword count, not judgement, and it says so: on 40 real
+        # headlines it produces a reading for 24 and stays silent on the rest.
+        # Silence is reported as "NO READING" rather than dressed up as
+        # NEUTRAL — "we cannot tell" and "this is balanced news" are
+        # different claims and only one of them is true.
+        #
+        # `ClaudeScorer` in the same module does the job properly and needs
+        # an API key. Until then the app labels what it can and admits the
+        # rest.
+        scored = {}
+        try:
+            from agent3.scorers import LexiconScorer
+
+            for it, sc in zip(items, LexiconScorer().score(items)):
+                scored[id(it)] = sc
+        except Exception as e:
+            log.warning("news scoring unavailable: %s", e)
+
         out = []
         for it in items:
             assets = tuple(getattr(it, "assets", ()) or ())
@@ -1166,14 +1186,35 @@ class TradingService:
                 # kept rather than dropped — the tagger not recognising a
                 # coin is not evidence the story is irrelevant.
                 continue
+            sc = scored.get(id(it))
+            direction = float(getattr(sc, "direction", 0.0) or 0.0) if sc else 0.0
+            magnitude = float(getattr(sc, "magnitude", 0.0) or 0.0) if sc else 0.0
+            if magnitude <= 0:
+                bias, impact = "NO READING", "NO READING"
+            else:
+                bias = ("BULL" if direction > 0.15
+                        else "BEAR" if direction < -0.15 else "MIXED")
+                impact = ("STRONG IMPACT" if magnitude >= 0.5
+                          else "MEDIUM IMPACT" if magnitude >= 0.25
+                          else "ALMOST NO IMPACT")
+
             out.append({
                 "headline": getattr(it, "headline", str(it)),
                 "source": getattr(it, "source", ""),
+                # The publisher's own excerpt, which is what an RSS
+                # description is for. NOT the article body: reproducing that
+                # in full would be republishing someone else's work, which is
+                # why the link goes at the bottom of every summary.
+                "summary": (getattr(it, "body", "") or "")[:400],
                 # the article itself. Without this the app can tell you
                 # something happened and not show you what.
                 "url": getattr(it, "url", "") or "",
                 "assets": list(assets),
                 "macro": macro,
+                "bias": bias,
+                "impact": impact,
+                "direction": _num(direction),
+                "magnitude": _num(magnitude),
                 "published_at": getattr(it, "published_at", None)
                 and it.published_at.isoformat(),
             })
