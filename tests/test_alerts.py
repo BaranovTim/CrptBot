@@ -44,8 +44,18 @@ class StubService:
         self.action, self._live = action, live
         self._whales, self._news = whales or [], news or []
         self.symbol = "BTCUSDT"
+        self.interval = "1h"
 
-    def dashboard(self):
+    # The engine now watches (symbol, interval) pairs rather than one
+    # implicit default, because it used to call `dashboard()` with no
+    # arguments and so produced alerts for BTCUSDT 1h only — no matter how
+    # many coins were being followed.
+    RECORD_INTERVALS = ("1h",)
+
+    def trained_symbols(self):
+        return ["BTCUSDT"]
+
+    def dashboard(self, symbol=None, interval=None):
         return {
             "symbol": "BTCUSDT",
             "last_closed_bar": "2026-08-28T12:59:59.999000+00:00",

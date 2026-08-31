@@ -320,6 +320,17 @@ class Analysis:
     bars_left: int
 
     p_up: float = float("nan")
+
+    # The probability this timeframe would need for an entry to be worth its
+    # costs, so "FLAT" is a measurement rather than a mood. Follows from the
+    # barrier span and the fixed round-trip fee - see `evaluate`.
+    p_needed: float = float("nan")
+
+    # Which sensitivity this entry qualifies for: strong | medium | small,
+    # or "" when the expected value does not clear breakeven. The app shows
+    # or withholds the call based on the level the user picked.
+    strength: str = ""
+
     entry: float = float("nan")
     tp_price: float = float("nan")
     sl_price: float = float("nan")
@@ -435,23 +446,72 @@ def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
                      else (a.ev_short, "SHORT"))
     p_side = p_up if side == "LONG" else 1 - p_up
 
-    if best_ev > cfg.ev_threshold_pct:
+    # THREE SENSITIVITIES, ALL STILL PROFITABLE AFTER COSTS.
+    #
+    #   strong   EV > the configured threshold (0.05%). The original rule.
+    #   medium   EV > 40% of it (0.02%). Fires more often, smaller margin.
+    #   small    EV > 0. Breakeven after fees — the loosest defensible bar.
+    #
+    # There is deliberately no fourth level. Going below zero would need only
+    # p_up 0.530 at a 1.67% span, which these models DO reach — and every one
+    # of those trades loses money on average. A setting that produces more
+    # signals by producing losing ones is not a feature.
+    #
+    # The strongest level cleared is recorded rather than applied here, so the
+    # app can render at whichever sensitivity the user has chosen without the
+    # server having to know who is asking.
+    levels = (("strong", cfg.ev_threshold_pct),
+              ("medium", cfg.ev_threshold_pct * 0.4),
+              ("small", 0.0))
+    a.strength = ""
+    for label, bar in levels:
+        if best_ev > bar:
+            a.strength = label
+            break
+
+    if a.strength:
         f = float(kelly_full(p_side, tp_pct, sl_pct))
         a.size_pct = min(cfg.kelly_fraction * f * 100.0, cfg.max_position_pct)
         if a.size_pct > 0:
             a.action = f"ENTER {side} NOW"
             a.side = side
-            a.reason = (f"EV {best_ev:+.3f}% clears the "
-                        f"{cfg.ev_threshold_pct:+.2f}% threshold after costs")
+            a.reason = (f"EV {best_ev:+.3f}% after costs — a {a.strength} "
+                        f"signal at this timeframe")
             if side == "SHORT":
                 a.tp_price = entry * (1 - tp_pct / 100.0)
                 a.sl_price = entry * (1 + sl_pct / 100.0)
             return a
 
     a.action = "WAIT"
-    a.reason = (f"best EV {best_ev:+.3f}% is below the "
-                f"{cfg.ev_threshold_pct:+.2f}% threshold - re-read when the "
-                f"next bar closes")
+
+    # Say what would have to be TRUE, not merely that it is not.
+    #
+    # "EV below threshold" is unfalsifiable from the user's chair and reads
+    # as the app having no opinion. The useful number is the probability this
+    # timeframe would need, which falls straight out of the barrier width and
+    # the fixed round-trip cost:
+    #
+    #     EV = s(2p-1) - c > threshold   ->   p > 0.5 + (threshold + c) / 2s
+    #
+    # This is why short timeframes look permanently flat, and it is not a
+    # miscalibration to be tuned away. Fees are a fixed 0.10% of price. On a
+    # 1d trade the barriers sit ~10.9% apart, fees are noise, and 0.514 is
+    # enough. On a 1m trade they are ~1.4% apart, fees eat 7% of the whole
+    # span, and the same decision needs 0.607. Lowering the bar there would
+    # mean entering trades with negative expected value after costs.
+    span = tp_pct + sl_pct
+    if span > 0:
+        needed = 0.5 + (cfg.ev_threshold_pct + cfg.round_trip_cost_pct) / span
+        a.p_needed = float(needed)
+        side_word = "up" if side == "LONG" else "down"
+        a.reason = (
+            f"p({side_word}) {p_side:.3f}; this timeframe needs {needed:.3f} "
+            f"to cover {cfg.round_trip_cost_pct:.2f}% costs across a "
+            f"{span:.2f}% barrier span. Shorter timeframes need MORE, not "
+            f"less - the same fee is a bigger share of a smaller move")
+    else:
+        a.reason = (f"best EV {best_ev:+.3f}% is below the "
+                    f"{cfg.ev_threshold_pct:+.2f}% threshold")
     return a
 
 

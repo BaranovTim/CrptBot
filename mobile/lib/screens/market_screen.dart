@@ -301,6 +301,8 @@ class _MarketScreenState extends State<MarketScreen> {
                 : Obsidian.green,
             tooltip: 'Alerts for ${c.short}',
             onTap: () async {
+              // coin-level from here: the market row is about the coin, and
+              // per-timeframe control lives behind the dashboard's bell
               await Muted.instance.toggle(c.symbol);
               if (mounted) setState(() {});
             },

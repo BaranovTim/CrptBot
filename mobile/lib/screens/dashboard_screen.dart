@@ -28,6 +28,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/client.dart';
 import '../api/live_price.dart';
 import '../api/models.dart';
+import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/indicator_sheet.dart';
@@ -117,6 +118,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) setState(() => _live = t);
     });
     _load();
+    // the user's chosen signal strength, restored before the first payload
+    // lands so a call is never briefly shown then withdrawn
+    Settings.instance.sensitivity().then(
+        (v) => mounted ? setState(() => _sensitivity = v) : null);
     // the service caches per closing bar, so this costs a JSON round trip,
     // not a feature recompute
     _timer = Timer.periodic(const Duration(seconds: 10), (_) => _load(quiet: true));
@@ -128,10 +133,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// round trip and a spinner every time, even going back to one seen a
   /// second earlier. Bounded by the watchlist times six timeframes, so a few
   /// dozen small JSON objects at most.
-  final Map<String, Dashboard> _cache = {};
-  final Map<String, List<double>> _seriesCache = {};
+  // OUTSIDE the State, deliberately.
+  //
+  // The screen is now keyed by symbol, so swiping to another coin DISPOSES
+  // this State and builds a fresh one — which is what makes stale data
+  // structurally impossible rather than a matter of remembering to clear
+  // every field. But a cache that died with the State would make every
+  // swipe a round trip again, so it lives here and survives.
+  //
+  // Keyed by pair AND timeframe, so nothing can be read back under the
+  // wrong one.
+  static final Map<String, Dashboard> _cache = {};
+  static final Map<String, List<double>> _seriesCache = {};
 
   String get _key => '${widget.symbol}:${widget.interval}';
+
+  /// How strong a call has to be before the app shows it as one.
+  ///
+  /// Defaults to 'strong' — the original behaviour — so a fresh install is
+  /// conservative rather than chatty.
+  String _sensitivity = 'strong';
 
   /// Fetch the neighbouring pairs at the current timeframe, quietly.
   ///
@@ -258,9 +279,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadConsensus() async {
+    // captured, so a slow reply for the previous coin cannot land on this one
+    final forSymbol = widget.symbol;
     try {
-      final c = await widget.client.consensus(symbol: widget.symbol);
-      if (mounted) setState(() => _consensus = c);
+      final c = await widget.client.consensus(symbol: forSymbol);
+      if (mounted && forSymbol == widget.symbol) {
+        setState(() => _consensus = c);
+      }
     } catch (_) {
       // supporting context; its absence is not worth an error state
     }
@@ -283,6 +308,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _data = hit;
         _series = _seriesCache[_key] ?? const [];
         _untrained = null;
+
+        // Belt and braces. The screen is keyed by symbol so a coin change
+        // builds a whole new State and none of this can survive — but the
+        // TIMEFRAME does not change the key, and the same reasoning applies
+        // to it.
+        //
+        // EVERY piece of per-coin state, not just the payload.
+        //
+        // These two were missed and produced the flicker after a swipe: for a
+        // moment the screen showed the PREVIOUS coin's numbers under the new
+        // coin's name, then snapped across.
+        //
+        //   _live       the socket tick. `switchTo` is asynchronous, so
+        //               between the swipe and the new socket's first frame
+        //               this still held the old pair's price — and the header
+        //               prefers the live price over the payload's.
+        //   _consensus  fetched per symbol and never cleared, so the
+        //               agreement rows belonged to the coin just left.
+        //
+        // A dash for a moment is honest. The wrong coin's price is not.
+        if (old.symbol != widget.symbol) {
+          _live = null;
+          _consensus = null;
+        }
       });
       _load(quiet: hit != null);
     }
@@ -1112,8 +1161,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // -------------------------------------------------------- recommendation
   Widget _recommendation(Dashboard d) {
     final r = d.recommendation;
-    final c = Obsidian.tone(r.tone);
-    final glowing = r.tone == 'up' || r.tone == 'down';
+
+    // The server reports the strongest level this entry clears; the user
+    // decides how strong is strong enough. A withheld call becomes FLAT and
+    // SAYS SO — a recommendation that silently does not exist is worse than
+    // one that explains why it is being held back.
+    final gated = r.action != 'FLAT' &&
+        r.action != 'STALE' &&
+        r.strength.isNotEmpty &&
+        !r.clears(_sensitivity);
+
+    final action = gated ? 'FLAT' : r.action;
+    final tone = gated ? 'flat' : r.tone;
+    final c = Obsidian.tone(tone);
+    final glowing = tone == 'up' || tone == 'down';
     return GlassPanel(
       active: true,
       radius: Obsidian.rLg,
@@ -1126,7 +1187,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               style: Obsidian.labelSm(size: 11.5)),
           const SizedBox(height: 12),
           Text(
-            r.action,
+            action,
             style: Obsidian.displayLg(color: c).copyWith(
               fontSize: 52,
               shadows: glowing
@@ -1135,9 +1196,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          Text(r.detail,
+          Text(
+              gated
+                  ? 'A ${r.strength} signal is available here. Your setting is '
+                      '"$_sensitivity", so it is not shown as a call — change '
+                      'it in Profile to act on weaker ones.'
+                  : r.detail,
               textAlign: TextAlign.center, style: Obsidian.body(size: 14.5)),
-          if (r.sizePct != null && r.sizePct! > 0) ...[
+          if (!gated && r.strength.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('${r.strength.toUpperCase()} SIGNAL',
+                style: Obsidian.labelSm(color: c, size: 10)),
+          ],
+          if (!gated && r.sizePct != null && r.sizePct! > 0) ...[
             const SizedBox(height: 10),
             Text('quarter-Kelly size ${r.sizePct!.toStringAsFixed(2)}% of equity',
                 style: Obsidian.labelSm(color: c, size: 10.5)),

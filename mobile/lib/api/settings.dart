@@ -19,6 +19,7 @@ class Settings {
   static const _baseKey = 'api.base.v1';
   static const _tokenKey = 'api.token.v1';
   static const _accountKey = 'api.account.v1';
+  static const _signalKey = 'signal.sensitivity.v1';
 
   /// Applies whatever was saved to `client`, falling back to the compile-time
   /// defaults when nothing has been stored.
@@ -63,6 +64,26 @@ class Settings {
       return null;              // a corrupt cache just means signing in again
     }
   }
+
+  /// How strong a signal has to be before the app calls it a BUY or SELL.
+  ///
+  /// strong  — only entries with a real margin over costs (the original rule)
+  /// medium  — a thinner margin, more signals
+  /// small   — anything profitable after fees at all
+  ///
+  /// There is no looser option on purpose: below breakeven the model does
+  /// produce far more signals, and every one of them loses money on average.
+  Future<String> sensitivity() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = prefs.getString(_signalKey);
+      return (v == 'medium' || v == 'small') ? v! : 'strong';
+    } catch (_) {
+      return 'strong';          // the conservative default, if storage fails
+    }
+  }
+
+  Future<void> saveSensitivity(String v) => _put(_signalKey, v);
 
   Future<void> clearSession() async {
     await _put(_tokenKey, '');

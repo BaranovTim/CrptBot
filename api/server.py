@@ -270,7 +270,8 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/whales":
                 self._send({"events": svc.whales(limit=arg("limit", 20))})
             elif route == "/api/news":
-                self._send({"items": svc.news(limit=arg("limit", 20))})
+                self._send({"items": svc.news(limit=arg("limit", 20),
+                                              symbol=opt("symbol"))})
             elif route == "/api/alerts":
                 from api.alerts import AlertEngine
                 global _ENGINE

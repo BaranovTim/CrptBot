@@ -19,6 +19,7 @@ import '../api/muted.dart';
 import '../api/watchlist.dart';
 import '../api/notifications.dart';
 import '../theme/liquid_obsidian.dart';
+import '../widgets/alert_settings_sheet.dart';
 import '../widgets/frosted_nav.dart';
 import '../widgets/mesh_background.dart';
 import 'dashboard_screen.dart';
@@ -131,7 +132,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         // want the alerts this phone does not. An alert with no symbol at all
         // (a scheduled macro release, say) belongs to no coin and is never
         // silenced by a coin's bell.
-        if (a.symbol.isNotEmpty && Muted.instance.isMuted(a.symbol)) continue;
+        if (a.symbol.isNotEmpty &&
+            Muted.instance.isMuted(a.symbol, a.interval)) {
+          continue;
+        }
 
         // Two channels, because iOS suppresses this app's notifications while
         // it is in the FOREGROUND — measured, not assumed: presentAlert,
@@ -318,6 +322,13 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               Expanded(
                 child: switch (_tab) {
                   NavTab.dashboard => DashboardScreen(
+                      // Keyed by pair. Swiping to another coin disposes this
+                      // screen's State and builds a fresh one, so no field
+                      // can carry the previous coin's numbers across — the
+                      // flicker was per-coin state I had cleared by hand,
+                      // twice, and missed something both times. This makes
+                      // the whole class of bug impossible instead.
+                      key: ValueKey(_symbol),
                       client: widget.client,
                       live: _live,
                       symbol: _symbol,
@@ -376,37 +387,6 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     ));
   }
 
-  /// Tapping the bell silences the pair currently selected.
-  ///
-  /// Not notifications as a whole — that switch lives in the OS, and an app
-  /// that keeps its own global mute alongside the system one gives you two
-  /// places to look when your phone goes quiet.
-  Future<void> _toggleBell() async {
-    if (!Notifications.instance.granted) {
-      // muting something that is already silent at the OS level would read as
-      // a broken toggle. Send them where the actual switch is.
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        backgroundColor: Obsidian.surfaceHigh,
-        content: Text('Notifications are off for this app in system settings.',
-            style: Obsidian.body()),
-      ));
-      return;
-    }
-    final nowMuted = await Muted.instance.toggle(_symbol);
-    if (!mounted) return;
-    setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      backgroundColor: Obsidian.surfaceHigh,
-      duration: const Duration(seconds: 2),
-      content: Text(
-        nowMuted
-            ? '$_symbol muted — no alerts from this pair'
-            : '$_symbol unmuted — alerts on again',
-        style: Obsidian.body(),
-      ),
-    ));
-  }
-
   bool get _entitled => widget.account.entitled;
 
   /// Re-ask the server who we are. Called after a checkout returns.
@@ -429,9 +409,34 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     widget.onSignOut();
   }
 
+  /// The bell opens a sheet rather than toggling in place.
+  ///
+  /// There are two levels worth controlling — the whole coin, and one
+  /// timeframe of it — and a single tap cannot express both. The obvious
+  /// alternative was tap-for-one and long-press-for-the-other, which is the
+  /// same undiscoverable gesture that made swipe-to-delete invisible on the
+  /// market screen. One tap, everything visible.
+  Future<void> _openBell() async {
+    if (!Notifications.instance.granted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Obsidian.surfaceHigh,
+        content: Text('Notifications are off for this app in system settings.',
+            style: Obsidian.body()),
+      ));
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AlertSettingsSheet(symbol: _symbol),
+    );
+    if (mounted) setState(() {});          // the bell reflects the new state
+  }
+
   Widget _topBar() {
     final granted = Notifications.instance.granted;
-    final muted = Muted.instance.isMuted(_symbol);
+    // the bell speaks for what you are looking at: this coin, this timeframe
+    final muted = Muted.instance.isMuted(_symbol, _interval);
     // three states, and they are genuinely different things: the OS has
     // refused us, this pair is silenced, or alerts are live
     final lit = granted && !muted;
@@ -443,10 +448,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             Semantics(
               button: true,
               label: lit
-                  ? 'Alerts on for $_symbol. Tap to mute.'
-                  : 'Alerts muted for $_symbol. Tap to unmute.',
+                  ? 'Alerts on for $_symbol $_interval. Tap to change.'
+                  : 'Alerts muted for $_symbol $_interval. Tap to change.',
               child: InkWell(
-                onTap: _toggleBell,
+                onTap: _openBell,
                 customBorder: const CircleBorder(),
                 child: Padding(
                   padding: const EdgeInsets.all(6),
@@ -462,8 +467,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             ),
             const SizedBox(width: 4),
             if (!lit && granted)
-              Text(_symbol, style: Obsidian.labelSm(size: 10.5,
-                  color: Obsidian.outline)),
+              Text('$_symbol · $_interval',
+                  style: Obsidian.labelSm(
+                      size: 10.5, color: Obsidian.outline)),
             const Spacer(),
             // The dashboard names its own pair in its header, so repeating
             // it here would be noise on the screen that needs it least.

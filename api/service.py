@@ -92,9 +92,12 @@ class TradingService:
         self._last_seen: Dict[Tuple[str, str], float] = {}
         self._charts: Dict[Tuple[str, str, int, Any], Dict[str, Any]] = {}
         self._bars_cache: Dict[Tuple[str, str], Tuple[Any, Any]] = {}
-        # v1: bump the directory name if the dashboard payload shape changes,
-        # so an old cache is ignored rather than served to a new app
-        self._dash_dir = Path("data_cache") / "dashcache.v1"
+        # BUMP THIS when the dashboard payload gains or renames a field.
+        # v1 -> v2 on 2026-08-31, when `strength` and `p_needed` were added:
+        # the restored cache kept serving payloads without them and the new
+        # app read null for both. The versioned name is the whole defence
+        # against a cache outliving the shape it was written for.
+        self._dash_dir = Path("data_cache") / "dashcache.v2"
         self._refresh_q: "queue.Queue" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self._monitors: Dict[Tuple[str, str], Any] = {}
@@ -888,30 +891,53 @@ class TradingService:
     # whether or not anyone is watching. Only the timeframes named here: 1h
     # is where the measured edge is, and four builds an hour at ~20s each is
     # about 2% of one core. Recording 1m for four symbols would be 100%.
-    RECORD_INTERVALS = ("1h",)
+    # 1m and 5m are deliberately absent and cannot be added on this box: a
+    # build takes ~24s on the single shared vCPU (measured: 24 pairs warmed
+    # in 587s) and a 1m bar closes every 60s, so four coins could never keep
+    # up. These four cost about 14% of the core.
+    RECORD_INTERVALS = ("15m", "1h", "4h", "1d")
 
     def start_recorder(self, intervals: Optional[Tuple[str, ...]] = None,
                        symbols: Optional[List[str]] = None) -> None:
         ivs = tuple(intervals or self.RECORD_INTERVALS)
         syms = symbols or self.trained_symbols()
 
+        # The last bar we actually recorded, per pair.
+        #
+        # The loop wakes on the SHORTEST interval in the set, so with 15m in
+        # the list it wakes four times an hour. Rebuilding everything on each
+        # wake would rebuild 1d ninety-six times a day to record the same
+        # bar once — the dedupe would drop the duplicates, but the CPU would
+        # already have been spent. Each pair is rebuilt only when its own bar
+        # has closed.
+        seen: Dict[Tuple[str, str], Any] = {}
+
         def loop() -> None:
             import time as _t
             while True:
                 try:
-                    delay = self._sleep_to_next_close(ivs)
-                    _t.sleep(delay)
+                    _t.sleep(self._sleep_to_next_close(ivs))
+                    built = []
                     for iv in ivs:
                         for sym in syms:
                             if not is_trained(sym, iv):
                                 continue
                             try:
+                                bars = self._bars(sym, iv)
+                                if bars.empty:
+                                    continue
+                                last = bars.index[-1]
+                                if seen.get((sym, iv)) == last:
+                                    continue          # no new bar for this one
                                 # a real build, which records as a side
                                 # effect and refreshes the cache too
                                 self._build_and_store((sym, iv))
+                                seen[(sym, iv)] = last
+                                built.append(f"{sym} {iv}")
                             except Exception as e:
                                 log.warning("record %s %s: %s", sym, iv, e)
-                    log.info("forward record updated for %s", ", ".join(ivs))
+                    if built:
+                        log.info("forward record: %s", ", ".join(built))
                 except Exception as e:
                     log.warning("recorder loop: %s", e)
                     _t.sleep(60)
@@ -1109,24 +1135,50 @@ class TradingService:
                 break
         return out
 
-    def news(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def news(self, limit: int = 20,
+             symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
             from newsfeed.store import JSONLNewsStore
             items = JSONLNewsStore().load_items()
         except Exception as e:
             log.warning("news store unreadable: %s", e)
             return []
+        # Sort THEN filter. Slicing the newest 20 first and filtering after
+        # would return "the newest 20 overall that happen to mention SOL",
+        # which is usually nothing at all.
+        items = sorted(items,
+                       key=lambda i: getattr(i, "published_at", None) or utc_now(),
+                       reverse=True)
+
+        asset = None
+        if symbol:
+            base = symbol.upper().replace("USDT", "").replace("USD", "")
+            asset = base or None
+
         out = []
-        for it in items[-limit:][::-1]:
+        for it in items:
+            assets = tuple(getattr(it, "assets", ()) or ())
+            macro = str((getattr(it, "meta", {}) or {}).get("macro", "0")) == "1"
+            if asset is not None and assets and asset not in assets and not macro:
+                # Macro headlines belong to EVERY coin: "Fed holds rates" is
+                # about SOL too, and filing it under nothing would hide the
+                # items most likely to move the market. Untagged items are
+                # kept rather than dropped — the tagger not recognising a
+                # coin is not evidence the story is irrelevant.
+                continue
             out.append({
                 "headline": getattr(it, "headline", str(it)),
                 "source": getattr(it, "source", ""),
                 # the article itself. Without this the app can tell you
                 # something happened and not show you what.
                 "url": getattr(it, "url", "") or "",
+                "assets": list(assets),
+                "macro": macro,
                 "published_at": getattr(it, "published_at", None)
                 and it.published_at.isoformat(),
             })
+            if len(out) >= limit:
+                break
         return out
 
     # --------------------------------------------------------- training
@@ -1336,9 +1388,17 @@ def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
                 "ev": _num(max(a.ev_long, a.ev_short)),
                 "window_bars": a.bars_left,
                 "p_up": _num(a.p_up),
+                # strong | medium | small. The server reports the strongest
+                # level this entry clears; the app decides whether the user's
+                # chosen sensitivity is satisfied. Computing it once here and
+                # filtering there means one calculation serves every setting.
+                "strength": getattr(a, "strength", "") or "",
+                "p_needed": _num(getattr(a, "p_needed", float("nan"))),
                 "window_ends": a.ends_at.isoformat()}
     return {"action": "FLAT", "tone": "flat",
             "detail": a.reason or "No window clears the EV threshold after costs.",
+            "strength": "",
+            "p_needed": _num(getattr(a, "p_needed", float("nan"))),
             "ev": _num(max(a.ev_long, a.ev_short)),
             "window_bars": a.bars_left,
             "p_up": _num(a.p_up),

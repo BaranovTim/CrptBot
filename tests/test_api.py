@@ -442,7 +442,18 @@ def test_symbols_are_ordered_by_volume_not_alphabetically():
         return True
     vols = [r["volume_24h"] or 0.0 for r in rows]
     assert vols == sorted(vols, reverse=True), vols[:5]
-    assert rows[0]["symbol"] == "BTCUSDT", rows[0]["symbol"]
+
+    # Deliberately NOT "BTCUSDT is first". That asserted a fact about the
+    # market, not about this code, and it failed on 2026-08-30 because
+    # ETHUSDT genuinely out-traded BTCUSDT that day. A test that breaks when
+    # the world changes rather than when the code does teaches you to ignore
+    # the suite.
+    #
+    # The property that matters is that the order is NOT alphabetical, which
+    # is what a naive listing would give.
+    syms = [r["symbol"] for r in rows]
+    assert syms != sorted(syms), "symbols came back in alphabetical order"
+    assert "BTCUSDT" in syms[:5], syms[:5]      # still near the top
     return True
 
 
@@ -1230,4 +1241,87 @@ def test_only_clock_covered_intervals_are_recorded():
         "any build can write to the forward record again"
     assert src.index("RECORD_INTERVALS") < src.index("TrackRecord"), \
         "the guard must come before anything is written"
+    return True
+
+
+def test_the_recorder_only_rebuilds_a_pair_when_its_own_bar_closes():
+    """The loop wakes on the SHORTEST interval in the set.
+
+    With 15m in the list that is four times an hour, and rebuilding
+    everything on each wake would rebuild 1d ninety-six times a day to
+    record the same bar once. The dedupe would drop the duplicate rows, but
+    the CPU — ~24s per build on the droplet's single shared core — would
+    already have been spent.
+    """
+    import inspect
+
+    from api.service import TradingService
+
+    src = inspect.getsource(TradingService.start_recorder)
+    assert "seen.get((sym, iv)) == last" in src, \
+        "the recorder rebuilds every interval on every wake again"
+    assert "bars.index[-1]" in src, "no check that a new bar actually closed"
+    return True
+
+
+def test_the_recorded_intervals_are_ones_the_box_can_keep_up_with():
+    """A build is ~24s on one shared vCPU (measured: 24 pairs in 587s).
+
+    A 1m bar closes every 60s, so four coins at 1m would need ~96s of work
+    per 60s window and would fall permanently behind. 5m is borderline for
+    the same reason. Neither belongs here until the hardware changes.
+    """
+    from api.service import TradingService
+    from core import interval_seconds
+
+    build_seconds = 24.0
+    symbols = 4
+    total = 0.0
+    for iv in TradingService.RECORD_INTERVALS:
+        assert iv not in ("1m", "5m"), \
+            f"{iv} cannot be kept warm on a single shared core"
+        total += build_seconds * symbols / interval_seconds(iv)
+
+    # This arithmetic UNDERSTATES the real cost. It counts only the recorder;
+    # the refresh worker servicing recently-viewed pairs roughly doubles it.
+    #
+    # Measured on the droplet with ("15m","1h","4h","1d"): this formula says
+    # 14%, eighteen samples over six minutes said mean 27.1%, peak 100.5%.
+    # Idle sits near 1% and bursts to a full core while four builds run.
+    #
+    # So the budget here is deliberately half of what is actually available:
+    # clearing it means the true figure is around twice as much, and still
+    # inside one core.
+    assert total < 0.20, (
+        f"recorder alone would use {total*100:.0f}% of a core; the measured "
+        f"cost is roughly double that")
+    return True
+
+
+def test_no_sensitivity_level_ever_recommends_a_losing_trade():
+    """Three levels were asked for, to produce more signals.
+
+    All three sit at or above breakeven after costs:
+        strong  EV > 0.05%   medium  EV > 0.02%   small  EV > 0.00%
+
+    A fourth below zero would fire far more often — at a 1.67% span it needs
+    only p_up 0.530, which these models do reach — and every one of those
+    trades loses money on average. More signals by way of losing ones is not
+    a feature, so the loosest level is breakeven and this pins it.
+    """
+    import inspect
+
+    import monitor
+
+    src = inspect.getsource(monitor.evaluate)
+    m = re.search(r'levels = \((.*?)\)\n', src, re.S)
+    assert m, "evaluate() no longer declares sensitivity levels"
+    block = m.group(1)
+    assert '"strong"' in block and '"medium"' in block and '"small"' in block
+
+    # the loosest bar must be zero, never negative
+    assert '("small", 0.0)' in block, \
+        "the loosest level is no longer breakeven — it may recommend losing trades"
+    assert "-" not in block.split('("small"')[1][:12], \
+        "a negative expected-value level was added"
     return True

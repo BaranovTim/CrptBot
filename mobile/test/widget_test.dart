@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
 import 'dart:convert';
 
+import 'package:tradingbot_app/api/muted.dart';
 import 'package:tradingbot_app/api/watchlist.dart';
 import 'package:tradingbot_app/main.dart';
 
@@ -191,5 +192,78 @@ void main() {
     final before = await w.load();
     final after = await w.reorder(99, 0);
     expect(after, before);
+  });
+
+  test('a coin can be silenced whole, or one timeframe at a time', () async {
+    // Muting was per-coin only, which forced you to silence a coin entirely
+    // to escape its noisiest timeframe.
+    SharedPreferences.setMockInitialValues({});
+    final m = Muted.instance;
+    await m.load();
+
+    expect(m.isMuted('BTCUSDT', '1h'), isFalse);
+
+    // one timeframe: that timeframe goes quiet, the others do not
+    await m.toggle('BTCUSDT', '1m');
+    expect(m.isMuted('BTCUSDT', '1m'), isTrue);
+    expect(m.isMuted('BTCUSDT', '1h'), isFalse);
+
+    // the coin-level mute wins over anything more specific
+    await m.toggle('BTCUSDT');
+    expect(m.isMuted('BTCUSDT', '1h'), isTrue,
+        reason: 'a coin-level mute must silence every timeframe');
+    expect(m.isMuted('BTCUSDT', ''), isTrue);
+
+    // and an alert with no timeframe at all follows the coin
+    await m.toggle('BTCUSDT');
+    expect(m.isMuted('BTCUSDT', ''), isFalse);
+    expect(m.isMuted('BTCUSDT', '1m'), isTrue,
+        reason: 'un-muting the coin must not clear per-timeframe choices');
+  });
+
+  test('dropping a coin forgets its timeframe mutes too', () async {
+    // Otherwise re-adding a coin brings back settings you have no memory of
+    // making, and the bell is off for reasons that look like a bug.
+    SharedPreferences.setMockInitialValues({});
+    final m = Muted.instance;
+    await m.load();
+    await m.toggle('SOLUSDT');
+    await m.toggle('SOLUSDT', '15m');
+    await m.toggle('ADAUSDT', '1h');
+
+    await m.forget('SOLUSDT');
+    expect(m.isMuted('SOLUSDT'), isFalse);
+    expect(m.isMuted('SOLUSDT', '15m'), isFalse);
+    // an unrelated coin is untouched
+    expect(m.isMuted('ADAUSDT', '1h'), isTrue);
+  });
+
+  test('no sensitivity setting ever shows a losing trade as a call', () {
+    // Three levels, all at or above breakeven after costs. The app gates on
+    // the strength the SERVER reports, and the server never labels a
+    // negative-expected-value entry — so there is no combination of
+    // settings that turns a losing trade into a BUY.
+    Recommendation make(String strength, String action) =>
+        Recommendation.fromJson({
+          'action': action,
+          'strength': strength,
+          'detail': '',
+        });
+
+    // a strong call shows at every setting
+    for (final s in ['strong', 'medium', 'small']) {
+      expect(make('strong', 'BUY').clears(s), isTrue, reason: s);
+    }
+    // a medium call is withheld only from the strictest setting
+    expect(make('medium', 'BUY').clears('strong'), isFalse);
+    expect(make('medium', 'BUY').clears('medium'), isTrue);
+    expect(make('medium', 'BUY').clears('small'), isTrue);
+    // a small call shows only at the loosest
+    expect(make('small', 'BUY').clears('strong'), isFalse);
+    expect(make('small', 'BUY').clears('small'), isTrue);
+    // and no strength at all never clears anything, whatever is chosen
+    for (final s in ['strong', 'medium', 'small']) {
+      expect(make('', 'FLAT').clears(s), isFalse, reason: s);
+    }
   });
 }

@@ -61,6 +61,10 @@ class Alert:
     at: datetime               # when the underlying event happened / happens
     detected_at: datetime
     severity: str = "medium"   # high | medium | low
+    # Which timeframe produced it, "" when the alert belongs to no timeframe
+    # (a filing, a macro release). The app mutes per symbol AND per interval,
+    # which it cannot do if the alert does not say which one it came from.
+    interval: str = ""
     symbol: str = ""
     url: str = ""
     extra: Dict[str, str] = field(default_factory=dict)
@@ -93,14 +97,42 @@ def _hash(*parts) -> str:
 class AlertEngine:
     """Turns the dashboard payload and the feeds into a stream of transitions."""
 
-    def __init__(self, service):
+    def __init__(self, service, pairs=None):
         self.svc = service
         self._log: List[Alert] = []
         self._seen: set = set()
-        self._last_action: Optional[str] = None
-        self._last_signal_bar: Optional[str] = None
-        self._spiked_bar: Optional[str] = None
+        # PER PAIR, not global.
+        #
+        # These were three scalars, which was only correct while the engine
+        # watched exactly one pair. It watched `svc.dashboard()` with no
+        # arguments - the default, BTCUSDT 1h - so following four coins
+        # produced alerts for one of them and no alerts at all for the other
+        # three. Sharing one `_last_action` across pairs would be worse than
+        # the bug it replaces: ETH flipping to BUY would suppress BTC's
+        # identical flip, and which one you were told about would depend on
+        # iteration order.
+        self._last_action: Dict[tuple, Optional[str]] = {}
+        self._last_signal_bar: Dict[tuple, Optional[str]] = {}
+        self._spiked_bar: Dict[tuple, Optional[str]] = {}
         self._primed = False
+        self._pairs = pairs
+
+    def pairs(self) -> List[tuple]:
+        """(symbol, interval) pairs to watch.
+
+        Defaults to every trained symbol on the intervals the recorder keeps
+        warm on a clock. Watching all six timeframes for four symbols would
+        be 24 dashboard reads per poll on a one-core box; these are the ones
+        already built every bar, so reading them is free.
+        """
+        if self._pairs is not None:
+            return list(self._pairs)
+        try:
+            ivs = getattr(self.svc, "RECORD_INTERVALS", ("1h",))
+            return [(sym, iv) for iv in ivs
+                    for sym in self.svc.trained_symbols()]
+        except Exception:
+            return [(self.svc.symbol, self.svc.interval)]
 
     # -- public --------------------------------------------------------
     def refresh(self) -> List[Alert]:
@@ -148,41 +180,54 @@ class AlertEngine:
 
     # -- probes --------------------------------------------------------
     def _signal(self) -> List[Alert]:
-        """Fires when the recommendation CHANGES into an actionable side."""
-        d = self.svc.dashboard()
+        """Fires when a recommendation CHANGES into an actionable side."""
+        out: List[Alert] = []
+        for sym, iv in self.pairs():
+            try:
+                out.extend(self._signal_for(sym, iv))
+            except Exception as e:
+                log.warning("signal %s %s: %s", sym, iv, e)
+        return out
+
+    def _signal_for(self, sym: str, iv: str) -> List[Alert]:
+        key = (sym, iv)
+        d = self.svc.dashboard(symbol=sym, interval=iv)
         rec = d["recommendation"]
         action, bar = rec["action"], d["last_closed_bar"]
-        prev, self._last_action = self._last_action, action
+        prev = self._last_action.get(key)
+        self._last_action[key] = action
 
         out: List[Alert] = []
 
         # the intra-bar spike, reported once per bar
         live = d.get("live") or {}
-        if live.get("beyond_spike_threshold") and self._spiked_bar != bar:
-            self._spiked_bar = bar
+        if live.get("beyond_spike_threshold") and self._spiked_bar.get(key) != bar:
+            self._spiked_bar[key] = bar
             move = live.get("move_pct")
             atr = live.get("move_atr")
             way = "UP" if (atr or 0) > 0 else "DOWN"
             out.append(Alert(
-                id=_hash("spike", d["symbol"], bar),
+                id=_hash("spike", d["symbol"], iv, bar),
                 kind="spike", severity="high", symbol=d["symbol"],
-                title=f"{d['symbol']} spiking {way}",
+                interval=iv,
+                title=f"{d['symbol']} {iv} spiking {way}",
                 body=(f"{move:+.2f}% ({atr:+.2f} ATR) inside the current bar. "
                       f"The windows below were read at the last close."),
                 at=utc_now(), detected_at=utc_now()))
 
         if action == prev or action not in ("BUY", "SELL"):
             return out
-        if self._last_signal_bar == bar and prev is not None:
+        if self._last_signal_bar.get(key) == bar and prev is not None:
             return out                              # one signal per bar, max
-        self._last_signal_bar = bar
+        self._last_signal_bar[key] = bar
 
         ev = rec.get("ev")
         size = rec.get("size_pct")
         out.append(Alert(
-            id=_hash("signal", d["symbol"], bar, action),
+            id=_hash("signal", d["symbol"], iv, bar, action),
             kind="signal", severity="high", symbol=d["symbol"],
-            title=f"{d['symbol']}: {action}",
+            interval=iv,
+            title=f"{d['symbol']} {iv}: {action}",
             body=(f"{rec.get('detail', '')}"
                   + (f"  EV {ev:+.3f}%" if ev is not None else "")
                   + (f", size {size:.2f}% of equity" if size else "")),

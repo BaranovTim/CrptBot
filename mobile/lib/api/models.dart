@@ -106,12 +106,31 @@ class Recommendation {
         tone = j['tone'] as String?,
         detail = j['detail'] as String? ?? '',
         ev = _d(j['ev']),
+        strength = j['strength'] as String? ?? '',
+        pNeeded = _d(j['p_needed']),
         sizePct = _d(j['size_pct']);
 
   final String action;
   final String? tone;
   final String detail;
   final double? ev, sizePct;
+
+  /// strong | medium | small, or "" when the expected value does not clear
+  /// breakeven after costs. The server reports the strongest level this
+  /// entry qualifies for; the app shows or withholds it based on the
+  /// sensitivity the user picked.
+  final String strength;
+
+  /// The probability this timeframe would need for an entry to pay for its
+  /// costs. Shown beside FLAT so it reads as a measurement, not a shrug.
+  final double? pNeeded;
+
+  /// Does this clear the bar the user asked for?
+  bool clears(String setting) {
+    const rank = {'strong': 3, 'medium': 2, 'small': 1, '': 0};
+    return (rank[strength] ?? 0) >= (rank[setting] ?? 3) &&
+        (rank[strength] ?? 0) > 0;
+  }
 }
 
 class Analysis {
@@ -335,6 +354,7 @@ class Alert {
         body = j['body'] as String,
         severity = j['severity'] as String? ?? 'medium',
         symbol = j['symbol'] as String? ?? '',
+        interval = j['interval'] as String? ?? '',
         url = j['url'] as String? ?? '',
         seq = (j['seq'] as num?)?.toInt() ?? 0,
         at = DateTime.parse(j['at'] as String),
@@ -343,6 +363,11 @@ class Alert {
             (j['extra'] as Map?)?.map((k, v) => MapEntry('$k', '$v')) ?? {});
 
   final String id, kind, title, body, severity, symbol, url;
+
+  /// Which timeframe produced it, '' for alerts that belong to no timeframe
+  /// (a filing, a macro release). Muting is per symbol AND per interval, and
+  /// cannot be without this.
+  final String interval;
   final int seq;
 
   /// When the underlying thing HAPPENED.

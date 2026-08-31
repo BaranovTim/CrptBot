@@ -44,12 +44,100 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _linked = false;
   bool _testing = false;
   int _muted = 0;
+  String _sensitivity = 'strong';
 
   @override
   void initState() {
     super.initState();
     _probe();
     _countMuted();
+    Settings.instance.sensitivity().then(
+        (v) => mounted ? setState(() => _sensitivity = v) : null);
+  }
+
+  static const _levels = <String, (String, String)>{
+    'strong': ('Strong only', 'Entries with a real margin over costs. '
+        'Fewest calls, and the ones the model is most confident in.'),
+    'medium': ('Medium and above', 'A thinner margin. More calls, each with '
+        'less room for the model to be wrong.'),
+    'small': ('Anything profitable', 'Every entry whose expected value clears '
+        'fees at all. Most calls, thinnest edge.'),
+  };
+
+  Future<void> _pickSensitivity() async {
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(Obsidian.containerPadding),
+          child: GlassPanel(
+            active: true,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('SIGNAL STRENGTH', style: Obsidian.labelSm(size: 10.5)),
+                const SizedBox(height: 14),
+                for (final e in _levels.entries) ...[
+                  InkWell(
+                    onTap: () => Navigator.pop(ctx, e.key),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                              e.key == _sensitivity
+                                  ? Icons.radio_button_checked_rounded
+                                  : Icons.radio_button_unchecked_rounded,
+                              size: 20,
+                              color: e.key == _sensitivity
+                                  ? Obsidian.primary
+                                  : Obsidian.outline),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(e.value.$1,
+                                    style: Obsidian.bodyLg().copyWith(
+                                        fontWeight: FontWeight.w600)),
+                                const SizedBox(height: 4),
+                                Text(e.value.$2,
+                                    style: Obsidian.body(
+                                        color: Obsidian.outline, size: 12)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (e.key != 'small')
+                    Divider(
+                        height: 1,
+                        color: Colors.white.withValues(alpha: 0.05)),
+                ],
+                const SizedBox(height: 14),
+                // Said plainly, because the obvious next question is "why is
+                // there no looser option".
+                Text(
+                    'There is no weaker setting. Below this the model does '
+                    'produce many more signals — and every one of them loses '
+                    'money on average once fees are paid.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    await Settings.instance.saveSensitivity(chosen);
+    if (mounted) setState(() => _sensitivity = chosen);
   }
 
   Future<void> _probe() async {
@@ -229,6 +317,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
               title: _tierName(a),
               subtitle: _tierDetail(a),
               trailing: StatusDot(live: a.entitled),
+            ),
+          ]),
+          const SizedBox(height: Obsidian.gutter),
+          _section('SIGNALS', [
+            _tile(
+              icon: Icons.tune_rounded,
+              title: 'Signal strength',
+              subtitle: _levels[_sensitivity]?.$1 ?? 'Strong only',
+              onTap: _pickSensitivity,
             ),
           ]),
           const SizedBox(height: Obsidian.gutter),

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
 from newsfeed.events import NewsItem
+from newsfeed.rss import CryptoRss
 from newsfeed.sources import BinanceAnnouncements, NewsSource
 from newsfeed.store import JSONLNewsStore
 
@@ -51,7 +52,13 @@ class NewsCollector:
     def __init__(self, sources: Optional[Sequence[NewsSource]] = None,
                  store: Optional[JSONLNewsStore] = None,
                  interval_seconds: int = 300):
-        self.sources = list(sources) if sources else [BinanceAnnouncements(pages=1)]
+        # Binance announcements ALONE produced one item in two days: listings
+        # and halts are high quality and rare. The publisher feeds carry the
+        # headlines people actually read — measured at 98 unique items across
+        # five outlets — so both run, exchange first because its timestamp is
+        # the event rather than the coverage of it.
+        self.sources = list(sources) if sources else [
+            BinanceAnnouncements(pages=1), CryptoRss()]
         self.store = store or JSONLNewsStore()
         self.interval_seconds = interval_seconds
         self.stats = NewsStats()
