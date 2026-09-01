@@ -14,7 +14,7 @@ import '../theme/liquid_obsidian.dart';
 // is and handed over the train command; the command now sits on the
 // dashboard panel that actually needs it, and nothing else on the screen
 // was used.
-enum NavTab { dashboard, market, news, profile }
+enum NavTab { dashboard, market, screener, news, profile }
 
 class FrostedNav extends StatelessWidget {
   const FrostedNav({
@@ -33,9 +33,17 @@ class FrostedNav extends StatelessWidget {
   static const _items = <NavTab, (IconData, String)>{
     NavTab.dashboard: (Icons.grid_view_rounded, 'Dashboard'),
     NavTab.market: (Icons.query_stats_rounded, 'Market'),
+    NavTab.screener: (Icons.filter_alt_rounded, 'Screener'),
     NavTab.news: (Icons.article_outlined, 'News'),
     NavTab.profile: (Icons.person_rounded, 'Profile'),
   };
+
+  /// Tabs that exist only in one market.
+  ///
+  /// The screener is stocks-only for now: the crypto presets have not been
+  /// specified yet, and a screener with no filters defined for the market you
+  /// are in is worse than no tab at all.
+  static const stocksOnly = {NavTab.screener};
 
   @override
   Widget build(BuildContext context) {

@@ -578,3 +578,207 @@ class IndicatorSeries {
 
   bool get isEmpty => values.where((v) => v != null).length < 2;
 }
+
+// --------------------------------------------------------------- screener
+//
+// The app deliberately hardcodes NONE of the screener. Fields, operators and
+// presets all arrive from `/api/screener/catalogue`, so adding a filter is a
+// server change and an old build keeps working rather than showing a control
+// that does nothing.
+
+class ScreenerField {
+  ScreenerField.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        label = j['label'] as String? ?? j['id'] as String,
+        group = j['group'] as String? ?? '',
+        kind = j['kind'] as String? ?? 'number',
+        needs = j['needs'] as String? ?? 'price',
+        help = j['help'] as String? ?? '';
+
+  final String id, label, group, kind, needs, help;
+
+  /// Nothing on the free data stack can fill this in.
+  ///
+  /// Shown greyed with the reason rather than hidden: a preset that names a
+  /// criterion the server cannot judge must say so, or the results look like
+  /// they honoured it.
+  bool get unavailable => needs == 'estimates';
+
+  /// How to render a raw number for this field.
+  String format(num? v) {
+    if (v == null) return '—';
+    switch (kind) {
+      case 'percent':
+        return '${v.toStringAsFixed(v.abs() < 10 ? 2 : 1)}%';
+      case 'currency':
+        return _compactMoney(v);
+      case 'shares':
+        return _compact(v);
+      case 'ratio':
+        return v.toStringAsFixed(2);
+      case 'bool':
+        return v == 0 ? 'no' : 'yes';
+      default:
+        return v.abs() >= 1000 ? _compact(v) : v.toStringAsFixed(2);
+    }
+  }
+
+  static String _compact(num v) {
+    final a = v.abs();
+    if (a >= 1e12) return '${(v / 1e12).toStringAsFixed(2)}T';
+    if (a >= 1e9) return '${(v / 1e9).toStringAsFixed(2)}B';
+    if (a >= 1e6) return '${(v / 1e6).toStringAsFixed(2)}M';
+    if (a >= 1e3) return '${(v / 1e3).toStringAsFixed(1)}K';
+    return v.toStringAsFixed(2);
+  }
+
+  static String _compactMoney(num v) => '\$${_compact(v)}';
+}
+
+class ScreenerFilter {
+  ScreenerFilter({required this.field, required this.op, this.value,
+    this.value2});
+
+  ScreenerFilter.fromJson(Map<String, dynamic> j)
+      : field = j['field'] as String,
+        op = j['op'] as String? ?? 'gt',
+        value = _d(j['value']),
+        value2 = _d(j['value2']);
+
+  final String field;
+  String op;
+  double? value;
+  double? value2;
+
+  Map<String, dynamic> toJson() => {
+        'field': field,
+        'op': op,
+        if (value != null) 'value': value,
+        if (value2 != null) 'value2': value2,
+      };
+
+  ScreenerFilter copy() =>
+      ScreenerFilter(field: field, op: op, value: value, value2: value2);
+
+  /// Reads as a sentence, because a row of dropdowns does not.
+  String describe(ScreenerField? f) {
+    final label = f?.label ?? field;
+    switch (op) {
+      case 'is_true':
+        return field.startsWith('above_') ? '$label — above' : '$label — yes';
+      case 'is_false':
+        return field.startsWith('above_') ? '$label — below' : '$label — no';
+      case 'between':
+        return '$label ${f?.format(value)} to ${f?.format(value2)}';
+      case 'lt':
+        return '$label under ${f?.format(value)}';
+      case 'lte':
+        return '$label at most ${f?.format(value)}';
+      case 'gte':
+        return '$label at least ${f?.format(value)}';
+      default:
+        return '$label over ${f?.format(value)}';
+    }
+  }
+}
+
+class ScreenerPreset {
+  ScreenerPreset.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        name = j['name'] as String,
+        note = j['note'] as String? ?? '',
+        filters = ((j['filters'] as List?) ?? const [])
+            .map((e) => ScreenerFilter.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        unavailable = ((j['unavailable'] as List?) ?? const [])
+            .map((e) => '$e')
+            .toList();
+
+  final String id, name, note;
+
+  /// The filters this preset expands into. Copied on use, never shared —
+  /// editing a preset's numbers must not rewrite the preset itself.
+  final List<ScreenerFilter> filters;
+
+  /// Which of its criteria the server cannot judge on the free data stack.
+  final List<String> unavailable;
+
+  List<ScreenerFilter> instantiate() =>
+      filters.map((f) => f.copy()).toList();
+}
+
+class ScreenerCatalogue {
+  ScreenerCatalogue.fromJson(Map<String, dynamic> j)
+      : fields = ((j['fields'] as List?) ?? const [])
+            .map((e) => ScreenerField.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        operators =
+            ((j['operators'] as List?) ?? const []).map((e) => '$e').toList(),
+        presets = ((j['presets'] as List?) ?? const [])
+            .map((e) => ScreenerPreset.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        unavailable = ((j['unavailable'] as List?) ?? const [])
+            .map((e) => '$e')
+            .toList(),
+        builtAt = j['built_at'] == null
+            ? null
+            : DateTime.tryParse(j['built_at'] as String),
+        symbols = (j['symbols'] as num?)?.toInt() ?? 0;
+
+  final List<ScreenerField> fields;
+  final List<String> operators;
+  final List<ScreenerPreset> presets;
+  final List<String> unavailable;
+
+  /// When the table was last rebuilt. Shown, because an overnight snapshot
+  /// presented as live is the kind of thing someone sizes a position on.
+  final DateTime? builtAt;
+  final int symbols;
+
+  Map<String, ScreenerField> get byId =>
+      {for (final f in fields) f.id: f};
+}
+
+class ScreenerRow {
+  ScreenerRow.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] as String,
+        metrics = Map<String, dynamic>.from(
+            (j['metrics'] as Map?) ?? const {}),
+        passed = ((j['passed'] as List?) ?? const []).map((e) => '$e').toList(),
+        failed = ((j['failed'] as List?) ?? const []).map((e) => '$e').toList(),
+        unknown =
+            ((j['unknown'] as List?) ?? const []).map((e) => '$e').toList();
+
+  final String symbol;
+  final Map<String, dynamic> metrics;
+  final List<String> passed, failed, unknown;
+
+  double? metric(String id) {
+    final v = metrics[id];
+    return v is num ? v.toDouble() : null;
+  }
+
+  String get yahooUrl => 'https://finance.yahoo.com/quote/$symbol';
+}
+
+class ScreenerResult {
+  ScreenerResult.fromJson(Map<String, dynamic> j)
+      : matched = (j['matched'] as num?)?.toInt() ?? 0,
+        unjudged = (j['unjudged'] as num?)?.toInt() ?? 0,
+        scanned = (j['scanned'] as num?)?.toInt() ?? 0,
+        rows = ((j['rows'] as List?) ?? const [])
+            .map((e) => ScreenerRow.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        builtAt = j['built_at'] == null
+            ? null
+            : DateTime.tryParse(j['built_at'] as String);
+
+  final int matched;
+
+  /// Passed every criterion that could be judged, but not every criterion.
+  /// Counted separately so the page never implies these were rejected.
+  final int unjudged;
+  final int scanned;
+  final List<ScreenerRow> rows;
+  final DateTime? builtAt;
+}

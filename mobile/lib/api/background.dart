@@ -75,7 +75,7 @@ const String _taskName = 'thusildy.alerts.poll';
 /// leave the old one running forever on every phone that had already
 /// installed the app, polling under a name nothing cancels.
 String get _uniqueName => (!kIsWeb && Platform.isIOS)
-    ? 'com.tradingbot.tradingbotApp.alertPoll'
+    ? 'com.dmtcoj.thusildy.alertPoll'
     : 'thusildy-alert-poll';
 
 /// How often the OS is ASKED to run the job.

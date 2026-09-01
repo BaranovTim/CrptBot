@@ -218,6 +218,43 @@ class ApiClient {
         .toList();
   }
 
+  /// The screener's controls, presets and table age.
+  ///
+  /// Fetched rather than hardcoded so a filter added on the server appears
+  /// without shipping an APK, and an older build simply does not show it
+  /// instead of rendering a control that does nothing.
+  Future<ScreenerCatalogue> screenerCatalogue() async =>
+      ScreenerCatalogue.fromJson(await _get('/api/screener/catalogue'));
+
+  /// Run a screen.
+  ///
+  /// `preset` and `filters` are exclusive: naming a preset runs the server's
+  /// own definition, which is what the very first tap does. As soon as a value
+  /// is edited the app sends the filters instead, so what runs is always what
+  /// is on screen.
+  Future<ScreenerResult> screen({
+    String? preset,
+    List<ScreenerFilter>? filters,
+    String? sortBy,
+    bool descending = true,
+    bool includeUnknown = true,
+    int limit = 200,
+  }) async {
+    final q = StringBuffer('/api/screener?limit=$limit');
+    if (includeUnknown) q.write('&unknown=1');
+    if (sortBy != null) q.write('&sort=$sortBy&dir=${descending ? 'desc' : 'asc'}');
+    if (filters != null) {
+      final encoded = json.encode(filters.map((f) => f.toJson()).toList());
+      q.write('&filters=${Uri.encodeQueryComponent(encoded)}');
+    } else if (preset != null) {
+      q.write('&preset=$preset');
+    }
+    return ScreenerResult.fromJson(await _get(q.toString(),
+        // A screen touches thousands of rows on a single core; the default
+        // 20s is tight for the first uncached call after a rebuild.
+        timeout: const Duration(seconds: 45)));
+  }
+
   Future<Map<String, dynamic>> health() async => _get('/api/health');
 
   Future<Map<String, dynamic>> plans() async => _get('/api/billing/plans');

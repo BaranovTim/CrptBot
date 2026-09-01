@@ -15,6 +15,8 @@ import 'package:tradingbot_app/api/watchlist.dart';
 import 'package:tradingbot_app/main.dart';
 import 'package:tradingbot_app/widgets/patient_loader.dart';
 import 'package:tradingbot_app/api/alert_feed.dart';
+import 'package:tradingbot_app/api/market_mode.dart';
+import 'package:tradingbot_app/widgets/frosted_nav.dart';
 import 'package:flutter/material.dart';
 
 void main() {
@@ -554,5 +556,109 @@ void main() {
     // is a bug you notice; failing to silent is one you never do.
     expect(clearsNewsLevel('NO READING', 'NO READING', 'wat'), isTrue);
     expect(clearsNewsLevel('NO READING', 'NO READING', ''), isTrue);
+  });
+
+  // ------------------------------------------------------------ screener
+  test('a preset hands over COPIES, so editing one cannot rewrite it', () {
+    // THE REQUIREMENT: "when you recommend these recommendations the
+    // parameters change also for a user so that he could change them any
+    // time." If `instantiate()` returned the preset's own Filter objects,
+    // typing a new threshold would silently redefine the recommendation for
+    // every later use — and there would be no way back to the original.
+    final preset = ScreenerPreset.fromJson({
+      'id': 'oversold_bounce',
+      'name': 'Recommended for oversold bounce plays',
+      'note': '',
+      'filters': [
+        {'field': 'rsi14', 'op': 'lt', 'value': 30},
+        {'field': 'price', 'op': 'gt', 'value': 5},
+      ],
+      'unavailable': [],
+    });
+
+    final mine = preset.instantiate();
+    mine[0].value = 45;
+    mine[0].op = 'gt';
+
+    expect(preset.filters[0].value, 30, reason: 'the preset was mutated');
+    expect(preset.filters[0].op, 'lt');
+    expect(mine[0].value, 45);
+    // and a second application starts from the original again
+    expect(preset.instantiate()[0].value, 30);
+  });
+
+  test('a field needing analyst estimates is flagged, not hidden', () {
+    final f = ScreenerField.fromJson({
+      'id': 'peg', 'label': 'PEG', 'group': 'Growth',
+      'kind': 'ratio', 'needs': 'estimates',
+    });
+    expect(f.unavailable, isTrue);
+    final ok = ScreenerField.fromJson({
+      'id': 'rsi14', 'label': 'RSI(14)', 'group': 'Price & volume',
+      'kind': 'number', 'needs': 'price',
+    });
+    expect(ok.unavailable, isFalse);
+  });
+
+  test('a missing metric renders as a dash, never as zero', () {
+    // A blank ROE shown as "0.00%" reads as a company that earns nothing,
+    // which is a claim about the business rather than about our data.
+    final f = ScreenerField.fromJson({
+      'id': 'roe', 'label': 'Return on equity', 'group': 'Company',
+      'kind': 'percent', 'needs': 'filings',
+    });
+    expect(f.format(null), '—');
+    expect(f.format(0), '0.00%');
+    // Two decimals below 10, one above: a 2.31% dividend yield needs the
+    // precision, a 15.5% return on equity does not.
+    expect(f.format(2.31), '2.31%');
+    expect(f.format(15.5), '15.5%');
+  });
+
+  test('big numbers are compacted the way a screener reads them', () {
+    final cap = ScreenerField.fromJson({
+      'id': 'market_cap', 'label': 'Market cap', 'group': 'Company',
+      'kind': 'currency', 'needs': 'filings',
+    });
+    expect(cap.format(4.749e12), '\$4.75T');
+    expect(cap.format(3.79e11), '\$379.00B');
+    expect(cap.format(50e6), '\$50.00M');
+  });
+
+  test('a filter describes itself as a sentence', () {
+    final rsi = ScreenerField.fromJson({
+      'id': 'rsi14', 'label': 'RSI(14)', 'group': 'p', 'kind': 'number',
+    });
+    final sma = ScreenerField.fromJson({
+      'id': 'above_sma50', 'label': 'Price vs SMA50', 'group': 'p',
+      'kind': 'bool',
+    });
+    expect(ScreenerFilter(field: 'rsi14', op: 'lt', value: 30).describe(rsi),
+        'RSI(14) under 30.00');
+    // the combination easiest to get backwards, spelled out
+    expect(ScreenerFilter(field: 'above_sma50', op: 'is_false').describe(sma),
+        'Price vs SMA50 — below');
+    expect(ScreenerFilter(field: 'above_sma50', op: 'is_true').describe(sma),
+        'Price vs SMA50 — above');
+  });
+
+  test('the market switch defaults to the half that actually works', () async {
+    // Crypto has fitted models, a running collector and alerts. Stocks has a
+    // screener. Opening into the less finished half is a worse introduction.
+    SharedPreferences.setMockInitialValues({});
+    final store = MarketModeStore.instance;
+    expect(store.mode, MarketMode.crypto);
+    expect(store.isStocks, isFalse);
+
+    await store.set(MarketMode.stocks);
+    expect(store.isStocks, isTrue);
+    await store.set(MarketMode.crypto);
+  });
+
+  test('the screener tab is declared stocks-only', () {
+    // So the shell can move you off it when you switch back to crypto,
+    // rather than leaving you on a page with nothing to show.
+    expect(FrostedNav.stocksOnly, contains(NavTab.screener));
+    expect(FrostedNav.stocksOnly, isNot(contains(NavTab.dashboard)));
   });
 }

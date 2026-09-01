@@ -40,6 +40,14 @@ class Obsidian {
   static const greenDim = Color(0xFF00E297);
   static const onGreen = Color(0xFF003822);
 
+  /// Caution amber. Reserved for "we cannot tell", never for "bad".
+  ///
+  /// Green and red are both taken by directional meaning — buy and sell — so
+  /// neither can carry "unjudged" without implying a verdict. The screener
+  /// needs a third state precisely because a stock nobody could evaluate is
+  /// not a stock that failed, and painting it red would say it did.
+  static const amber = Color(0xFFFFC46B);
+
   /// Danger red. Reserved for sell signals, losses and critical alerts.
   static const red = Color(0xFFFF5352);
   static const redSoft = Color(0xFFFFB3AE);

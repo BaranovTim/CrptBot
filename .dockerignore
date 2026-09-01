@@ -9,3 +9,15 @@ tests/
 # bars and models are bind-mounted, not baked in: an image carrying 111MB of
 # candles would be rebuilt for every price update
 data_cache/
+
+# NEVER bake secrets into an image.
+#
+# `.env` was missing from this list, so every build copied the bearer token
+# and the Alpaca keys into an image layer. Layers are not private: anyone who
+# can pull or export the image can read them back out with `docker history`
+# or by unpacking the tar, and deleting the file in a later layer does not
+# remove it from an earlier one. The containers get these through compose's
+# `environment:` block, which never touches the build context.
+.env
+.env.*
+!.env.example

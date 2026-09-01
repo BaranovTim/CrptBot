@@ -18,6 +18,14 @@ services:
     environment:
       # Required. The API refuses to bind to anything but loopback without it.
       TRADINGBOT_TOKEN: ${TRADINGBOT_TOKEN:?set TRADINGBOT_TOKEN in .env}
+      # OPTIONAL, deliberately — note `:-` and not `:?`.
+      #
+      # Without these the equity screener has no data and says so; with `:?`
+      # the whole stack would refuse to start, taking the crypto side down
+      # over a feature it does not use. A missing key must degrade one page,
+      # not the deployment.
+      ALPACA_KEY_ID: ${ALPACA_KEY_ID:-}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
     volumes:
       - ./data_cache:/app/data_cache
       - ./output:/app/output
@@ -46,6 +54,9 @@ services:
     #
     # Adding a coin in the app does NOT make the server collect it. The
     # watchlist is a device preference; this list is what the server records.
+    environment:
+      ALPACA_KEY_ID: ${ALPACA_KEY_ID:-}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
     command: >
       python3 collect.py
       --symbol BTCUSDT --symbol ETHUSDT

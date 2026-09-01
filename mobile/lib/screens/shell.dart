@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import '../api/alert_feed.dart';
 import '../api/background.dart';
 import '../api/client.dart';
+import '../api/market_mode.dart';
 import '../api/live_price.dart';
 import '../api/models.dart';
 import '../api/settings.dart';
@@ -23,10 +24,12 @@ import '../api/notifications.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/alert_settings_sheet.dart';
 import '../widgets/frosted_nav.dart';
+import '../widgets/glass.dart';
 import '../widgets/mesh_background.dart';
 import 'dashboard_screen.dart';
 import 'market_screen.dart';
 import 'news_screen.dart';
+import 'screener_screen.dart';
 import 'profile_screen.dart';
 import 'subscribe_screen.dart';
 
@@ -83,11 +86,16 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     // prime the mute set: `isMuted` is synchronous by necessity and
     // reports nothing muted until this lands
     Muted.instance.load().then((_) => mounted ? setState(() {}) : null);
+    // The market switch decides what four of the five tabs are about, so the
+    // shell rebuilds when it changes rather than each screen polling it.
+    MarketModeStore.instance.addListener(_onModeChanged);
+    MarketModeStore.instance.load();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    MarketModeStore.instance.removeListener(_onModeChanged);
     _alertTimer?.cancel();
     _calendarTimer?.cancel();
     _live.dispose();
@@ -331,7 +339,18 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               // never completes, and the result is a blank screen with no
               // error painted on it.
               Expanded(
-                child: switch (_tab) {
+                child: (MarketModeStore.instance.isStocks &&
+                        _tab != NavTab.screener &&
+                        _tab != NavTab.profile)
+                    // NOT the crypto screen with a STOCKS label on it.
+                    //
+                    // Every one of these tabs is driven by a fitted model or a
+                    // crypto feed. Rendering them in stocks mode would show
+                    // BTC's recommendation under a header claiming to be
+                    // equities, which is the most misleading pixel this app
+                    // could paint.
+                    ? _stocksNotYet()
+                    : switch (_tab) {
                   NavTab.dashboard => DashboardScreen(
                       // Keyed by pair. Swiping to another coin disposes this
                       // screen's State and builds a fresh one, so no field
@@ -358,6 +377,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                       onNeedsTraining: (iv) =>
                           setState(() => _interval = iv),
                     ),
+                  NavTab.screener =>
+                    ScreenerScreen(client: widget.client),
                   NavTab.news => NewsScreen(
                       client: widget.client, symbol: _symbol),
                   NavTab.market =>
@@ -392,15 +413,26 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         current: _tab,
         locked: _entitled
             ? const {}
-            : const {NavTab.market, NavTab.news},
+            : const {NavTab.market, NavTab.screener, NavTab.news},
         // A locked tab still responds — it takes you to the page that
         // explains why it is locked. A padlock that does nothing when pressed
         // reads as a broken app rather than a paywall.
-        onSelect: (t) => setState(() =>
-            _tab = (!_entitled &&
-                    (t == NavTab.market || t == NavTab.news))
-                ? NavTab.profile
-                : t),
+        onSelect: (t) {
+          if (!_entitled &&
+              (t == NavTab.market || t == NavTab.news ||
+                  t == NavTab.screener)) {
+            setState(() => _tab = NavTab.profile);
+            return;
+          }
+          // The screener is stocks-only, so selecting it switches the market
+          // rather than showing an empty page. Doing it silently would be
+          // worse than not switching at all, so the top bar's toggle moves
+          // visibly with it.
+          if (t == NavTab.screener && !MarketModeStore.instance.isStocks) {
+            MarketModeStore.instance.set(MarketMode.stocks);
+          }
+          setState(() => _tab = t);
+        },
       ),
     ));
   }
@@ -417,6 +449,72 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       // leave the account as-is; the paywall stays up, which is the safe
       // direction to fail in
     }
+  }
+
+  /// What the stocks side honestly has, and what it does not.
+  Widget _stocksNotYet() => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(Obsidian.containerPadding),
+          child: GlassPanel(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.candlestick_chart_rounded,
+                    color: Obsidian.outline, size: 34),
+                const SizedBox(height: 14),
+                Text('Stocks: screener only, for now',
+                    textAlign: TextAlign.center,
+                    style: Obsidian.headlineMd()),
+                const SizedBox(height: 12),
+                Text(
+                    'The Screener works on 13,000 US stocks with live prices '
+                    'and company filings.\n\n'
+                    'This tab does not, because it is driven by a fitted '
+                    'model and there are none for equities yet. The labelling '
+                    'and cost model behind the crypto signals assume a market '
+                    'that never closes; equities gap overnight, halt, split '
+                    'and cost differently. Pointing them at a stock would '
+                    'produce a confident number that means nothing.',
+                    textAlign: TextAlign.center,
+                    style: Obsidian.body(color: Obsidian.outline, size: 12)),
+                const SizedBox(height: 18),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: Obsidian.primary,
+                          foregroundColor: Obsidian.onPrimary),
+                      onPressed: () =>
+                          setState(() => _tab = NavTab.screener),
+                      child: const Text('Open the Screener'),
+                    ),
+                    const SizedBox(width: 10),
+                    TextButton(
+                      onPressed: () =>
+                          MarketModeStore.instance.set(MarketMode.crypto),
+                      child: Text('Back to crypto',
+                          style: Obsidian.body(color: Obsidian.outline)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  void _onModeChanged() {
+    if (!mounted) return;
+    // Leaving a stocks-only tab when switching back to crypto, rather than
+    // sitting on a page that has nothing to show.
+    setState(() {
+      if (!MarketModeStore.instance.isStocks &&
+          FrostedNav.stocksOnly.contains(_tab)) {
+        _tab = NavTab.dashboard;
+      }
+    });
   }
 
   Future<void> _signOut() async {
@@ -501,7 +599,51 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             if (_tab == NavTab.market)
               Text('$_symbol · $_interval',
                   style: Obsidian.labelSm(size: 11)),
+            const SizedBox(width: 8),
+            _marketSwitch(),
           ],
         ));
+  }
+
+  /// CRYPTO | STOCKS, top right.
+  ///
+  /// A segmented control rather than a toggle, because a toggle only shows
+  /// the state you are NOT in — and with two markets that read as a button
+  /// labelled with the wrong one. Both are visible, one is lit.
+  Widget _marketSwitch() {
+    final stocks = MarketModeStore.instance.isStocks;
+
+    Widget half(String label, bool on, VoidCallback tap) => InkWell(
+          onTap: on ? null : tap,
+          borderRadius: BorderRadius.circular(Obsidian.rMd),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: on
+                  ? Obsidian.primaryContainer.withValues(alpha: 0.24)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(Obsidian.rMd),
+            ),
+            child: Text(label,
+                style: Obsidian.labelSm(
+                    size: 9.5,
+                    color: on ? Obsidian.primary : Obsidian.outline)),
+          ),
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Obsidian.surfaceLowest.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(Obsidian.rMd),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+      ),
+      padding: const EdgeInsets.all(2),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        half('CRYPTO', !stocks,
+            () => MarketModeStore.instance.set(MarketMode.crypto)),
+        half('STOCKS', stocks,
+            () => MarketModeStore.instance.set(MarketMode.stocks)),
+      ]),
+    );
   }
 }

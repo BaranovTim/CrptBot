@@ -155,7 +155,12 @@ class Handler(BaseHTTPRequestHandler):
     # paying for, and warning an unsubscribed user that the market is about
     # to move is the right thing to do regardless of whether they pay.
     FREE = OPEN + ("/api/chart", "/api/calendar", "/api/me",
-                   "/api/auth/logout", "/api/billing/checkout")
+                   "/api/auth/logout", "/api/billing/checkout",
+                   # The CATALOGUE is free; the RESULTS are not. It describes
+                   # which controls exist and what the presets contain, which
+                   # is the thing an unsubscribed user needs in order to see
+                   # what they would be buying. It contains no market data.
+                   "/api/screener/catalogue")
 
     def _bearer(self) -> str:
         header = self.headers.get("Authorization", "")
@@ -241,7 +246,9 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/auth/register",
                                           "/api/billing/plans",
                                           "/api/indicator",
-                                          "/api/track"]})
+                                          "/api/track",
+                                          "/api/screener/catalogue",
+                                          "/api/screener"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -271,6 +278,47 @@ class Handler(BaseHTTPRequestHandler):
                                          interval=opt("interval")))
             elif route == "/api/consensus":
                 self._send(svc.consensus(opt("symbol")))
+            elif route == "/api/screener/catalogue":
+                from screener.filters import catalogue
+                from screener import universe as _u
+
+                table = _u.load()
+                self._send({**catalogue(),
+                            # so the page can say how old the table is rather
+                            # than presenting an overnight snapshot as live
+                            "built_at": table.get("built_at"),
+                            "symbols": table.get("symbols", 0)})
+            elif route == "/api/screener":
+                from screener import universe as _u
+                from screener.engine import run as _run
+                from screener.filters import Filter, PRESETS_BY_ID
+
+                table = _u.load()
+                rows = table.get("rows") or {}
+
+                preset = opt("preset")
+                raw = q.get("filters", [None])[0]
+                if preset and preset in PRESETS_BY_ID:
+                    filters = list(PRESETS_BY_ID[preset].filters)
+                elif raw:
+                    try:
+                        filters = [Filter.from_json(f)
+                                   for f in json.loads(raw)]
+                    except (ValueError, KeyError, TypeError) as e:
+                        self._send({"error": f"bad filters: {e}"}, status=400)
+                        return
+                else:
+                    filters = []
+
+                result = _run(rows, filters,
+                              limit=arg("limit", 200),
+                              sort_by=opt("sort"),
+                              descending=(opt("dir") or "desc") != "asc",
+                              include_unknown=(opt("unknown") == "1"))
+                self._send({**result,
+                            "built_at": table.get("built_at"),
+                            "preset": preset,
+                            "filters": [f.to_json() for f in filters]})
             elif route == "/api/track":
                 self._send(svc.track(symbol=opt("symbol"),
                                      interval=opt("interval")))
