@@ -33,6 +33,7 @@ import '../theme/liquid_obsidian.dart';
 import '../widgets/article_sheet.dart';
 import '../widgets/glass.dart';
 import '../widgets/indicator_sheet.dart';
+import '../widgets/patient_loader.dart';
 import '../widgets/sparkline.dart';
 import '../widgets/timeframe_bar.dart';
 import '../widgets/status_dot.dart';
@@ -106,6 +107,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String? _error;
   String? _untrained;
   Timer? _timer;
+
+  /// When the last good answer arrived — the clock the spinner counts.
+  ///
+  /// Reset on every success and on an explicit retry, so it always measures
+  /// "how long has this been failing", never "how long has the app been
+  /// open". Nothing is called an error until it crosses [kPatience]; see
+  /// `patient_loader.dart` for why five minutes and not twenty seconds.
+  DateTime _waitingSince = DateTime.now();
+
+  /// The most recent failure, held but not shown.
+  ///
+  /// Kept separate from [_error] on purpose: this is what went wrong, [_error]
+  /// is the decision to tell you about it. A phone produces plenty of the
+  /// first that never deserve the second.
+  String? _lastFailure;
+
+  /// A request is already out. Without this the 10s refresh timer stacks new
+  /// attempts on top of one that is still waiting out its own timeout, so a
+  /// dead network produces a growing pile of doomed sockets.
+  bool _inFlight = false;
   StreamSubscription<LiveTick>? _tick;
   LiveTick? _live;
 
@@ -360,9 +381,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await launchUrl(web, mode: LaunchMode.externalApplication);
   }
 
+  /// The wait has gone past [kPatience] with nothing getting through.
+  ///
+  /// Called by the spinner's own clock, so the message arrives exactly when
+  /// the five minutes are up rather than whenever the next attempt happens to
+  /// fail. Until this runs, [_error] stays null and the screen keeps waiting.
+  void _giveUp() {
+    if (!mounted || _error != null) return;
+    setState(() => _error = _lastFailure ?? 'No answer from the server.');
+  }
+
+  /// Back to waiting: a fresh clock, and no verdict.
+  void _tryAgain() {
+    setState(() {
+      _error = null;
+      _lastFailure = null;
+      _waitingSince = DateTime.now();
+    });
+    _load();
+  }
+
   Future<void> _load({bool quiet = false}) async {
     final iv = widget.interval;
 
+    // A background refresh gives way to a request already in flight. The
+    // foreground one does not: pull-to-refresh has to feel like it did
+    // something.
+    if (quiet && _inFlight) return;
+    _inFlight = true;
+    try {
+      await _fetch(iv);
+    } finally {
+      _inFlight = false;
+    }
+  }
+
+  Future<void> _fetch(String iv) async {
     // Free tier: fetch ONLY the chart. Requesting the gated endpoints and
     // catching six 402s would work and would also make every screen refresh
     // hammer the server with calls whose answer is known in advance.
@@ -378,12 +432,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(() {
           _series = series;
           _error = null;
+          _lastFailure = null;
+          _waitingSince = DateTime.now();
           _untrained = null;
         });
         unawaited(_loadMajor());
       } catch (e) {
-        if (!mounted || quiet) return;
-        setState(() => _error = e.toString());
+        // Recorded, not reported. The spinner's clock decides when this stops
+        // being a slow moment and becomes a fault.
+        _lastFailure = e.toString();
       }
       return;
     }
@@ -425,6 +482,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _whales = results[2] as List<WhaleEvent>;
         _news = results[3] as List<NewsItem>;
         _error = null;
+        _lastFailure = null;
+        _waitingSince = DateTime.now();
         _untrained = null;
       });
       unawaited(_prefetchNeighbours());
@@ -442,12 +501,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _untrained = e.message;
         _error = null;
+        _lastFailure = null;
+        _waitingSince = DateTime.now();   // the server answered; it is alive
       });
     } catch (e) {
       // an error belonging to a pair no longer on screen is not this pair's
-      // error, and showing it would blame the wrong coin
-      if (!mounted || quiet || forKey != _key) return;
-      setState(() => _error = e.toString());
+      // error, and recording it would blame the wrong coin
+      if (!mounted || forKey != _key) return;
+      // Held, not shown — the wait is still young. `_giveUp` reads this if
+      // and when the clock runs out.
+      _lastFailure = e.toString();
     }
   }
 
@@ -566,11 +629,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Text('PRICE', style: Obsidian.labelSm(size: 10.5)),
                 const SizedBox(height: 14),
                 if (_series.isEmpty)
-                  const SizedBox(
-                      height: 90,
-                      child: Center(
-                          child: CircularProgressIndicator(
-                              color: Obsidian.primary)))
+                  SizedBox(
+                      height: 150,
+                      child: WaitingPanel(
+                          since: _waitingSince,
+                          what: 'Loading the chart',
+                          onPatienceExhausted: _giveUp))
                 else
                   Sparkline(values: _series, color: Obsidian.primary),
               ],
@@ -1549,16 +1613,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Text('No link to the service',
                     style: Obsidian.headlineMd()),
                 const SizedBox(height: 10),
+                // The five minutes are the point of the sentence. Without
+                // them this looks like the app gave up instantly, which is
+                // exactly what it used to do.
+                Text('Tried for ${kPatience.inMinutes} minutes and got '
+                    'nothing back.',
+                    textAlign: TextAlign.center,
+                    style: Obsidian.body(color: Obsidian.outline, size: 12)),
+                const SizedBox(height: 10),
                 Text(_error!, style: Obsidian.body(size: 12.5)),
                 const SizedBox(height: 18),
                 FilledButton(
                   style: FilledButton.styleFrom(
                       backgroundColor: Obsidian.primary,
                       foregroundColor: Obsidian.onPrimary),
-                  onPressed: () {
-                    setState(() => _error = null);
-                    _load();
-                  },
+                  onPressed: _tryAgain,
                   child: const Text('Retry'),
                 ),
               ],
@@ -1567,8 +1636,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       );
     }
-    return const Center(
-        child: CircularProgressIndicator(color: Obsidian.primary));
+    return WaitingPanel(
+      since: _waitingSince,
+      what: 'Loading ${widget.symbol}',
+      onPatienceExhausted: _giveUp,
+    );
   }
 
   static String _money(double? v) {

@@ -377,6 +377,9 @@ class Alert {
         severity = j['severity'] as String? ?? 'medium',
         symbol = j['symbol'] as String? ?? '',
         interval = j['interval'] as String? ?? '',
+        strength = j['strength'] as String? ?? '',
+        bias = j['bias'] as String? ?? '',
+        impact = j['impact'] as String? ?? '',
         url = j['url'] as String? ?? '',
         seq = (j['seq'] as num?)?.toInt() ?? 0,
         at = DateTime.parse(j['at'] as String),
@@ -385,6 +388,21 @@ class Alert {
             (j['extra'] as Map?)?.map((k, v) => MapEntry('$k', '$v')) ?? {});
 
   final String id, kind, title, body, severity, symbol, url;
+
+  /// strong | medium | small for a signal, '' for everything else.
+  ///
+  /// The same sensitivity setting gates the dashboard card and the
+  /// notification. Without this the app could withhold a small call as too
+  /// weak to show while its notification was already on the lock screen.
+  final String strength;
+
+  /// For a news alert: BULL | BEAR | MIXED | NO READING, and
+  /// STRONG IMPACT | MEDIUM IMPACT | ALMOST NO IMPACT | NO READING.
+  ///
+  /// Both come from Agent 3's offline scorer, the same source as the labels
+  /// on the dashboard card — so the news filter and the card can never
+  /// disagree about the same story. Empty for every other kind.
+  final String bias, impact;
 
   /// Which timeframe produced it, '' for alerts that belong to no timeframe
   /// (a filing, a macro release). Muting is per symbol AND per interval, and

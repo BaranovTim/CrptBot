@@ -56,6 +56,25 @@ log = logging.getLogger(__name__)
 # than a repeated state.
 _ENGINE = None
 
+
+def get_engine(svc=None):
+    """The one alert engine, running its own refresh loop.
+
+    STARTED ON CREATION, not on the first request. Detection is a background
+    job: a transition is defined against the previous observation, so an
+    engine that only looks when a phone asks has no previous observation to
+    compare against and reports nothing. That is why signal and news
+    notifications almost never arrived — they were never detected, not merely
+    undelivered.
+    """
+    global _ENGINE
+    if _ENGINE is None:
+        from api.alerts import AlertEngine
+
+        _ENGINE = AlertEngine(svc if svc is not None else get_service())
+        _ENGINE.start()
+    return _ENGINE
+
 # Shared secret. Empty means loopback-only operation; `serve()` refuses any
 # other binding without one.
 TOKEN = ""
@@ -273,18 +292,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send({"items": svc.news(limit=arg("limit", 20),
                                               symbol=opt("symbol"))})
             elif route == "/api/alerts":
-                from api.alerts import AlertEngine
-                global _ENGINE
-                if _ENGINE is None:
-                    _ENGINE = AlertEngine(svc)
                 raw = q.get("after", [None])[0]
                 try:
                     cursor = int(raw) if raw not in (None, "") else None
                 except (TypeError, ValueError):
                     cursor = None          # fail closed: no cursor, no backlog
-                alerts = _ENGINE.after(cursor)
+                engine = get_engine(svc)
+                alerts = engine.after(cursor)
                 self._send({"alerts": [a.to_json() for a in alerts],
-                            "cursor": _ENGINE.cursor(),
+                            "cursor": engine.cursor(),
                             "server_time": _now_iso()})
             elif route == "/api/calendar":
                 from newsfeed.schedule import next_major, upcoming
@@ -441,6 +457,10 @@ def serve(host: str = "0.0.0.0", port: int = 8787,
         # looking, or it measures when the app gets opened rather than how
         # the model performs
         get_service().start_recorder()
+        # Alerts are detected on a clock too, for the same reason: an engine
+        # that only looks when the app polls can only report what changed
+        # while somebody was watching.
+        get_engine()
     except Exception as e:                  # a warm failure is not fatal - the
         log.warning("warm-up skipped: %s", e)   # request path still builds
 

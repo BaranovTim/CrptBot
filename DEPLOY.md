@@ -177,6 +177,40 @@ Point an A record at the server, `systemctl reload caddy`, and use
 `http://` it travels in clear text and anyone on the path can lift it and
 replay it.
 
+## Never rsync over the server's `.env`
+
+```bash
+rsync -az --delete \
+  --exclude '.git' --exclude '.env' \
+  --exclude 'mobile' --exclude 'data_cache' \
+  --exclude '__pycache__' --exclude 'output' \
+  ./ bot:/root/tradingbot/
+```
+
+**`--exclude '.env'` is not optional.** The file exists only on the server —
+it is gitignored, so a local checkout has nothing to sync in its place, and
+`--delete` removes it. The containers keep running on the environment they
+already loaded, so nothing breaks until the next `docker compose` command,
+which then fails with:
+
+```
+error while interpolating services.api.environment.TRADINGBOT_TOKEN:
+required variable TRADINGBOT_TOKEN is missing a value
+```
+
+If it does happen and the containers are still up, the values are recoverable
+from the running process rather than lost:
+
+```bash
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' tradingbot-api-1 \
+  | grep -E '^(TRADINGBOT_TOKEN|BIND_ADDR)=' > /root/tradingbot/.env
+chmod 600 /root/tradingbot/.env
+```
+
+Do that **before** restarting anything. Once the containers are down the
+token is gone and every device holding a bearer credential has to be
+re-issued one.
+
 ## Pointing the app at it
 
 Profile → **API host** → enter the URL, then **Bearer token** → paste the

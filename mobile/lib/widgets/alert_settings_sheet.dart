@@ -17,6 +17,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api/muted.dart';
+import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import 'glass.dart';
 
@@ -32,6 +33,32 @@ class AlertSettingsSheet extends StatefulWidget {
 
 class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
   static const _all = ['1m', '5m', '15m', '1h', '4h', '1d'];
+
+  /// (alert kind, label). `spike` deliberately rides with `signal`: both are
+  /// the model telling you something moved, and splitting them would give two
+  /// switches for one idea.
+  static const _kinds = [
+    ('signal', 'Trade signals'),
+    ('spike', 'Sudden moves'),
+    ('whale', 'Whale filings'),
+    ('calendar', 'Scheduled releases'),
+  ];
+
+  /// News is FOUR CHOICES, not a switch, unlike every other kind.
+  ///
+  /// The others arrive a few times a day and the only sensible question is
+  /// whether you want them. News arrives about seventy times a day, so the
+  /// same switch would be answered "off" by almost everyone — and off means
+  /// missing the one release that mattered. The middle two settings exist so
+  /// that "less" is available without "none".
+  static const _newsLevels = [
+    ('all', 'Everything', 'About 70 headlines a day'),
+    ('directional', 'Only BULL or BEAR', 'Skips what the scorer cannot read'),
+    ('strong', 'Strong influence only', 'STRONG IMPACT, either direction'),
+    ('none', 'None', 'Silent — still all in the News tab'),
+  ];
+
+  String _newsLevel = 'all';
   bool _ready = false;
 
   @override
@@ -40,6 +67,8 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
     Muted.instance.load().then((_) {
       if (mounted) setState(() => _ready = true);
     });
+    Settings.instance.newsAlerts().then(
+        (v) => mounted ? setState(() => _newsLevel = v) : null);
   }
 
   List<String> get _intervals => widget.intervals ?? _all;
@@ -51,7 +80,18 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
       top: false,
       child: Padding(
         padding: const EdgeInsets.all(Obsidian.containerPadding),
-        child: GlassPanel(
+        // SCROLLS, and is bounded to most of the screen.
+        //
+        // The content is a min-size Column, so it grows with the number of
+        // timeframes and categories — and a bottom sheet does not grow with
+        // it. Left unbounded this overflows on a short phone: the yellow
+        // stripes, and the Done button off the bottom edge with no way to
+        // reach it.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.86),
+          child: SingleChildScrollView(
+            child: GlassPanel(
           active: true,
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
           child: Column(
@@ -107,6 +147,39 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
                             'scheduled releases — follow the coin switch.',
                     style:
                         Obsidian.body(color: Obsidian.outline, size: 11)),
+                Divider(
+                    height: 26, color: Colors.white.withValues(alpha: 0.06)),
+                Text('EVERY COIN', style: Obsidian.labelSm(size: 11)),
+                const SizedBox(height: 4),
+                Text(
+                    'Which kinds are allowed to buzz, everywhere. Separated '
+                    'because news runs at about seventy items a day — enough '
+                    'that silencing it has to be easier than silencing the '
+                    'trade signals with it.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 11)),
+                const SizedBox(height: 6),
+                for (final k in _kinds)
+                  _row(
+                    title: k.$2,
+                    subtitle: null,
+                    dense: true,
+                    value: !Muted.instance.isKindMuted(k.$1),
+                    onChanged: (_) async {
+                      await Muted.instance.toggleKind(k.$1);
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                const SizedBox(height: 14),
+                Text('NEWS', style: Obsidian.labelSm(size: 11)),
+                const SizedBox(height: 6),
+                for (final n in _newsLevels) _newsRow(n.$1, n.$2, n.$3),
+                const SizedBox(height: 8),
+                Text(
+                    'BULL, BEAR and impact come from a keyword scorer that '
+                    'stays silent on about half of all headlines. Anything '
+                    'but "Everything" trusts it to have read the one that '
+                    'mattered.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 11)),
               ],
               const SizedBox(height: 6),
               Center(
@@ -117,7 +190,52 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
                 ),
               ),
             ],
+              ),
+            ),
           ),
+        ),
+      ),
+    );
+  }
+
+  /// A radio row, because these four are exclusive and a column of switches
+  /// would let you turn all of them off — a state with no meaning, and no way
+  /// back except guessing which one used to be on.
+  Widget _newsRow(String value, String title, String subtitle) {
+    final on = _newsLevel == value;
+    return InkWell(
+      onTap: () async {
+        setState(() => _newsLevel = value);
+        await Settings.instance.saveNewsAlerts(value);
+      },
+      borderRadius: BorderRadius.circular(Obsidian.rMd),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
+        child: Row(
+          children: [
+            Icon(
+                on
+                    ? Icons.radio_button_checked_rounded
+                    : Icons.radio_button_unchecked_rounded,
+                size: 18,
+                color: on ? Obsidian.primary : Obsidian.outline),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: Obsidian.body(
+                          size: 13.5,
+                          color: on ? Obsidian.primary : null)),
+                  const SizedBox(height: 2),
+                  Text(subtitle,
+                      style:
+                          Obsidian.body(color: Obsidian.outline, size: 11)),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

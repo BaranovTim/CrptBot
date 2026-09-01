@@ -27,6 +27,8 @@ What these guard, in order of how badly they would mislead you:
 from __future__ import annotations
 
 import sys
+import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -72,8 +74,27 @@ class StubService:
         return self._news
 
 
-def _engine(svc):
-    e = AlertEngine(svc)
+def _story(headline, bias="NO READING", impact="NO READING"):
+    return {"headline": headline, "source": "cointelegraph",
+            "url": "https://example.invalid/x", "bias": bias,
+            "impact": impact, "published_at": NOW.isoformat()}
+
+
+def _state_path() -> Path:
+    """A private state file per engine.
+
+    The engine persists `_seen` so a restart cannot swallow the alerts it was
+    holding. That is right in production and poison in a test suite: the stub
+    dashboard is deterministic, so its BUY alert has the same id every time,
+    and the first test to fire it would silence every later one through a file
+    on disk. Two tests below deliberately SHARE a path, to check the restart
+    behaviour rather than to inherit it by accident.
+    """
+    return Path(tempfile.mkdtemp()) / "alerts.json"
+
+
+def _engine(svc, state_path=None):
+    e = AlertEngine(svc, state_path=state_path or _state_path())
     e._calendar = lambda: []          # calendar is covered in test_schedule
     e.refresh()                        # prime
     return e
@@ -173,7 +194,8 @@ def _whale(mechanical=False, code="S", traded_days_ago=4):
 
 
 def test_a_mechanical_filing_never_alerts():
-    e = AlertEngine(StubService(whales=[_whale(mechanical=True)]))
+    e = AlertEngine(StubService(whales=[_whale(mechanical=True)]),
+                    state_path=_state_path())
     e._calendar = lambda: []
     assert not [a for a in e._whales() if a.kind == "whale"]
     return True
@@ -182,7 +204,7 @@ def test_a_mechanical_filing_never_alerts():
 def test_a_filing_carries_the_TRADE_date_not_the_filing_date():
     """Otherwise a five-day-old trade reads as breaking news."""
     svc = StubService(whales=[_whale(traded_days_ago=4)])
-    e = AlertEngine(svc)
+    e = AlertEngine(svc, state_path=_state_path())
     e._calendar = lambda: []
     a = e._whales()[0]
     age_days = (NOW - a.at).days
@@ -255,4 +277,112 @@ def test_a_headline_drives_the_bias_and_the_excerpt_cannot_invert_it():
     clear = item("Bitcoin And Ethereum ETFs Add $492M As Inflow Streak Continues")
     sc2 = LexiconScorer().score([clear])[0]
     assert sc2.direction > 0.15 and sc2.magnitude > 0, sc2
+    return True
+
+
+# ------------------------------------------------------- detection is a job
+def test_the_engine_detects_without_being_asked():
+    """THE BUG THIS PINS.
+
+    `refresh` used to run only inside an `/api/alerts` request, so a
+    transition was only ever noticed while somebody had the app open. A
+    signal that flipped at 03:00 was not late — it was never detected, and
+    nothing anywhere recorded that it had happened.
+    """
+    svc = StubService(action="FLAT")
+    e = _engine(svc)
+    e.start(interval=0.01)
+    svc.action = "BUY"
+    deadline = time.time() + 5
+    while time.time() < deadline and not e._log:
+        time.sleep(0.01)
+    e.stop()
+    assert [a.kind for a in e._log] == ["signal"], e._log
+    # and a poll that arrives later READS it rather than causing it
+    assert e.after(0)[0].kind == "signal"
+    return True
+
+
+def test_a_restart_neither_repeats_nor_swallows():
+    """Both halves matter, and they pull in opposite directions.
+
+    Losing `_seen` re-fires everything the phone was already told about;
+    losing `_log` silently drops what it had not been told yet. The old
+    engine kept neither, so a deploy did both at once.
+    """
+    path = _state_path()
+    svc = StubService(action="FLAT")
+    e = _engine(svc, state_path=path)
+    svc.action = "BUY"
+    fired = e.refresh()
+    assert len(fired) == 1, fired
+
+    # the same process, gone and come back
+    again = AlertEngine(StubService(action="BUY"), state_path=path)
+    again._calendar = lambda: []
+    assert again.refresh() == [], "the restart re-alerted a signal already sent"
+    assert [a.id for a in again._log] == [fired[0].id], (
+        "the restart lost the alert the phone had not collected yet")
+    return True
+
+
+def test_a_signal_alert_says_how_strong_it_is():
+    """So one sensitivity setting governs the screen and the phone alike.
+
+    Without this the dashboard could be withholding a small call as too weak
+    to show while the notification for that same call was already on the
+    lock screen.
+    """
+    svc = StubService(action="FLAT")
+    svc.strength = "medium"
+    base = svc.dashboard
+
+    def with_strength(symbol=None, interval=None):
+        d = base(symbol, interval)
+        d["recommendation"]["strength"] = svc.strength
+        return d
+
+    svc.dashboard = with_strength
+    e = _engine(svc)
+    svc.action = "BUY"
+    fired = e.refresh()
+    assert fired[0].strength == "medium", fired[0].strength
+    assert fired[0].to_json()["strength"] == "medium"
+    return True
+
+
+def test_a_news_alert_carries_the_reading_the_phone_filters_on():
+    """The four news levels are decided on the phone, from these two fields.
+
+    Without them the app can only filter on a headline string, which means it
+    cannot filter at all — and "only strong news" would silently mean "all
+    news" or "no news" depending on which way the guess fell.
+    """
+    svc = StubService(news=[_story("Fed cuts rates", "BULL", "STRONG IMPACT")])
+    # NOT `_engine`, which primes: priming marks this item seen, and the
+    # probe would then correctly return nothing
+    e = AlertEngine(svc, state_path=_state_path())
+    a = e._news()[0]
+    assert a.bias == "BULL"
+    assert a.impact == "STRONG IMPACT"
+    assert a.to_json()["bias"] == "BULL"
+    # a strong story earns a heads-up banner; an unreadable one does not
+    assert a.severity == "high"
+    return True
+
+
+def test_the_headline_is_the_title_not_the_words_news_released():
+    """A collapsed notification has room for one line. It should be the news.
+
+    The title used to be the literal string "News released" for every item,
+    so four of them in the shade said "News released" four times and nothing
+    else.
+    """
+    svc = StubService(news=[_story("Ireland bars crypto from tax scheme")])
+    e = AlertEngine(svc, state_path=_state_path())
+    a = e._news()[0]
+    assert a.title == "Ireland bars crypto from tax scheme"
+    # and an unreadable story says so rather than implying a verdict
+    assert "no directional reading" in a.body
+    assert a.severity == "medium"
     return True

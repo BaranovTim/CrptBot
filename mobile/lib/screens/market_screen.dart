@@ -7,6 +7,8 @@
 /// honest probability to show.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
@@ -16,6 +18,7 @@ import '../api/watchlist.dart';
 import 'add_coin_sheet.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
+import '../widgets/patient_loader.dart';
 import '../widgets/status_dot.dart';
 
 class MarketScreen extends StatefulWidget {
@@ -43,13 +46,31 @@ class _MarketScreenState extends State<MarketScreen> {
   List<String> _watch = const [];
   String? _error;
 
+  /// See `patient_loader.dart` — a failure is only a failure after five
+  /// minutes of trying, not after one timeout.
+  DateTime _waitingSince = DateTime.now();
+  String? _lastFailure;
+  Timer? _retry;
+
   @override
   void initState() {
     super.initState();
     _load();
   }
 
+  @override
+  void dispose() {
+    _retry?.cancel();
+    super.dispose();
+  }
+
+  void _giveUp() {
+    if (!mounted || _error != null) return;
+    setState(() => _error = _lastFailure ?? 'No answer from the server.');
+  }
+
   Future<void> _load() async {
+    _retry?.cancel();
     try {
       final watch = await Watchlist.instance.load();
       final c = await widget.client.coins(symbols: watch);
@@ -58,10 +79,13 @@ class _MarketScreenState extends State<MarketScreen> {
         _watch = watch;
         _coins = c;
         _error = null;
+        _lastFailure = null;
+        _waitingSince = DateTime.now();
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.toString());
+      _lastFailure = e.toString();
+      _retry = Timer(const Duration(seconds: 15), _load);
     }
   }
 
@@ -141,7 +165,13 @@ class _MarketScreenState extends State<MarketScreen> {
           ),
             const SizedBox(height: 22),
             if (_error != null)
-              Text(_error!, style: Obsidian.body(color: Obsidian.error)),
+              Text(_error!, style: Obsidian.body(color: Obsidian.error))
+            else if (_coins.isEmpty)
+              WaitingPanel(
+                  since: _waitingSince,
+                  what: 'Loading your coins',
+                  compact: true,
+                  onPatienceExhausted: _giveUp),
           ],
         ),
         footer: _coins.isEmpty

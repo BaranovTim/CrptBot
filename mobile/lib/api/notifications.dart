@@ -29,6 +29,8 @@
 /// long ago it was, plus — for filings — the disclosure lag.
 library;
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
@@ -184,28 +186,39 @@ class Notifications {
 
   /// Deliver an alert now.
   ///
-  /// This goes through `zonedSchedule` one second out rather than `show()`,
-  /// and the reason is empirical: on this device `show()` was accepted and
-  /// then never displayed — no banner, no entry in Notification Center, no
-  /// error — while a scheduled notification delivered reliably every time,
-  /// foreground and background alike. Rather than keep guessing at
-  /// presentation options, immediate alerts use the mechanism that is known
-  /// to work. One second is imperceptible and the delivery is the same object
-  /// either way.
+  /// TWO MECHANISMS, BECAUSE THE TWO PLATFORMS MEASURED DIFFERENTLY
+  ///     Android: `show()`, which posts straight to the shade. This used to
+  ///     go through `zonedSchedule` one second out, and that was the bug —
+  ///     `AndroidScheduleMode.inexactAllowWhileIdle` maps to
+  ///     `setAndAllowWhileIdle`, which Android is free to batch and defer
+  ///     while dozing. The same file already recorded this in
+  ///     `sendTestSuite`: scheduling was abandoned there because it did not
+  ///     arrive, and `show()` was verified to post within a second. The test
+  ///     button therefore worked while real alerts did not, which is exactly
+  ///     the shape of "I pressed test and saw notifications, but I never get
+  ///     the real ones".
+  ///
+  ///     iOS: `zonedSchedule`, because there the measurement went the other
+  ///     way — `show()` was accepted and never displayed, no banner, no entry
+  ///     in Notification Center, no error, while a scheduled notification
+  ///     delivered every time. One second is imperceptible.
   Future<void> showAlert(Alert a) async {
     if (!_ready) await init();
-    final when = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 1));
-    await _plugin.zonedSchedule(
-      _idFor(a.id),
-      a.title,
-      '${a.body}\n${a.whenLine()}',
-      when,
-      _details(a.kind, a.severity),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      payload: a.id,
-    );
+    final body = '${a.body}\n${a.whenLine()}';
+    final details = _details(a.kind, a.severity);
+
+    if (!kIsWeb && Platform.isIOS) {
+      final when = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 1));
+      await _plugin.zonedSchedule(
+        _idFor(a.id), a.title, body, when, details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        payload: a.id,
+      );
+      return;
+    }
+    await _plugin.show(_idFor(a.id), a.title, body, details, payload: a.id);
   }
 
   /// Fire one notification of every kind, so you can see what they look like.

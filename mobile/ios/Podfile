@@ -1,5 +1,12 @@
-# Uncomment this line to define a global platform for your project
-# platform :ios, '13.0'
+# iOS 14, not the Flutter default of 13.
+#
+# `workmanager_apple` requires 14.0, and it arrived with the background alert
+# polling. The build failed with a Target Integrity error rather than anything
+# about notifications, so: this line is load-bearing, and lowering it breaks
+# `flutter build ios` outright rather than degrading anything gracefully.
+#
+# iOS 14 shipped in 2020. Nothing that can run this app is below it.
+platform :ios, '14.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'

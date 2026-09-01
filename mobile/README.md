@@ -8,13 +8,9 @@ It reads. It does not trade, hold keys, or place orders.
 
 ## Run it
 
-Two processes. The API first, on your Mac:
-
-```bash
-python3 serve.py
-```
-
-It prints the address to use for each target. Then:
+The backend is **deployed** — nothing has to be started on a laptop for the
+app to work, and `defaultApiBase()` in `lib/api/client.dart` points at the
+droplet. So this is one process:
 
 ```bash
 cd mobile
@@ -23,11 +19,19 @@ flutter run -d "iPhone 17 Pro"
 flutter run -d emulator-5554
 ```
 
-The base URL is picked per platform — `localhost:8787` for the iOS simulator,
-`10.0.2.2:8787` for the Android emulator. A **physical phone** needs your
-Mac's LAN address, which `serve.py` prints. Set it without rebuilding by
-tapping the status row on the login screen, or the API host row on Profile.
-To bake it in:
+### Against a local backend instead
+
+That is now the special case, so it is the one that has to say so. Start the
+API on your Mac:
+
+```bash
+python3 serve.py
+```
+
+It prints the address to use for each target — `localhost:8787` for the iOS
+simulator, `10.0.2.2:8787` for the Android emulator, and the Mac's LAN address
+for a physical phone. Point the app at it by tapping the status row on the
+login screen, or the API host row on Profile, or bake it into the build:
 
 ```bash
 flutter run --dart-define=API_BASE=http://192.168.1.20:8787
@@ -35,6 +39,120 @@ flutter run --dart-define=API_BASE=http://192.168.1.20:8787
 
 Keep `collect.py` running too if you want the bars to stay current — the app
 shows `STALE` rather than pretending otherwise when they are not.
+
+## How a notification reaches your phone
+
+Four things had to be true and only the last one was.
+
+**1. The server has to notice.** `AlertEngine` used to refresh only inside an
+`/api/alerts` request, so detection was a side effect of somebody looking. A
+transition is defined against the previous observation — with nobody polling
+there was no previous observation, so a signal that flipped at 03:00 was not
+delivered late, it was **never detected**. It now runs its own loop from
+process start (`AlertEngine.start`, every 30s), and a poll only reads what has
+already been noticed.
+
+**2. It has to survive a restart.** The log and the seen-ids are persisted to
+`data_cache/alerts.v1.json`. A deploy used to empty both, so the next refresh
+re-primed from scratch and everything around the restart was swallowed.
+
+**3. The app has to ask from where it left off.** The cursor was a field on
+the shell's State, reset to "now" on every launch — so the app deliberately
+skipped everything that happened while it was closed, one line after the
+server had gone to the trouble of finding it. It lives in storage now
+(`alert_feed.dart`), capped at six per collection and six hours of backlog so
+a phone that was off overnight does not come back to twenty notifications.
+
+**4. Android has to display it.** `showAlert` went through `zonedSchedule`
+with `inexactAllowWhileIdle`, which Android batches and defers while dozing.
+The same file already recorded this — `sendTestSuite` abandoned scheduling for
+exactly this reason — so the **test button worked while real alerts did not**.
+Android now uses `show()`; iOS keeps `zonedSchedule`, where the measurement
+went the other way.
+
+### With the app closed
+
+`background.dart` registers a periodic background job on both platforms. It
+needs **no paid developer account on either** — the iOS half runs as a
+BGAppRefreshTask, and background modes are Info.plist declarations rather than
+entitlements tied to an App ID. Push Notifications is the capability a free
+personal team cannot have; this is not that.
+
+**Android.** WorkManager, fifteen minutes, which Android treats as a target
+rather than a promise. Fine for 1h/4h/1d calls and news; a 15m signal can
+arrive late. Force-stopping the app from Settings ends it until you open the
+app again — Android's rule for every app. Swiping it out of recents does not.
+Aggressive battery management (Xiaomi, Huawei, OnePlus, some Samsungs) will
+kill it regardless; that is the first thing to check if alerts stop.
+
+**iOS, which is weaker.** Three moving parts have to agree exactly, and iOS
+warns about none of them when they don't — it simply never launches the app:
+
+| | |
+|---|---|
+| `Info.plist` | `BGTaskSchedulerPermittedIdentifiers` → `com.tradingbot.tradingbotApp.alertPoll`, and `UIBackgroundModes` → `fetch` |
+| `AppDelegate.swift` | `WorkmanagerPlugin.registerPeriodicTask` with the same id, in `didFinishLaunchingWithOptions` — BGTaskScheduler rejects a handler registered any later |
+| `background.dart` | the same id as `uniqueName`, and `initialDelay` (iOS reads that, not `frequency`) |
+
+The fifteen minutes is a *request*. iOS decides when and whether to run a
+refresh, from how often you open the app, battery, and network — a few times a
+day is normal. **Swiping the app away in the app switcher stops background
+refresh entirely** until you reopen it: harmless on Android, the off switch on
+iOS. Low Power Mode disables it, as does Settings → General → Background App
+Refresh.
+
+Real-time delivery to a sleeping phone still needs push — FCM or APNs — and
+APNs needs the paid account.
+
+The scheduled calendar warnings are unaffected on both: they are handed to the
+OS in advance with a fire time and arrive on the minute regardless.
+
+### iOS deployment target
+
+**14.0, not Flutter's default 13.0.** `workmanager_apple` requires it, and the
+build fails with a `Target Integrity` error naming the package rather than
+anything about notifications. Set in `ios/Podfile` and all three
+`IPHONEOS_DEPLOYMENT_TARGET` entries in the Xcode project.
+
+### What is allowed to buzz
+
+Muting is per device, and now per category as well as per pair — the bell
+sheet has an **EVERY COIN** section. News runs at about seventy items a day on
+these feeds, 35 of them inside one six-hour stretch, so silencing it has to be
+easier than revoking the notification permission and losing the trade signals
+with it. Signals are additionally gated by the sensitivity setting, using the
+same rule as the dashboard card, so the screen and the lock screen can never
+disagree.
+
+News gets four levels rather than a switch, because "news" is not one thing
+and an on/off control at seventy a day is answered "off":
+
+| | |
+|---|---|
+| **Everything** | every headline that arrives |
+| **Only BULL or BEAR** | direction, either size. Drops MIXED and unreadable |
+| **Strong influence only** | STRONG IMPACT, either direction. Keeps MIXED |
+| **None** | silent; still all there in the News tab |
+
+The middle two are **literal filters, not a hierarchy**. A STRONG IMPACT story
+the scorer reads as MIXED passes *Strong influence* and fails *Only BULL or
+BEAR* — the settings ask different questions ("which way?" and "how much?").
+
+Both readings come from `LexiconScorer`, a keyword count that stays silent on
+roughly half of all headlines, so every setting but **Everything** is trusting
+that scorer to have read the one that mattered. The sheet says so on screen.
+
+## Waiting is not failing
+
+A request that has not answered yet is not an error, and the app no longer
+says it is. `lib/widgets/patient_loader.dart` holds the rule: keep the spinner
+up and keep retrying for **five minutes**, count the wait out loud in mm:ss,
+and add a new line of commentary every minute it drags on. Only when the whole
+window passes with nothing getting through does anything red appear.
+
+This replaced a twenty-second HTTP timeout that painted "No link to the
+service" over sessions that were about to recover — a lift, a cell handover,
+wifi reassociating, or the server building a dashboard it had not cached.
 
 ## Screens
 

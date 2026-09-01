@@ -20,6 +20,7 @@ class Settings {
   static const _tokenKey = 'api.token.v1';
   static const _accountKey = 'api.account.v1';
   static const _signalKey = 'signal.sensitivity.v1';
+  static const _newsKey = 'news.alerts.v1';
 
   /// Applies whatever was saved to `client`, falling back to the compile-time
   /// defaults when nothing has been stored.
@@ -84,6 +85,35 @@ class Settings {
   }
 
   Future<void> saveSensitivity(String v) => _put(_signalKey, v);
+
+  /// How much of the news is allowed to buzz.
+  ///
+  /// Four levels rather than a switch, because "news" is not one thing. These
+  /// feeds carry about seventy items a day and the scorer can read maybe half
+  /// of them, so the useful question is not whether you want news but which
+  /// half — and an on/off switch forces the answer "off".
+  ///
+  ///   all          every headline that arrives.
+  ///   directional  only BULL or BEAR — nothing the scorer could not read,
+  ///                and nothing it read as MIXED.
+  ///   strong       only STRONG IMPACT, whichever way it points.
+  ///   none         silent. Still all there in the News tab.
+  ///
+  /// Defaults to `all`, which is the behaviour that already existed. Changing
+  /// someone's notifications underneath them is not an upgrade.
+  Future<String> newsAlerts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = prefs.getString(_newsKey);
+      return const {'all', 'directional', 'strong', 'none'}.contains(v)
+          ? v!
+          : 'all';
+    } catch (_) {
+      return 'all';            // fail audible, as everywhere else here
+    }
+  }
+
+  Future<void> saveNewsAlerts(String v) => _put(_newsKey, v);
 
   Future<void> clearSession() async {
     await _put(_tokenKey, '');

@@ -20,6 +20,19 @@ that says only "just now" would imply a freshness the data does not have. So
 alerts carry `at` (when the thing happened) alongside `detected_at`, and for
 filings both the trade date and the disclosure date.
 
+THE ENGINE RUNS ON ITS OWN CLOCK
+--------------------------------
+It used to refresh only inside an `/api/alerts` request, which made detection
+a side effect of somebody looking. Since a transition is defined against the
+PREVIOUS observation, that meant the phone could only ever be told about
+changes that happened during the seconds the app was open — and every cold
+start re-primed the engine, swallowing everything that had accumulated while
+it was closed. News and signal alerts were therefore almost never delivered.
+
+So `start()` runs the probes on a timer from process start, and the log is
+persisted. Detection is now continuous and independent of whether anyone is
+holding a phone; a poll only READS what has already been noticed.
+
 NOTHING HERE FEEDS A MODEL
 --------------------------
 Alerts are a human channel. They are derived from the same payload the
@@ -30,9 +43,14 @@ modelling the calendar rather than the market.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import os
+import threading
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from core import utc_now
@@ -51,6 +69,27 @@ LEAD_MINUTES = (60, 5)
 
 MAX_LOG = 300
 
+# How often the engine looks, when it is running its own loop.
+#
+# A warm refresh reads 16 cached dashboards plus the news and whale stores and
+# costs 0.3-0.9s measured on the droplet's single core, so 30s is roughly 2%
+# of one core. Fast enough that a signal is noticed within half a minute of
+# the bar that produced it; slow enough to be invisible in the CPU graph.
+REFRESH_SECONDS = 30
+
+# Where the log survives a restart.
+#
+# Without this, a deploy or a reboot emptied `_seen` and `_log`, and the next
+# refresh re-primed from scratch — so everything that happened around the
+# restart was silently swallowed rather than delivered.
+STATE_PATH = Path("data_cache") / "alerts.v1.json"
+
+# `_seen` never shrinks on its own, so persisting it needs a bound. 4000 is
+# far more than the ~50 ids any single refresh can produce, since the probes
+# only ever look at the newest 25 filings and 25 headlines — an id can never
+# fall out of this window while the thing it names is still visible.
+MAX_SEEN = 4000
+
 
 @dataclass
 class Alert:
@@ -65,6 +104,23 @@ class Alert:
     # (a filing, a macro release). The app mutes per symbol AND per interval,
     # which it cannot do if the alert does not say which one it came from.
     interval: str = ""
+    # strong | medium | small for a signal, "" for everything else.
+    #
+    # Carried so the phone can apply the SAME sensitivity setting to
+    # notifications that it applies to the dashboard. Without it, a user who
+    # chose "only strong signals" still got woken by every small one — the
+    # screen and the notification would be telling them different things.
+    strength: str = ""
+    # BULL | BEAR | MIXED | NO READING, and STRONG/MEDIUM/ALMOST NO IMPACT,
+    # for a news alert. "" for every other kind.
+    #
+    # Same reason as `strength`: the phone filters news by direction and by
+    # impact, and it cannot do that from a headline string. Agent 3's scorer
+    # has already worked both out for the dashboard card, so they are carried
+    # rather than recomputed — one calculation, and the card and the
+    # notification can never disagree about the same story.
+    bias: str = ""
+    impact: str = ""
     symbol: str = ""
     url: str = ""
     extra: Dict[str, str] = field(default_factory=dict)
@@ -97,10 +153,16 @@ def _hash(*parts) -> str:
 class AlertEngine:
     """Turns the dashboard payload and the feeds into a stream of transitions."""
 
-    def __init__(self, service, pairs=None):
+    def __init__(self, service, pairs=None, state_path=None):
         self.svc = service
         self._log: List[Alert] = []
-        self._seen: set = set()
+        # A DICT used as an ordered set, not a `set`.
+        #
+        # Persisting it needs a bound, and a bound needs an order: trimming an
+        # unordered set keeps an arbitrary subset, which would drop ids seen a
+        # minute ago while keeping ones from last week — and every alert whose
+        # id was dropped fires again.
+        self._seen: Dict[str, None] = {}
         # PER PAIR, not global.
         #
         # These were three scalars, which was only correct while the engine
@@ -116,6 +178,17 @@ class AlertEngine:
         self._spiked_bar: Dict[tuple, Optional[str]] = {}
         self._primed = False
         self._pairs = pairs
+        # `refresh` now runs from the background loop AND from request
+        # threads. Without this, two refreshes can interleave between the
+        # `_seen` check and the `_seen.add`, and the same alert is delivered
+        # twice — or worse, `_last_action` is written by one thread and read
+        # by the other mid-probe, so a transition is compared against the
+        # wrong previous value and silently lost.
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._state_path = Path(state_path) if state_path else STATE_PATH
+        self._load_state()
 
     def pairs(self) -> List[tuple]:
         """(symbol, interval) pairs to watch.
@@ -134,6 +207,45 @@ class AlertEngine:
         except Exception:
             return [(self.svc.symbol, self.svc.interval)]
 
+    # -- the loop ------------------------------------------------------
+    def start(self, interval: float = REFRESH_SECONDS) -> None:
+        """Refresh forever, in the background.
+
+        THE BUG THIS FIXES
+            `refresh()` used to run only inside an `/api/alerts` request. A
+            transition is defined against the previous observation, so with
+            nobody polling there was no previous observation to compare
+            against — the app could only be told about changes that happened
+            while it was open and in the foreground, which on a phone is a
+            few minutes a day. Every other signal flip and every headline
+            went unnoticed, not undelivered: they were never detected at all.
+
+        Idempotent, so calling it twice does not start two loops.
+        """
+        if self._thread is not None and self._thread.is_alive():
+            return
+
+        def loop() -> None:
+            while not self._stop.is_set():
+                try:
+                    new = self.refresh()
+                    if new:
+                        log.info("alerts: %d new (%s)", len(new),
+                                 ", ".join(sorted({a.kind for a in new})))
+                except Exception as e:
+                    # the loop outlives any single bad refresh; a feed that
+                    # is down for an hour must not end alerting for the day
+                    log.warning("alert loop: %s", e)
+                self._stop.wait(interval)
+
+        self._thread = threading.Thread(target=loop, daemon=True,
+                                        name="alerts")
+        self._thread.start()
+        log.info("alert engine started, refreshing every %.0fs", interval)
+
+    def stop(self) -> None:
+        self._stop.set()
+
     # -- public --------------------------------------------------------
     def refresh(self) -> List[Alert]:
         """Look once. Returns only what is new."""
@@ -144,22 +256,31 @@ class AlertEngine:
             except Exception as e:                 # one dead feed must not
                 log.warning("%s failed: %s", probe.__name__, e)  # kill the rest
 
-        new = [a for a in fresh if a.id not in self._seen]
-        for a in new:
-            self._seen.add(a.id)
-        self._log.extend(new)
-        if len(self._log) > MAX_LOG:
-            self._log = self._log[-MAX_LOG:]
+        with self._lock:
+            new = [a for a in fresh if a.id not in self._seen]
+            for a in new:
+                self._seen[a.id] = None
+            self._log.extend(new)
+            if len(self._log) > MAX_LOG:
+                self._log = self._log[-MAX_LOG:]
 
-        # The first poll after a restart would otherwise replay history as if
-        # it just happened. Record it, return nothing.
-        if not self._primed:
+            # The first poll of a NEW engine would otherwise replay history as
+            # if it had just happened. Record it, return nothing.
+            #
+            # Restored state counts as primed: after a restart the engine
+            # already knows what it had seen, so the first refresh is an
+            # ordinary one and anything genuinely new during the downtime is
+            # real news that deserves to be delivered.
+            first = not self._primed
             self._primed = True
-            return []
+            if new or first:
+                self._save_state()
+            if first:
+                return []
         return new
 
     def after(self, cursor: Optional[int]) -> List[Alert]:
-        """New alerts after an epoch-millisecond cursor.
+        """Alerts detected after an epoch-millisecond cursor.
 
         No cursor deliberately returns NOTHING. Returning the backlog there
         would make every app launch fire twenty notifications about filings
@@ -169,14 +290,80 @@ class AlertEngine:
 
         An UNPARSEABLE cursor also returns nothing, not everything. Failing
         open here is what turns one bad request into a notification storm.
+
+        NEVER REFRESHES. Detection belongs to `start()`'s loop, for two
+        reasons that both bit:
+
+          1. A request that primed a cold engine would swallow exactly the
+             backlog it was asking for.
+          2. A cold refresh builds a dashboard per watched pair and was
+             MEASURED at over ten minutes on an empty cache. Inside a request
+             that is a phone waiting on a socket until it times out, then
+             asking again, and a queue of duplicate refreshes behind it.
+
+        Before the first refresh completes this answers empty, which is the
+        truth: nothing has been observed yet.
         """
-        self.refresh()
         if cursor is None:
             return []
-        return [a for a in self._log if a.seq > cursor]
+        with self._lock:
+            return [a for a in self._log if a.seq > cursor]
 
     def cursor(self) -> int:
         return int(utc_now().timestamp() * 1000)
+
+    # -- persistence ---------------------------------------------------
+    #
+    # A restart used to empty `_seen` and `_log`, so the next refresh primed
+    # from scratch and everything around the restart was swallowed. Deploys
+    # are frequent enough that this was a routine way to lose a day's alerts.
+
+    def _load_state(self) -> None:
+        try:
+            raw = json.loads(self._state_path.read_text())
+        except (OSError, ValueError):
+            return                       # no state yet is the normal case
+        try:
+            self._seen = dict.fromkeys(raw.get("seen", []))
+            self._last_action = {tuple(k.split("|")): v
+                                 for k, v in raw.get("last_action", {}).items()}
+            self._last_signal_bar = {
+                tuple(k.split("|")): v
+                for k, v in raw.get("last_signal_bar", {}).items()}
+            self._spiked_bar = {tuple(k.split("|")): v
+                                for k, v in raw.get("spiked_bar", {}).items()}
+            self._log = [_alert_from_json(a) for a in raw.get("log", [])]
+            self._primed = bool(raw.get("primed", False))
+            log.info("alerts: restored %d in the log, %d ids seen",
+                     len(self._log), len(self._seen))
+        except (KeyError, TypeError, ValueError) as e:
+            # a half-written or older file starts clean rather than crashing
+            log.warning("alert state ignored: %s", e)
+            self._seen, self._log, self._primed = {}, [], False
+
+    def _save_state(self) -> None:
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            # trimmed to the newest ids: an id can only matter while the thing
+            # it names is still inside the 25 newest filings or headlines
+            seen = list(self._seen)[-MAX_SEEN:]
+            tmp = self._state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({
+                "seen": seen,
+                "primed": self._primed,
+                "last_action": {"|".join(k): v
+                                for k, v in self._last_action.items()},
+                "last_signal_bar": {"|".join(k): v
+                                    for k, v in self._last_signal_bar.items()},
+                "spiked_bar": {"|".join(k): v
+                               for k, v in self._spiked_bar.items()},
+                "log": [a.to_json() for a in self._log[-MAX_LOG:]],
+            }))
+            os.replace(tmp, self._state_path)
+        except (OSError, ValueError, TypeError) as e:
+            # losing persistence costs a swallowed batch after the next
+            # restart, which is bad, but not as bad as failing the refresh
+            log.warning("could not persist alert state: %s", e)
 
     # -- probes --------------------------------------------------------
     def _signal(self) -> List[Alert]:
@@ -227,6 +414,9 @@ class AlertEngine:
             id=_hash("signal", d["symbol"], iv, bar, action),
             kind="signal", severity="high", symbol=d["symbol"],
             interval=iv,
+            # so the phone can apply the same sensitivity gate to the
+            # notification that it applies to the dashboard card
+            strength=str(rec.get("strength") or ""),
             title=f"{d['symbol']} {iv}: {action}",
             body=(f"{rec.get('detail', '')}"
                   + (f"  EV {ev:+.3f}%" if ev is not None else "")
@@ -262,12 +452,28 @@ class AlertEngine:
             nid = _hash("news", n["headline"], n.get("published_at"))
             if nid in self._seen:
                 continue
+            bias = str(n.get("bias") or "")
+            impact = str(n.get("impact") or "")
+            # THE HEADLINE IS THE TITLE.
+            #
+            # It used to be the literal words "News released", with the
+            # headline pushed into the body — so a collapsed notification
+            # said nothing at all, and a shade with four of them said it four
+            # times. The reading goes underneath, where it explains whether
+            # this was worth the interruption.
+            reading = " · ".join(x for x in (bias, impact)
+                                 if x and x != "NO READING")
             out.append(Alert(
-                id=nid, kind="news", severity="medium",
-                title="News released",
-                body=f"{n['headline']} ({n.get('source', '')})",
+                id=nid, kind="news",
+                # A story the scorer calls strong is worth a heads-up banner;
+                # one it cannot read at all is not.
+                severity="high" if impact == "STRONG IMPACT" else "medium",
+                title=n["headline"],
+                body=(f"{n.get('source', '')} · {reading}" if reading
+                      else f"{n.get('source', '')} · no directional reading"),
                 at=_parse(n.get("published_at")) or utc_now(),
-                detected_at=utc_now(), url=n.get("url", "") or ""))
+                detected_at=utc_now(), url=n.get("url", "") or "",
+                bias=bias, impact=impact))
         return out
 
     def _calendar(self) -> List[Alert]:
@@ -319,9 +525,24 @@ class AlertEngine:
                 # notification would never be sent and nothing would say why.
                 for other in leads:
                     if other != lead and 0 < mins <= other:
-                        self._seen.add(_hash("cal", e.key, other))
+                        self._seen[_hash("cal", e.key, other)] = None
                 break
         return out
+
+
+def _alert_from_json(d: dict) -> Alert:
+    """Rebuild a persisted alert.
+
+    `seq` is a property derived from `detected_at`, so it is dropped rather
+    than passed to the constructor — writing it back would be inventing a
+    second source of truth for the cursor everything pages on.
+    """
+    d = dict(d)
+    d.pop("seq", None)
+    d["at"] = _parse(d.get("at")) or utc_now()
+    d["detected_at"] = _parse(d.get("detected_at")) or utc_now()
+    known = {f for f in Alert.__dataclass_fields__}
+    return Alert(**{k: v for k, v in d.items() if k in known})
 
 
 def _parse(v) -> Optional[datetime]:

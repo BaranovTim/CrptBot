@@ -66,8 +66,32 @@ class Muted {
   bool isIntervalMuted(String symbol, String interval) =>
       _cache?.contains(_k(symbol, interval)) ?? false;
 
+  /// Whole CATEGORIES of alert, across every coin.
+  ///
+  /// WHY THIS EXISTS
+  ///     News arrives at about seventy items a day — measured on the feeds
+  ///     this app reads, 35 of them inside one six-hour stretch. That is a
+  ///     buzz every twenty minutes, all day, and the predictable result is
+  ///     that the whole notification permission gets revoked to stop it,
+  ///     taking the BUY signals with it.
+  ///
+  ///     So the categories are separable. Silencing the noisy one has to be
+  ///     easier than silencing all of them, or the noisy one decides.
+  ///
+  /// Stored in the same list, under a `kind:` prefix, so the background
+  /// isolate reads it from the same place with no extra plumbing — and so a
+  /// storage failure fails audible here too.
+  static String kindKey(String kind) => 'kind:${kind.toLowerCase()}';
+
+  bool isKindMuted(String kind) =>
+      _cache?.contains(kindKey(kind)) ?? false;   // fail audible
+
+  Future<bool> toggleKind(String kind) => toggle(kindKey(kind));
+
   Future<bool> toggle(String symbol, [String? interval]) async {
-    final s = _k(symbol, interval);
+    // a `kind:` key is already a literal key and must not be upper-cased into
+    // a symbol — `_k` exists to normalise pairs, not categories
+    final s = symbol.startsWith('kind:') ? symbol : _k(symbol, interval);
     final set = Set<String>.from(await load());
     final nowMuted = !set.contains(s);
     if (nowMuted) {

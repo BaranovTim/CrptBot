@@ -13,6 +13,9 @@ import 'dart:convert';
 import 'package:tradingbot_app/api/muted.dart';
 import 'package:tradingbot_app/api/watchlist.dart';
 import 'package:tradingbot_app/main.dart';
+import 'package:tradingbot_app/widgets/patient_loader.dart';
+import 'package:tradingbot_app/api/alert_feed.dart';
+import 'package:flutter/material.dart';
 
 void main() {
   testWidgets('boots to sign-in, never straight into a signed-in session',
@@ -265,5 +268,291 @@ void main() {
     for (final s in ['strong', 'medium', 'small']) {
       expect(make('', 'FLAT').clears(s), isFalse, reason: s);
     }
+  });
+
+  test('nothing witty is said while the wait is still ordinary', () {
+    // Most loads finish inside a few seconds. A joke about how slow this is
+    // would arrive after the data did.
+    expect(quipFor(const Duration(seconds: 0)), isNull);
+    expect(quipFor(const Duration(seconds: 59)), isNull);
+    expect(quipFor(const Duration(minutes: 1)), kWaitingQuips.first);
+  });
+
+  test('each minute gets its own line, and the last one holds', () {
+    for (var m = 1; m <= kWaitingQuips.length; m++) {
+      expect(quipFor(Duration(minutes: m)), kWaitingQuips[m - 1],
+          reason: 'minute $m');
+    }
+    // Clamped, not wrapped: restarting the sequence would put "damn, why does
+    // it take so looong" on screen beside a clock reading 6:00.
+    expect(quipFor(const Duration(minutes: 30)), kWaitingQuips.last);
+  });
+
+  test('the clock reads as a clock', () {
+    expect(formatWaited(const Duration(seconds: 7)), '0:07');
+    expect(formatWaited(const Duration(minutes: 2, seconds: 6)), '2:06');
+    expect(formatWaited(const Duration(minutes: 12)), '12:00');
+  });
+
+  test('an error is only an error after five whole minutes', () {
+    // THE BUG: one HTTP timeout, twenty seconds in, used to paint "No link to
+    // the service" over a perfectly good session that was about to recover.
+    expect(patienceExhausted(const Duration(seconds: 20)), isFalse);
+    expect(patienceExhausted(const Duration(minutes: 4, seconds: 59)), isFalse);
+    expect(patienceExhausted(kPatience), isTrue);
+    expect(kPatience, const Duration(minutes: 5));
+  });
+
+  testWidgets('the panel says how long it has waited, and jokes about it',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: WaitingPanel(
+            since: DateTime.now().subtract(const Duration(minutes: 2, seconds: 5))),
+      ),
+    ));
+    await tester.pump(const Duration(seconds: 1));
+
+    // A real mm:ss clock, not a fake progress bar creeping toward a number
+    // nobody chose. Matched by shape rather than by value: the widget reads
+    // the wall clock, so asserting '2:06' would be asserting on the speed of
+    // the machine running the test.
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Text &&
+            w.data != null &&
+            RegExp(r'^\d+:[0-5]\d$').hasMatch(w.data!)),
+        findsOneWidget);
+    expect(find.text(kWaitingQuips[1]), findsOneWidget);
+    // and it admits this is taking a while rather than restarting the message
+    expect(find.textContaining('Still'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());   // dispose, cancelling the tick
+  });
+
+  testWidgets('giving up is announced once, by the clock, not by a retry',
+      (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: WaitingPanel(
+          since: DateTime.now().subtract(const Duration(minutes: 6)),
+          onPatienceExhausted: () => calls++,
+        ),
+      ),
+    ));
+    await tester.pump();                 // post-frame check
+    await tester.pump(const Duration(seconds: 3));
+    // Exactly once. A callback that fired every tick would rebuild the error
+    // panel once a second for as long as the server stayed down.
+    expect(calls, 1);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  // ------------------------------------------------------------- alerts
+  //
+  // THE BUG THESE PIN: notifications for signals and news never arrived. The
+  // app reset its cursor to "now" on every launch, so everything that
+  // happened while it was closed — which is nearly everything — was fetched
+  // by the server and then discarded by the app on the next line.
+
+  Alert alert({
+    String kind = 'signal',
+    String strength = 'strong',
+    String symbol = 'BTCUSDT',
+    String interval = '1h',
+    String bias = '',
+    String impact = '',
+    Duration age = Duration.zero,
+  }) {
+    final at = DateTime.now().toUtc().subtract(age);
+    return Alert.fromJson({
+      'id': '$kind-$symbol-$interval-${at.microsecondsSinceEpoch}',
+      'kind': kind,
+      'title': '$symbol $interval',
+      'body': 'b',
+      'severity': 'high',
+      'symbol': symbol,
+      'interval': interval,
+      'strength': strength,
+      'bias': bias,
+      'impact': impact,
+      'url': '',
+      'seq': at.millisecondsSinceEpoch,
+      'at': at.toIso8601String(),
+      'detected_at': at.toIso8601String(),
+      'extra': <String, String>{},
+    });
+  }
+
+  bool nothingMuted(String s, String i) => false;
+
+  test('a signal weaker than the chosen setting never buzzes the phone', () {
+    // The dashboard already withholds these. A notification for a call the
+    // screen is hiding would be the app telling you two different things.
+    final small = [alert(strength: 'small')];
+    expect(
+        selectDeliverable(small,
+            sensitivity: 'strong', isMuted: nothingMuted),
+        isEmpty);
+    expect(
+        selectDeliverable(small, sensitivity: 'small', isMuted: nothingMuted),
+        hasLength(1));
+  });
+
+  test('news and filings are never gated by a signal setting', () {
+    // They have no strength — they are not calls, and the strictest signal
+    // setting must not silence the news.
+    final feed = [
+      alert(kind: 'news', strength: '', symbol: '', interval: ''),
+      alert(kind: 'whale', strength: '', symbol: '', interval: ''),
+    ];
+    expect(
+        selectDeliverable(feed, sensitivity: 'strong', isMuted: nothingMuted),
+        hasLength(2));
+  });
+
+  test('a muted pair stays silent, including one timeframe of it', () {
+    final feed = [
+      alert(symbol: 'ADAUSDT', interval: '1h'),
+      alert(symbol: 'BTCUSDT', interval: '1h'),
+    ];
+    final kept = selectDeliverable(feed,
+        sensitivity: 'strong',
+        isMuted: (s, i) => s == 'ADAUSDT' && i == '1h');
+    expect(kept.map((a) => a.symbol), ['BTCUSDT']);
+  });
+
+  test('a whole category can be silenced without silencing the rest', () async {
+    // Seventy headlines a day is a buzz every twenty minutes. If the only way
+    // to stop it were the system notification switch, the BUY signals would
+    // go with it — so news is separable from signals.
+    SharedPreferences.setMockInitialValues({});
+    await Muted.instance.load();
+    await Muted.instance.toggleKind('news');
+
+    final feed = [
+      alert(kind: 'news', strength: '', symbol: '', interval: ''),
+      alert(kind: 'signal'),
+    ];
+    final kept = selectDeliverable(feed,
+        sensitivity: 'strong',
+        isMuted: nothingMuted,
+        isKindMuted: Muted.instance.isKindMuted);
+    expect(kept.map((a) => a.kind), ['signal']);
+
+    // and a category key must never be mangled into a symbol on the way in
+    expect(Muted.instance.isKindMuted('news'), isTrue);
+    expect(Muted.instance.isMuted('NEWS'), isFalse);
+  });
+
+  test('a backlog is capped, and the important half survives the cut', () {
+    // Coming back to a phone that was off all night must not post twenty
+    // notifications — that is what teaches you to clear the shade unread.
+    final feed = [
+      for (var i = 0; i < 10; i++)
+        alert(kind: 'news', strength: '', symbol: '', interval: ''),
+      alert(kind: 'signal'),
+    ];
+    final kept =
+        selectDeliverable(feed, sensitivity: 'strong', isMuted: nothingMuted);
+    expect(kept, hasLength(maxCatchUp));
+    // the signal outranks ten headlines rather than being crowded out by them
+    expect(kept.first.kind, 'signal');
+  });
+
+  test('stale alerts are not delivered late as though they were new', () {
+    // A signal describes a window that has since closed. Waking someone at
+    // 09:00 for a call made at 01:00 is worse than staying quiet.
+    final old = [alert(age: const Duration(hours: 9))];
+    expect(
+        selectDeliverable(old, sensitivity: 'strong', isMuted: nothingMuted),
+        isEmpty);
+    expect(
+        selectDeliverable([alert(age: const Duration(hours: 1))],
+            sensitivity: 'strong', isMuted: nothingMuted),
+        hasLength(1));
+  });
+
+  test('the cursor survives a restart, so a closed app misses nothing', () async {
+    // THE ACTUAL BUG. `_cursor` was a field on the shell's State, set to
+    // "now" on every launch — so the app asked the server for everything
+    // since it opened, which is by definition nothing.
+    SharedPreferences.setMockInitialValues({});
+    expect(await loadCursor(), isNull, reason: 'a first run has no position');
+
+    await saveCursor(1788194410735);
+    expect(await loadCursor(), 1788194410735);
+
+    // and a zero or negative stored value reads as "no position", not as
+    // "the beginning of time" — which would replay the entire log
+    await saveCursor(0);
+    expect(await loadCursor(), isNull);
+  });
+
+  Alert story(String bias, String impact) => alert(
+      kind: 'news', strength: '', symbol: '', interval: '',
+      bias: bias, impact: impact);
+
+  test('the four news levels each mean exactly what they say', () {
+    final readable = story('BULL', 'STRONG IMPACT');
+    final mixedStrong = story('MIXED', 'STRONG IMPACT');
+    final unread = story('NO READING', 'NO READING');
+    final quietBear = story('BEAR', 'ALMOST NO IMPACT');
+
+    List<String> pass(String level) => [readable, mixedStrong, unread,
+            quietBear]
+        .where((a) => clearsNewsLevel(a.bias, a.impact, level))
+        .map((a) => '${a.bias}/${a.impact}')
+        .toList();
+
+    expect(pass('all'), hasLength(4), reason: 'all means all');
+    expect(pass('none'), isEmpty);
+    // direction, whichever size — including a bearish story too small to
+    // matter, because the setting asks "which way", not "how much"
+    expect(pass('directional'),
+        ['BULL/STRONG IMPACT', 'BEAR/ALMOST NO IMPACT']);
+    // size, whichever direction — including MIXED, which `directional` drops
+    expect(pass('strong'), ['BULL/STRONG IMPACT', 'MIXED/STRONG IMPACT']);
+  });
+
+  test('the news level never touches signals, filings or releases', () {
+    // "None" for news must not silence a BUY. They are different questions
+    // and one control answering both is how a setting becomes a trap.
+    final feed = [
+      story('BULL', 'STRONG IMPACT'),
+      alert(kind: 'signal'),
+      alert(kind: 'whale', strength: '', symbol: '', interval: ''),
+      alert(kind: 'calendar', strength: '', symbol: '', interval: ''),
+    ];
+    final kept = selectDeliverable(feed,
+        sensitivity: 'strong', isMuted: nothingMuted, newsLevel: 'none');
+    expect(kept.map((a) => a.kind), ['signal', 'calendar', 'whale']);
+  });
+
+  test('an unreadable headline is dropped by every level except all', () {
+    // Half of all headlines get no reading. That is the scorer's honest
+    // limit, and it is exactly what the three narrow settings are choosing
+    // to accept — so the setting screen has to say so, and this pins that
+    // the behaviour matches the claim.
+    final feed = [story('NO READING', 'NO READING')];
+    for (final level in ['directional', 'strong', 'none']) {
+      expect(
+          selectDeliverable(feed,
+              sensitivity: 'strong', isMuted: nothingMuted, newsLevel: level),
+          isEmpty,
+          reason: level);
+    }
+    expect(
+        selectDeliverable(feed,
+            sensitivity: 'strong', isMuted: nothingMuted, newsLevel: 'all'),
+        hasLength(1));
+  });
+
+  test('an unknown stored level falls back to everything, not to silence', () {
+    // A corrupt or future setting value must fail LOUD. Failing to silence
+    // is a bug you notice; failing to silent is one you never do.
+    expect(clearsNewsLevel('NO READING', 'NO READING', 'wat'), isTrue);
+    expect(clearsNewsLevel('NO READING', 'NO READING', ''), isTrue);
   });
 }

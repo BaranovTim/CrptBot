@@ -17,12 +17,15 @@
 ///     The status row says which it is before you try.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
 import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
+import '../widgets/patient_loader.dart';
 import '../widgets/glass.dart';
 import '../widgets/mesh_background.dart';
 
@@ -55,20 +58,36 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
+    _probeRetry?.cancel();
     _id.dispose();
     _key.dispose();
     super.dispose();
   }
+
+  /// When this run of probing started, and the retry that keeps it going.
+  ///
+  /// One failed health check is not evidence of anything on a phone. It used
+  /// to be enough to print "No Link — tap to set host", which is advice to go
+  /// and change a setting that was correct — so the probe now keeps trying
+  /// for [kPatience] before it says that.
+  DateTime _probeSince = DateTime.now();
+  Timer? _probeRetry;
 
   /// Is the server reachable at all?
   ///
   /// Deliberately `/api/health`, which needs no credential. Probing something
   /// gated would report "no link" for an account problem and send the user to
   /// re-type a host that was correct all along.
-  Future<void> _probe() async {
+  ///
+  /// `restart: false` continues the current attempt's clock instead of
+  /// starting a new one, so the retries add up to one five-minute wait rather
+  /// than an endless series of fresh thirty-second ones.
+  Future<void> _probe({bool restart = true}) async {
+    _probeRetry?.cancel();
+    if (restart) _probeSince = DateTime.now();
     setState(() {
       _probing = true;
-      _linkDetail = 'checking link...';
+      if (restart) _linkDetail = 'checking link...';
     });
     try {
       await widget.client.health();
@@ -80,11 +99,22 @@ class _LoginScreenState extends State<LoginScreen> {
       });
     } catch (_) {
       if (!mounted) return;
+      final waited = DateTime.now().difference(_probeSince);
+      if (patienceExhausted(waited)) {
+        setState(() {
+          _linked = false;
+          _probing = false;
+          _linkDetail = 'No Link — tap to set host';
+        });
+        return;
+      }
       setState(() {
-        _linked = false;
-        _probing = false;
-        _linkDetail = 'No Link — tap to set host';
+        // still spinning, still hopeful, and increasingly candid about it
+        _probing = true;
+        _linkDetail = quipFor(waited) ?? 'still checking...';
       });
+      _probeRetry =
+          Timer(const Duration(seconds: 10), () => _probe(restart: false));
     }
   }
 

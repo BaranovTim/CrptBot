@@ -11,6 +11,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../api/alert_feed.dart';
+import '../api/background.dart';
 import '../api/client.dart';
 import '../api/live_price.dart';
 import '../api/models.dart';
@@ -65,7 +67,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   late final LivePriceService _live = LivePriceService(symbol: _symbol);
   Timer? _alertTimer;
   Timer? _calendarTimer;
-  int? _cursor;
+
+  /// A poll is already out. The cursor is shared state now, so two
+  /// overlapping polls would each advance it and the second would step over
+  /// alerts the first had not yet shown.
+  bool _polling = false;
 
   @override
   void initState() {
@@ -105,14 +111,22 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     // that answer only exists after the OS prompt is resolved
     if (mounted) setState(() {});
 
-    // Establish the cursor WITHOUT notifying. The first call deliberately
-    // returns nothing, so opening the app does not replay a week of filings.
-    try {
-      final first = await widget.client.alerts();
-      _cursor = first.cursor;
-    } catch (_) {
-      // no server yet; the timer will keep trying
-    }
+    // Wake up while the app is closed. Registered here rather than in main()
+    // because there is no point polling for an account that is not signed in.
+    unawaited(startBackgroundAlerts());
+
+    // NO SEPARATE PRIMING CALL ANY MORE.
+    //
+    // It used to fetch once with no cursor and keep the answer, which reset
+    // the position to "now" on every launch — deliberately discarding
+    // everything that happened while the app was closed. Since that is most
+    // of the time, most alerts were thrown away by the app itself, one line
+    // after the server had gone to the trouble of finding them.
+    //
+    // The cursor is stored on the device now. A FIRST EVER run still gets no
+    // backlog, because there is no stored cursor and the server returns
+    // nothing without one.
+    await _pollAlerts();
 
     _alertTimer =
         Timer.periodic(const Duration(seconds: 20), (_) => _pollAlerts());
@@ -122,22 +136,16 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   }
 
   Future<void> _pollAlerts() async {
+    // Two polls at once would each advance the shared cursor, and whichever
+    // finished second would move it past alerts the first had not delivered.
+    if (_polling) return;
+    _polling = true;
     try {
-      final r = await widget.client.alerts(cursor: _cursor);
-      debugPrint('[alerts] cursor=$_cursor -> ${r.alerts.length} new, '
-          'next=${r.cursor}');
-      _cursor = r.cursor;
-      for (final a in r.alerts) {
-        // Silenced pairs are dropped here rather than at the server, because
-        // muting is a per-device preference: the same account on a tablet may
-        // want the alerts this phone does not. An alert with no symbol at all
-        // (a scheduled macro release, say) belongs to no coin and is never
-        // silenced by a coin's bell.
-        if (a.symbol.isNotEmpty &&
-            Muted.instance.isMuted(a.symbol, a.interval)) {
-          continue;
-        }
-
+      // Muting, sensitivity and the backlog cap all live in `alert_feed`, so
+      // the background isolate applies exactly the same rules. Reimplementing
+      // them here is how the two would drift.
+      final batch = await collectAlerts(widget.client);
+      for (final a in batch.deliver) {
         // Two channels, because iOS suppresses this app's notifications while
         // it is in the FOREGROUND — measured, not assumed: presentAlert,
         // presentBanner and presentList all set, delivered via both show()
@@ -153,6 +161,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('[alerts] poll failed: $e');
       // a missed poll is not worth surfacing; the next one covers it
+    } finally {
+      _polling = false;
     }
   }
 
@@ -414,6 +424,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     // the cached account goes with the token, or the next cold start would
     // open straight into a session that no longer exists
     await Settings.instance.clearSession();
+    // and stop the background job with it: a wake-up that can only ever get
+    // a 401 is a battery cost with no possible payoff
+    await stopBackgroundAlerts();
     widget.onSignOut();
   }
 
@@ -436,6 +449,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
+      // The sheet is taller than half the screen now — six timeframes, five
+      // categories and the four news levels. Without this it is capped at the
+      // default height and the bottom rows are simply not reachable.
+      isScrollControlled: true,
       builder: (_) => AlertSettingsSheet(symbol: _symbol),
     );
     if (mounted) setState(() {});          // the bell reflects the new state

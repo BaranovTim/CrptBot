@@ -15,6 +15,8 @@
 ///     something the scorer measured.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
@@ -22,6 +24,7 @@ import '../api/models.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/article_sheet.dart';
 import '../widgets/glass.dart';
+import '../widgets/patient_loader.dart';
 
 enum FeedMode { both, news, whales }
 
@@ -46,10 +49,22 @@ class _NewsScreenState extends State<NewsScreen> {
   bool _loading = true;
   String? _error;
 
+  /// See `patient_loader.dart`. A feed that says "failed" after one timeout
+  /// is wrong most of the times it says it.
+  DateTime _waitingSince = DateTime.now();
+  String? _lastFailure;
+  Timer? _retry;
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _retry?.cancel();
+    super.dispose();
   }
 
   @override
@@ -58,7 +73,17 @@ class _NewsScreenState extends State<NewsScreen> {
     if (old.symbol != widget.symbol && _onlyThisCoin) _load();
   }
 
+  /// Nothing got through for the whole patience window. Now it is an error.
+  void _giveUp() {
+    if (!mounted || _error != null) return;
+    setState(() {
+      _loading = false;
+      _error = _lastFailure ?? 'No answer from the server.';
+    });
+  }
+
   Future<void> _load() async {
+    _retry?.cancel();
     setState(() => _loading = _news.isEmpty && _whales.isEmpty);
     try {
       final results = await Future.wait([
@@ -72,13 +97,16 @@ class _NewsScreenState extends State<NewsScreen> {
         _whales = results[1] as List<WhaleEvent>;
         _loading = false;
         _error = null;
+        _lastFailure = null;
+        _waitingSince = DateTime.now();
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = '$e';
-      });
+      // Held, not shown. This screen has no refresh loop of its own, so it
+      // schedules the next attempt itself — otherwise "keep waiting" would
+      // mean "wait forever for a request nobody is going to make again".
+      _lastFailure = '$e';
+      _retry = Timer(const Duration(seconds: 15), _load);
     }
   }
 
@@ -117,12 +145,12 @@ class _NewsScreenState extends State<NewsScreen> {
           const SizedBox(height: 18),
           if (_error != null)
             Text(_error!, style: Obsidian.body(color: Obsidian.redSoft)),
-          if (_loading)
-            const Padding(
-              padding: EdgeInsets.only(top: 60),
-              child: Center(
-                  child: CircularProgressIndicator(color: Obsidian.primary)),
-            )
+          if (_loading && _error == null)
+            WaitingPanel(
+                since: _waitingSince,
+                what: 'Loading the news',
+                compact: true,
+                onPatienceExhausted: _giveUp)
           else
             ..._feed(),
         ],

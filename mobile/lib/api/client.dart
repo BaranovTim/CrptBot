@@ -1,17 +1,19 @@
 /// HTTP client for the read-only Python service.
 ///
-/// The base URL differs per target and there is no way around it: an iOS
-/// simulator shares the Mac's loopback, an Android emulator reaches the host
-/// through 10.0.2.2, and a physical phone needs the Mac's LAN address. The
-/// default is picked per platform and can be overridden at build time with
-///   flutter run --dart-define=API_BASE=http://192.168.1.20:8787
-/// or edited inside the app on the Profile screen.
+/// WHERE THE SERVER IS
+///     Hosted, on the droplet, behind TLS. Nothing has to be started on
+///     anyone's laptop for the app to work, which is why the default below is
+///     the deployed host rather than loopback — an install that has never
+///     been to the Profile screen must still find the backend.
+///
+///     A local backend is a development case, not the normal one, so it is
+///     the case that has to say so:
+///       flutter run --dart-define=API_BASE=http://192.168.1.20:8787
+///     or Profile -> API host inside the app. Both override this default.
 library;
 
 import 'dart:convert';
-import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
@@ -21,10 +23,16 @@ const _envToken = String.fromEnvironment('API_TOKEN');
 
 String defaultApiToken() => _envToken;
 
+/// The deployed backend, used when nothing else has been chosen.
+///
+/// Hard-coded on purpose. It was `localhost:8787`, which is correct only on
+/// the machine running `serve.py` — on a phone it resolves to the phone, so a
+/// fresh install failed to connect and the app blamed the network for it.
+const _deployedBase = 'https://165.232.127.165.sslip.io';
+
 String defaultApiBase() {
   if (_envBase.isNotEmpty) return _envBase;
-  if (!kIsWeb && Platform.isAndroid) return 'http://10.0.2.2:8787';
-  return 'http://localhost:8787';
+  return _deployedBase;
 }
 
 /// This account is signed in but has no subscription.
@@ -72,6 +80,15 @@ class UntrainedException implements Exception {
   String toString() => message;
 }
 
+/// What to say when nothing answered.
+///
+/// Deliberately does NOT say "start it on your Mac" any more. The backend is
+/// hosted and running continuously; telling someone to start a Python process
+/// they do not have sends them to fix a machine that is not the problem.
+String _unreachable(Object e) => 'No answer from the server.\n\n'
+    'It is hosted, so there is nothing to start — this is either your '
+    'connection or the server being down.\n\n($e)';
+
 class ApiClient {
   ApiClient({String? base, String? token})
       : base = base ?? defaultApiBase(),
@@ -97,11 +114,11 @@ class ApiClient {
     try {
       r = await http.get(uri, headers: _headers).timeout(timeout);
     } catch (e) {
-      // the overwhelmingly likely cause is the server not running or the
-      // phone being on a different network, so say that rather than
-      // surfacing a SocketException the user has to decode
-      throw ApiException(
-          'Cannot reach $base\n\nStart it on your Mac:\n  python3 serve.py\n\n($e)');
+      // Said plainly, because by the time anyone reads this the app has
+      // already retried quietly for five minutes — see `patient_loader`. This
+      // is no longer a transient, so the message should help diagnose rather
+      // than surface a SocketException to be decoded.
+      throw ApiException(_unreachable(e));
     }
     if (r.statusCode == 401) {
       throw UnauthorizedException(
@@ -134,7 +151,7 @@ class ApiClient {
               body: json.encode(body))
           .timeout(const Duration(seconds: 30));
     } catch (e) {
-      throw ApiException('Cannot reach $base\n\n($e)');
+      throw ApiException(_unreachable(e));
     }
     final j = r.body.isEmpty
         ? <String, dynamic>{}
