@@ -243,11 +243,19 @@ def _recent_quarter_ends(n=4):
 
 
 def _quarters(values, ends):
+    """Three-month facts, with a real `start` — a flow is now identified by
+    the LENGTH of its period, because the label cannot distinguish a quarter
+    from the year-to-date figure filed beside it."""
+    import datetime as _dt
+
     fps = ("Q1", "Q2", "Q3", "Q4")
-    return {"units": {"USD": [
-        {"val": v, "end": e, "filed": e, "fy": int(e[:4]),
-         "fp": fps[(int(e[5:7]) - 1) // 3]}
-        for v, e in zip(values, ends)]}}
+    out = []
+    for v, e in zip(values, ends):
+        end = _dt.date.fromisoformat(e)
+        out.append({"val": v, "start": (end - _dt.timedelta(days=90)).isoformat(),
+                    "end": e, "filed": e, "fy": int(e[:4]),
+                    "fp": fps[(int(e[5:7]) - 1) // 3]})
+    return {"units": {"USD": out}}
 
 
 def _four_quarter_facts(eps_per_qtr, dps_per_qtr=None, equity=None):
@@ -304,7 +312,10 @@ def test_a_balance_sheet_item_is_never_summed():
 
     ends = _recent_quarter_ends(4)
     facts = {"facts": {"us-gaap": {
-        "StockholdersEquity": _quarters([1000.0] * 4, ends),
+        # a balance has an instant, not a period — no `start`
+        "StockholdersEquity": {"units": {"USD": [
+            {"val": 1000.0, "end": e, "filed": e, "fy": int(e[:4]), "fp": "Q4"}
+            for e in ends]}},
         "NetIncomeLoss": _quarters([25.0] * 4, ends),
     }}}
     m = fundamentals(facts, price=10.0)
@@ -321,8 +332,8 @@ def test_a_dividend_declared_years_ago_is_not_a_current_yield():
 
     facts = {"facts": {"us-gaap": {
         "CommonStockDividendsPerShareDeclared": {"units": {"USD": [
-            {"val": 0.38, "end": "2019-03-31", "filed": "2019-04-15",
-             "fy": 2019, "fp": "Q1"}]}}}}}
+            {"val": 0.38, "start": "2018-12-31", "end": "2019-03-31",
+             "filed": "2019-04-15", "fy": 2019, "fp": "Q1"}]}}}}}
     m = fundamentals(facts, price=18.45)
     assert m["dividend_yield"] is None, m["dividend_yield"]
     return True
@@ -335,9 +346,10 @@ def test_an_annual_filing_is_used_when_four_quarters_are_not_there():
 
     from screener.fundamentals import fundamentals
 
-    recent = (_dt.date.today() - _dt.timedelta(days=60)).isoformat()
+    end = _dt.date.today() - _dt.timedelta(days=60)
     facts = {"facts": {"us-gaap": {"EarningsPerShareDiluted": {"units": {"USD": [
-        {"val": 4.0, "end": recent, "filed": recent, "fy": 2026,
+        {"val": 4.0, "start": (end - _dt.timedelta(days=364)).isoformat(),
+         "end": end.isoformat(), "filed": end.isoformat(), "fy": 2026,
          "fp": "FY"}]}}}}}
     m = fundamentals(facts, price=40.0)
     assert m["eps_ttm"] == 4.0
@@ -375,4 +387,44 @@ def test_instruments_that_can_never_be_screened_are_left_out():
         assert not _screenable(junk), junk
     for real in ("AAPL", "BRK.A", "MSFT", "GME"):
         assert _screenable(real), real
+    return True
+
+
+def test_a_year_to_date_figure_is_never_counted_as_a_quarter():
+    """THE BUG THIS PINS, seen on Apple's real filings.
+
+    US filers report the same quarter twice: once as three months, once as
+    the year to date. Apple's June 2026 quarter is BOTH
+    `2026-03-29 -> 2026-06-27 = 2.02` and `2025-09-28 -> 2026-06-27 = 6.88`,
+    with the same end date and the same `fp=Q3`. Nothing in the label tells
+    them apart, so deduplicating on (end, fp) kept an arbitrary one — and four
+    year-to-date figures summed gave Apple a P/E of 16.1 and a return on
+    equity of 278%, against real values near 38 and 150.
+    """
+    import datetime as _dt
+
+    from screener.fundamentals import fundamentals
+
+    ends = _recent_quarter_ends(4)
+    rows = []
+    for e in ends:
+        end = _dt.date.fromisoformat(e)
+        fp = ("Q1", "Q2", "Q3", "Q4")[(end.month - 1) // 3]
+        # the three-month figure
+        rows.append({"val": 2.0,
+                     "start": (end - _dt.timedelta(days=90)).isoformat(),
+                     "end": e, "filed": e, "fy": end.year, "fp": fp})
+        # and the year-to-date figure filed beside it, same end, same label
+        rows.append({"val": 6.0,
+                     "start": (end - _dt.timedelta(days=272)).isoformat(),
+                     "end": e, "filed": e, "fy": end.year, "fp": fp})
+
+    facts = {"facts": {"us-gaap": {
+        "EarningsPerShareDiluted": {"units": {"USD": rows}}}}}
+    m = fundamentals(facts, price=100.0)
+
+    # four real quarters of 2.0, not four year-to-date figures of 6.0
+    assert m["eps_ttm"] is not None
+    assert abs(m["eps_ttm"] - 8.0) < 1e-6, m["eps_ttm"]
+    assert abs(m["pe"] - 12.5) < 1e-6, m["pe"]
     return True

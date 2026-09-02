@@ -31,6 +31,23 @@ FLOWS ARE SUMMED OVER FOUR QUARTERS. STOCKS ARE READ AT A POINT IN TIME.
     outstanding. Summing four quarters of those would quadruple the balance
     sheet. They take the latest value.
 
+A QUARTER IS DEFINED BY ITS LENGTH, NOT BY ITS LABEL
+    US filers report the SAME quarter twice: once as the three months, and
+    once as the year to date. Apple's June 2026 quarter appears as both
+    `2026-03-29 -> 2026-06-27, 2.02` and `2025-09-28 -> 2026-06-27, 6.88`,
+    and BOTH are tagged `fp=Q3` with the same end date. Nothing in the label
+    distinguishes them.
+
+    Deduplicating on (end, fp) therefore kept whichever came first, and four
+    such "quarters" could be four year-to-date figures stacked on each other.
+    Measured: Apple came back at a P/E of 16.1 and a return on equity of 278%
+    against real values near 38 and 150.
+
+    So a flow is accepted only if its period is the right LENGTH — about 90
+    days for a quarter, about a year for an annual figure. Only one 90-day
+    period can end on a given date, which makes the deduplication exact
+    rather than arbitrary.
+
 A DIVIDEND FACT DOES NOT MEAN A DIVIDEND
     GameStop pays nothing and came back with a 2.06% yield, because the tag
     still holds a declaration from years ago and "most recently filed" found
@@ -94,7 +111,7 @@ def _ttm(facts: dict, concept: str,
 
     quarters, seen = [], set()
     for r in reversed(rows):                 # newest period first
-        if r.get("fp") == "FY" or not fresh(r):
+        if not fresh(r) or not _spans(r, 80, 100):
             continue
         end = r.get("end")
         if end in seen:                      # the same quarter, restated
@@ -111,9 +128,28 @@ def _ttm(facts: dict, concept: str,
     # partial sum of two quarters presented as a year would be worse than
     # saying nothing.
     for r in reversed(rows):
-        if r.get("fp") == "FY" and fresh(r):
+        if fresh(r) and _spans(r, 340, 380):
             return _val(r)
     return None
+
+
+def _spans(entry: dict, low: int, high: int) -> bool:
+    """Does this fact cover a period of roughly the expected length?
+
+    The only reliable way to tell a three-month figure from the year-to-date
+    one filed beside it: they share an end date and a fiscal-period label and
+    differ only in where they start. An entry with no `start` is a balance,
+    not a flow, and is never a candidate here.
+    """
+    start, end = entry.get("start"), entry.get("end")
+    if not start or not end:
+        return False
+    try:
+        a = datetime.strptime(start, "%Y-%m-%d").date()
+        b = datetime.strptime(end, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return low <= (b - a).days <= high
 
 
 def _point(facts: dict, concept: str,
@@ -248,7 +284,11 @@ def _series(facts: dict, concept: str, as_of: Optional[date]):
             for r in unit_rows:
                 if not _usable(r, as_of):
                     continue
-                key = (r.get("end"), r.get("fp"))
+                # `start` is part of the key: the 3-month and the
+                # year-to-date figure share an end date and a label, and
+                # collapsing them here would discard the one we want before
+                # `_spans` ever sees it.
+                key = (r.get("start"), r.get("end"))
                 if key in seen:
                     continue
                 seen.add(key)

@@ -255,6 +255,26 @@ class ApiClient {
         timeout: const Duration(seconds: 45)));
   }
 
+  Future<StockDetail> stock(String symbol) async =>
+      StockDetail.fromJson(await _get('/api/stock?symbol=$symbol',
+          timeout: const Duration(seconds: 40)));
+
+  Future<List<StockQuote>> stockQuotes(List<String> symbols) async {
+    if (symbols.isEmpty) return const [];
+    final j = await _get('/api/stock/quotes?symbols=${symbols.join(',')}');
+    return ((j['quotes'] as List?) ?? const [])
+        .map((e) => StockQuote.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<StockQuote>> stockSearch(String q, {int limit = 40}) async {
+    final j = await _get(
+        '/api/stock/search?q=${Uri.encodeQueryComponent(q)}&limit=$limit');
+    return ((j['results'] as List?) ?? const [])
+        .map((e) => StockQuote.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<Map<String, dynamic>> health() async => _get('/api/health');
 
   Future<Map<String, dynamic>> plans() async => _get('/api/billing/plans');

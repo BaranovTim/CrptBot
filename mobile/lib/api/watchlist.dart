@@ -100,3 +100,62 @@ class Watchlist {
   Future<bool> contains(String symbol) async =>
       (await load()).contains(symbol.trim().toUpperCase());
 }
+
+/// The stocks you follow. Separate storage from the crypto watchlist.
+///
+/// WHY A SECOND LIST AND NOT A MODE ON THE FIRST
+///     They are different universes with different lifetimes. Sharing one
+///     list would mean the crypto Market tab offering AAPL and the stocks tab
+///     offering BTCUSDT — and every consumer of `Watchlist` (the dashboard's
+///     swipe order, the mute list, the alert engine's pairs) would have to
+///     learn to filter, in five places, forever.
+///
+/// Empty by default, unlike crypto: there is no equivalent of "the four pairs
+/// with fitted models" to seed it with, and picking four American companies
+/// on someone's behalf would be a recommendation dressed as a default.
+class StockWatchlist {
+  StockWatchlist._();
+  static final StockWatchlist instance = StockWatchlist._();
+
+  static const _key = 'watchlist.stocks.v1';
+
+  List<String>? _cache;
+
+  Future<List<String>> load() async {
+    if (_cache != null) return List.unmodifiable(_cache!);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _cache = (prefs.getStringList(_key) ?? const <String>[]).toList();
+    } catch (_) {
+      _cache = <String>[];
+    }
+    return List.unmodifiable(_cache!);
+  }
+
+  Future<List<String>> add(String symbol) async {
+    final s = symbol.trim().toUpperCase();
+    if (s.isEmpty) return load();
+    final list = List<String>.from(await load());
+    if (!list.contains(s)) list.add(s);
+    _cache = list;
+    await _persist();
+    return List.unmodifiable(list);
+  }
+
+  Future<List<String>> remove(String symbol) async {
+    final list = List<String>.from(await load())
+      ..remove(symbol.trim().toUpperCase());
+    _cache = list;
+    await _persist();
+    return List.unmodifiable(list);
+  }
+
+  Future<void> _persist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_key, _cache ?? const []);
+    } catch (_) {
+      // the in-memory list still governs this session
+    }
+  }
+}

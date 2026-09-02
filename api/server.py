@@ -248,7 +248,9 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/indicator",
                                           "/api/track",
                                           "/api/screener/catalogue",
-                                          "/api/screener"]})
+                                          "/api/screener", "/api/stock",
+                                          "/api/stock/quotes",
+                                          "/api/stock/search"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -278,6 +280,28 @@ class Handler(BaseHTTPRequestHandler):
                                          interval=opt("interval")))
             elif route == "/api/consensus":
                 self._send(svc.consensus(opt("symbol")))
+            elif route == "/api/stock":
+                from screener import detail as _detail
+                from screener import universe as _u
+
+                sym = opt("symbol")
+                if not sym:
+                    self._send({"error": "symbol is required"}, status=400)
+                    return
+                self._send(_detail.detail(sym, _u.load()))
+            elif route == "/api/stock/quotes":
+                from screener import detail as _detail
+                from screener import universe as _u
+
+                raw = q.get("symbols", [""])[0]
+                wanted = [x for x in raw.split(",") if x.strip()]
+                self._send({"quotes": _detail.quotes(wanted, _u.load())})
+            elif route == "/api/stock/search":
+                from screener import detail as _detail
+                from screener import universe as _u
+
+                self._send({"results": _detail.search(
+                    opt("q") or "", _u.load(), limit=arg("limit", 40))})
             elif route == "/api/screener/catalogue":
                 from screener.filters import catalogue
                 from screener import universe as _u

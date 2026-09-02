@@ -782,3 +782,55 @@ class ScreenerResult {
   final List<ScreenerRow> rows;
   final DateTime? builtAt;
 }
+
+/// One stock's page: chart, the screener's own metrics, and the honest gap
+/// where a signal would be.
+///
+/// The metrics are the SAME row the screen matched on, not a recomputation —
+/// a detail page that disagreed with the list it came from would destroy
+/// trust in both.
+class StockDetail {
+  StockDetail.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] as String,
+        known = j['known'] as bool? ?? false,
+        metrics = Map<String, dynamic>.from((j['metrics'] as Map?) ?? const {}),
+        series = ((j['series'] as List?) ?? const [])
+            .map((e) => (e as num).toDouble())
+            .toList(),
+        signalNote = j['signal_note'] as String? ?? '',
+        builtAt = j['built_at'] == null
+            ? null
+            : DateTime.tryParse(j['built_at'] as String);
+
+  final String symbol;
+
+  /// False when the ticker is not in the table at all — different from being
+  /// present with blank fields.
+  final bool known;
+  final Map<String, dynamic> metrics;
+  final List<double> series;
+  final String signalNote;
+  final DateTime? builtAt;
+
+  double? metric(String id) {
+    final v = metrics[id];
+    return v is num ? v.toDouble() : null;
+  }
+
+  String get yahooUrl => 'https://finance.yahoo.com/quote/$symbol';
+}
+
+class StockQuote {
+  StockQuote.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] as String,
+        known = j['known'] as bool? ?? false,
+        price = _d(j['price']),
+        changePct = _d(j['change_pct']),
+        rsi14 = _d(j['rsi14']),
+        marketCap = _d(j['market_cap']),
+        relVolume = _d(j['rel_volume']);
+
+  final String symbol;
+  final bool known;
+  final double? price, changePct, rsi14, marketCap, relVolume;
+}

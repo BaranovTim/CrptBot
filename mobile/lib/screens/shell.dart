@@ -30,6 +30,8 @@ import 'dashboard_screen.dart';
 import 'market_screen.dart';
 import 'news_screen.dart';
 import 'screener_screen.dart';
+import 'stock_market_screen.dart';
+import 'stock_screen.dart';
 import 'profile_screen.dart';
 import 'subscribe_screen.dart';
 
@@ -339,17 +341,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               // never completes, and the result is a blank screen with no
               // error painted on it.
               Expanded(
-                child: (MarketModeStore.instance.isStocks &&
-                        _tab != NavTab.screener &&
-                        _tab != NavTab.profile)
-                    // NOT the crypto screen with a STOCKS label on it.
-                    //
-                    // Every one of these tabs is driven by a fitted model or a
-                    // crypto feed. Rendering them in stocks mode would show
-                    // BTC's recommendation under a header claiming to be
-                    // equities, which is the most misleading pixel this app
-                    // could paint.
-                    ? _stocksNotYet()
+                child: MarketModeStore.instance.isStocks
+                    ? _stocksBody()
                     : switch (_tab) {
                   NavTab.dashboard => DashboardScreen(
                       // Keyed by pair. Swiping to another coin disposes this
@@ -451,8 +444,59 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     }
   }
 
-  /// What the stocks side honestly has, and what it does not.
-  Widget _stocksNotYet() => Center(
+  /// Which stock the stocks dashboard is showing.
+  ///
+  /// Separate from `_symbol`, which is a crypto pair. One field for both
+  /// would mean the crypto dashboard trying to render AAPL the moment you
+  /// switched markets.
+  String? _stock;
+
+  /// The stocks half of the app.
+  ///
+  /// Dashboard and Market are real pages now. News stays crypto-only: the
+  /// feeds this app reads are crypto publishers, and relabelling them as
+  /// equities news would be a lie about the source.
+  Widget _stocksBody() {
+    switch (_tab) {
+      case NavTab.screener:
+        return ScreenerScreen(client: widget.client);
+      case NavTab.profile:
+        return _entitled
+            ? ProfileScreen(
+                client: widget.client,
+                account: widget.account,
+                onSignOut: _signOut,
+              )
+            : SubscribeScreen(
+                client: widget.client,
+                account: widget.account,
+                onSignOut: _signOut,
+                onRefreshAccount: _refreshAccount,
+              );
+      case NavTab.market:
+        return StockMarketScreen(
+          client: widget.client,
+          onPick: (s) => setState(() {
+            _stock = s;
+            _tab = NavTab.dashboard;
+          }),
+        );
+      case NavTab.dashboard:
+        final s = _stock;
+        if (s == null) return _pickAStock();
+        return StockScreen(
+          key: ValueKey(s),
+          client: widget.client,
+          symbol: s,
+          onClose: () => setState(() => _stock = null),
+        );
+      case NavTab.news:
+        return _cryptoOnly();
+    }
+  }
+
+  /// The stocks dashboard with nothing selected.
+  Widget _pickAStock() => Center(
         child: Padding(
           padding: const EdgeInsets.all(Obsidian.containerPadding),
           child: GlassPanel(
@@ -463,41 +507,51 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                 const Icon(Icons.candlestick_chart_rounded,
                     color: Obsidian.outline, size: 34),
                 const SizedBox(height: 14),
-                Text('Stocks: screener only, for now',
-                    textAlign: TextAlign.center,
-                    style: Obsidian.headlineMd()),
-                const SizedBox(height: 12),
-                Text(
-                    'The Screener works on 13,000 US stocks with live prices '
-                    'and company filings.\n\n'
-                    'This tab does not, because it is driven by a fitted '
-                    'model and there are none for equities yet. The labelling '
-                    'and cost model behind the crypto signals assume a market '
-                    'that never closes; equities gap overnight, halt, split '
-                    'and cost differently. Pointing them at a stock would '
-                    'produce a confident number that means nothing.',
+                Text('Pick a stock', style: Obsidian.headlineMd()),
+                const SizedBox(height: 10),
+                Text('Open one from the Screener, or add it on the Market '
+                    'tab, and it appears here with its chart and figures.',
                     textAlign: TextAlign.center,
                     style: Obsidian.body(color: Obsidian.outline, size: 12)),
                 const SizedBox(height: 18),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                          backgroundColor: Obsidian.primary,
-                          foregroundColor: Obsidian.onPrimary),
-                      onPressed: () =>
-                          setState(() => _tab = NavTab.screener),
-                      child: const Text('Open the Screener'),
-                    ),
-                    const SizedBox(width: 10),
-                    TextButton(
-                      onPressed: () =>
-                          MarketModeStore.instance.set(MarketMode.crypto),
-                      child: Text('Back to crypto',
-                          style: Obsidian.body(color: Obsidian.outline)),
-                    ),
-                  ],
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: Obsidian.primary,
+                      foregroundColor: Obsidian.onPrimary),
+                  onPressed: () => setState(() => _tab = NavTab.screener),
+                  child: const Text('Open the Screener'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  /// A tab that genuinely has no equities equivalent.
+  Widget _cryptoOnly() => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(Obsidian.containerPadding),
+          child: GlassPanel(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.article_outlined,
+                    color: Obsidian.outline, size: 34),
+                const SizedBox(height: 14),
+                Text('News is crypto only', style: Obsidian.headlineMd()),
+                const SizedBox(height: 10),
+                Text('The feeds behind this tab are crypto publishers. '
+                    'Showing them under a stocks header would be a lie about '
+                    'where they came from.',
+                    textAlign: TextAlign.center,
+                    style: Obsidian.body(color: Obsidian.outline, size: 12)),
+                const SizedBox(height: 18),
+                TextButton(
+                  onPressed: () =>
+                      MarketModeStore.instance.set(MarketMode.crypto),
+                  child: Text('Back to crypto',
+                      style: Obsidian.body(color: Obsidian.primary)),
                 ),
               ],
             ),
