@@ -1136,10 +1136,23 @@ class TradingService:
         return out
 
     def news(self, limit: int = 20,
-             symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+             symbol: Optional[str] = None,
+             market: str = "crypto") -> List[Dict[str, Any]]:
         try:
             from newsfeed.store import JSONLNewsStore
-            items = JSONLNewsStore().load_items()
+
+            if market == "stocks":
+                # A SEPARATE STORE, not a filter over one.
+                #
+                # The crypto feed's asset tagger matches tickers as words —
+                # "ADA" inside "Canada". Pointing it at 13,000 US symbols
+                # would tag half the news wrongly, because two and three
+                # letter equity tickers collide with ordinary English far
+                # worse than crypto's handful do.
+                items = JSONLNewsStore(
+                    Path("data_cache") / "news_equities").load_items()
+            else:
+                items = JSONLNewsStore().load_items()
         except Exception as e:
             log.warning("news store unreadable: %s", e)
             return []
@@ -1152,8 +1165,11 @@ class TradingService:
 
         asset = None
         if symbol:
-            base = symbol.upper().replace("USDT", "").replace("USD", "")
-            asset = base or None
+            if market == "stocks":
+                asset = symbol.upper().strip() or None
+            else:
+                base = symbol.upper().replace("USDT", "").replace("USD", "")
+                asset = base or None
 
         # Direction and size, from Agent 3's offline scorer.
         #

@@ -29,9 +29,15 @@ import '../widgets/patient_loader.dart';
 enum FeedMode { both, news, whales }
 
 class NewsScreen extends StatefulWidget {
-  const NewsScreen({super.key, required this.client, required this.symbol});
+  const NewsScreen({super.key, required this.client, required this.symbol,
+    this.market = 'crypto'});
 
   final ApiClient client;
+
+  /// 'crypto' or 'stocks'. Two separate stores with different taggers — see
+  /// `service.news`. Equity tickers collide with ordinary English far worse
+  /// than crypto's handful do, so they cannot share one.
+  final String market;
 
   /// The pair the dashboard is on, so the feed can lead with what is
   /// relevant to it. Macro stories are kept for every coin.
@@ -70,7 +76,10 @@ class _NewsScreenState extends State<NewsScreen> {
   @override
   void didUpdateWidget(covariant NewsScreen old) {
     super.didUpdateWidget(old);
-    if (old.symbol != widget.symbol && _onlyThisCoin) _load();
+    if ((old.symbol != widget.symbol && _onlyThisCoin) ||
+        old.market != widget.market) {
+      _load();
+    }
   }
 
   /// Nothing got through for the whole patience window. Now it is an error.
@@ -87,9 +96,16 @@ class _NewsScreenState extends State<NewsScreen> {
     setState(() => _loading = _news.isEmpty && _whales.isEmpty);
     try {
       final results = await Future.wait([
-        widget.client
-            .news(limit: 60, symbol: _onlyThisCoin ? widget.symbol : null),
-        widget.client.whales(limit: 40),
+        widget.client.news(
+            limit: 60,
+            symbol: _onlyThisCoin ? widget.symbol : null,
+            market: widget.market),
+        // Whale filings are US insider Form 4s — an equities concept the
+        // crypto side borrows. In stocks mode the per-symbol news IS the
+        // filings, so a separate whale panel would show them twice.
+        widget.market == 'stocks'
+            ? Future<List<WhaleEvent>>.value(const [])
+            : widget.client.whales(limit: 40),
       ]);
       if (!mounted) return;
       setState(() {

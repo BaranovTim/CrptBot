@@ -3,14 +3,42 @@
 THE RULE THIS MODULE EXISTS TO ENFORCE
 --------------------------------------
 A notification is an interruption, and the fastest way to make one worthless
-is to send it too often. So every alert here is a TRANSITION or a genuinely
-new object, never a state. "The recommendation is FLAT" is a state and is
-never sent. "The recommendation just became BUY" is a transition and is sent
-once. The engine holds the previous value for exactly this reason.
+is to send it too often. So every alert here is a TRANSITION, never a state.
+"The recommendation is FLAT" is a state and is never sent. "The recommendation
+just became BUY" is a transition and is sent once. The engine holds the
+previous value for exactly this reason.
 
-The same rule kills the obvious duplicates: a whale filing is alerted on its
-filing id, a calendar event on its key plus which lead window fired, an
-intra-bar spike on the bar it happened in. Re-polling never re-sends.
+ONE THING INTERRUPTS YOU: THE CALL CHANGING
+-------------------------------------------
+Every transition between FLAT, BUY and SELL now notifies, INCLUDING the exit
+back to FLAT — closing a position is a decision as much as opening one, and
+the old code deliberately stayed silent on it.
+
+Everything else that used to buzz no longer does:
+
+  SPIKES     removed. "It moved 2% in three minutes" is a state of the market,
+             not a change in what to do about it, and it fired far more often
+             than any call changed.
+
+  NEWS and   these no longer notify on their own. They are collected as
+  WHALES     CONTEXT and attached to the next action change, so the question
+             a notification answers is "the call changed, and here is what was
+             in the news around then" rather than "a headline exists".
+
+             Both are still in the app in full — this changes what interrupts
+             you, not what you can read.
+
+WHAT THIS DELIBERATELY DOES NOT CLAIM
+-------------------------------------
+That the news CAUSED the change. It cannot: news is not an input to the
+model — see the note at the top of `train.py`, where Agent 3 is left
+disconnected because one story per day against 175,000 one-minute bars is a
+column the fit ignores. So the attached headlines are labelled as what was
+happening at the time, and nothing stronger. Presenting coincidence as cause
+is the one thing this module must not do.
+
+The same rule kills the obvious duplicates: a calendar event is alerted on its
+key plus which lead window fired. Re-polling never re-sends.
 
 EVERY ALERT CARRIES WHEN IT HAPPENED
 ------------------------------------
@@ -89,6 +117,15 @@ STATE_PATH = Path("data_cache") / "alerts.v1.json"
 # only ever look at the newest 25 filings and 25 headlines — an id can never
 # fall out of this window while the thing it names is still visible.
 MAX_SEEN = 4000
+
+# How far back a headline still counts as "around the time the call changed".
+# Six hours because that is roughly the horizon of the timeframes that produce
+# most signals; older than that and it is history, not context.
+CONTEXT_WINDOW = timedelta(hours=6)
+
+# How many headlines ride along with one alert. Three fits a notification
+# without turning it into a newsletter.
+MAX_CONTEXT = 3
 
 
 @dataclass
@@ -178,6 +215,10 @@ class AlertEngine:
         self._spiked_bar: Dict[tuple, Optional[str]] = {}
         self._primed = False
         self._pairs = pairs
+        # Recent headlines and filings, held for attachment to the next
+        # action change rather than sent on their own. Bounded: this is
+        # context for one notification, not an archive.
+        self._context: List[dict] = []
         # `refresh` now runs from the background loop AND from request
         # threads. Without this, two refreshes can interleave between the
         # `_seen` check and the `_seen.add`, and the same alert is delivered
@@ -386,95 +427,112 @@ class AlertEngine:
 
         out: List[Alert] = []
 
-        # the intra-bar spike, reported once per bar
-        live = d.get("live") or {}
-        if live.get("beyond_spike_threshold") and self._spiked_bar.get(key) != bar:
-            self._spiked_bar[key] = bar
-            move = live.get("move_pct")
-            atr = live.get("move_atr")
-            way = "UP" if (atr or 0) > 0 else "DOWN"
-            out.append(Alert(
-                id=_hash("spike", d["symbol"], iv, bar),
-                kind="spike", severity="high", symbol=d["symbol"],
-                interval=iv,
-                title=f"{d['symbol']} {iv} spiking {way}",
-                body=(f"{move:+.2f}% ({atr:+.2f} ATR) inside the current bar. "
-                      f"The windows below were read at the last close."),
-                at=utc_now(), detected_at=utc_now()))
+        # NO SPIKE ALERT. See the module docstring: a 2% move inside a bar is
+        # a state of the market, not a change in what to do about it, and it
+        # fired many times for every call that actually changed.
 
-        if action == prev or action not in ("BUY", "SELL"):
+        # EVERY transition among the three, including back to FLAT.
+        #
+        # The old rule was `action not in ("BUY","SELL"): return` — so being
+        # told to close a position never notified, only being told to open
+        # one. An exit is a decision too, and the one you most want to hear
+        # about while you are holding something.
+        actionable = ("BUY", "SELL", "FLAT")
+        if action == prev or action not in actionable or prev is None:
             return out
-        if self._last_signal_bar.get(key) == bar and prev is not None:
+        if self._last_signal_bar.get(key) == bar:
             return out                              # one signal per bar, max
         self._last_signal_bar[key] = bar
 
         ev = rec.get("ev")
         size = rec.get("size_pct")
+        closing = action == "FLAT"
+        ctx = self._recent_context()
+
+        body = (f"{rec.get('detail', '')}"
+                + (f"  EV {ev:+.3f}%" if ev is not None else "")
+                + (f", size {size:.2f}% of equity" if size else ""))
+        if ctx:
+            # "Around the same time", never "because of". News is not an input
+            # to the model — see the module docstring.
+            body += ("\nAround the same time: "
+                     + " · ".join(c["text"] for c in ctx))
+
         out.append(Alert(
             id=_hash("signal", d["symbol"], iv, bar, action),
-            kind="signal", severity="high", symbol=d["symbol"],
-            interval=iv,
+            kind="signal",
+            # Opening a position is worth a heads-up banner. Closing one is
+            # worth telling you, but it is not an emergency.
+            severity="medium" if closing else "high",
+            symbol=d["symbol"], interval=iv,
             # so the phone can apply the same sensitivity gate to the
             # notification that it applies to the dashboard card
             strength=str(rec.get("strength") or ""),
-            title=f"{d['symbol']} {iv}: {action}",
-            body=(f"{rec.get('detail', '')}"
-                  + (f"  EV {ev:+.3f}%" if ev is not None else "")
-                  + (f", size {size:.2f}% of equity" if size else "")),
+            title=(f"{d['symbol']} {iv}: {prev} \u2192 {action}"),
+            body=body,
             at=utc_now(), detected_at=utc_now(),
-            extra={"bar": bar, "window_ends": str(rec.get("window_ends", ""))}))
+            extra={"bar": bar, "window_ends": str(rec.get("window_ends", "")),
+                   "from": str(prev), "to": action,
+                   "context": " · ".join(c["text"] for c in ctx)}))
         return out
 
+    def _recent_context(self) -> List[dict]:
+        """Headlines and filings from the last few hours, newest first."""
+        cutoff = utc_now() - CONTEXT_WINDOW
+        with self._lock:
+            fresh = [c for c in self._context if c["at"] >= cutoff]
+            self._context = fresh[-60:]          # bounded, see __init__
+        return list(reversed(fresh))[:MAX_CONTEXT]
+
     def _whales(self) -> List[Alert]:
-        """New filings. Mechanical ones never alert — they are not a view."""
-        out = []
+        """New filings, collected as CONTEXT rather than sent.
+
+        Returns nothing. A filing on its own no longer interrupts anyone; it
+        is held and attached to the next action change. Mechanical filings are
+        skipped entirely — tax withholding on vesting is not a view, so it is
+        not even context.
+        """
         for w in self.svc.whales(limit=25):
             if w.get("mechanical"):
                 continue
             wid = _hash("whale", w["describe"], w["published_at"])
             if wid in self._seen:
                 continue
+            self._seen[wid] = None
             at = _parse(w.get("event_time")) or _parse(w["published_at"])
-            out.append(Alert(
-                id=wid, kind="whale",
-                severity="high" if (w.get("conviction") or 0) >= 1.0 else "medium",
-                title="Whale activity",
-                body=f"{w['describe']} — {w['impact']}. {w['note']}.",
-                at=at or utc_now(), detected_at=utc_now(),
-                extra={"disclosed_at": w["published_at"],
-                       "code": w.get("code", ""),
-                       "impact": w["impact"]}))
-        return out
+            with self._lock:
+                self._context.append({
+                    "kind": "whale",
+                    "text": str(w["describe"])[:90],
+                    "at": at or utc_now(),
+                })
+        return []
 
     def _news(self) -> List[Alert]:
-        out = []
+        """Headlines, collected as CONTEXT rather than sent.
+
+        Returns nothing, and that is the whole change: seventy headlines a day
+        was seventy interruptions for something that is not a decision. The
+        News tab still carries every one of them — `/api/news` is untouched.
+        Only what buzzes your phone is different.
+        """
         for n in self.svc.news(limit=25):
             nid = _hash("news", n["headline"], n.get("published_at"))
             if nid in self._seen:
                 continue
+            self._seen[nid] = None
             bias = str(n.get("bias") or "")
             impact = str(n.get("impact") or "")
-            # THE HEADLINE IS THE TITLE.
-            #
-            # It used to be the literal words "News released", with the
-            # headline pushed into the body — so a collapsed notification
-            # said nothing at all, and a shade with four of them said it four
-            # times. The reading goes underneath, where it explains whether
-            # this was worth the interruption.
-            reading = " · ".join(x for x in (bias, impact)
-                                 if x and x != "NO READING")
-            out.append(Alert(
-                id=nid, kind="news",
-                # A story the scorer calls strong is worth a heads-up banner;
-                # one it cannot read at all is not.
-                severity="high" if impact == "STRONG IMPACT" else "medium",
-                title=n["headline"],
-                body=(f"{n.get('source', '')} · {reading}" if reading
-                      else f"{n.get('source', '')} · no directional reading"),
-                at=_parse(n.get("published_at")) or utc_now(),
-                detected_at=utc_now(), url=n.get("url", "") or "",
-                bias=bias, impact=impact))
-        return out
+            reading = " ".join(x for x in (bias, impact)
+                               if x and x != "NO READING")
+            with self._lock:
+                self._context.append({
+                    "kind": "news",
+                    "text": (f"{n['headline'][:80]}"
+                             + (f" [{reading}]" if reading else "")),
+                    "at": _parse(n.get("published_at")) or utc_now(),
+                })
+        return []
 
     def _calendar(self) -> List[Alert]:
         """Warns BEFORE a scheduled event, once per lead window."""

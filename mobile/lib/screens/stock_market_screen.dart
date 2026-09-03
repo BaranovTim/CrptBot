@@ -19,6 +19,8 @@ import '../api/models.dart';
 import '../api/watchlist.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
+import '../api/muted.dart';
+import '../widgets/alert_settings_sheet.dart';
 import '../widgets/patient_loader.dart';
 
 class StockMarketScreen extends StatefulWidget {
@@ -33,7 +35,7 @@ class StockMarketScreen extends StatefulWidget {
 }
 
 class _StockMarketScreenState extends State<StockMarketScreen> {
-  List<StockQuote> _quotes = const [];
+  List<StockQuote> _quotes = [];
   List<String> _watch = const [];
   final DateTime _waitingSince = DateTime.now();
   String? _error;
@@ -42,6 +44,8 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
   @override
   void initState() {
     super.initState();
+    // prime the mute set so the bells render correctly on first paint
+    Muted.instance.load().then((_) => mounted ? setState(() {}) : null);
     _load();
   }
 
@@ -64,6 +68,39 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
   void _giveUp() {
     if (!mounted || _error != null) return;
     setState(() => _error = _lastFailure ?? 'No answer from the server.');
+  }
+
+  /// What session the market is in, said out loud.
+  ///
+  /// Crypto never closes, so the app never had to say this. A stock price
+  /// with no session attached is Friday's close being read on a Tuesday.
+  String _sessionLine() {
+    final q = _quotes.isEmpty ? null : _quotes.first;
+    if (q == null || q.sessionLabel.isEmpty) {
+      return 'Last close · drag to reorder';
+    }
+    return q.isExtended
+        ? '${q.sessionLabel} · showing last trade, 15 min delayed'
+        : '${q.sessionLabel} · last close';
+  }
+
+  Color _sessionColour() {
+    final q = _quotes.isEmpty ? null : _quotes.first;
+    return switch (q?.session) {
+      'open' => Obsidian.green,
+      'pre' || 'post' => Obsidian.amber,
+      _ => Obsidian.outline,
+    };
+  }
+
+  Future<void> _openBell(String symbol) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => AlertSettingsSheet(symbol: symbol),
+    );
+    if (mounted) setState(() {});
   }
 
   Future<void> _add() async {
@@ -130,9 +167,9 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
                   children: [
                     Text('Stocks', style: Obsidian.displayLg()),
                     const SizedBox(height: 4),
-                    Text('Last close, from the nightly table — not live ticks',
+                    Text(_sessionLine(),
                         style: Obsidian.body(
-                            color: Obsidian.outline, size: 11.5)),
+                            color: _sessionColour(), size: 11.5)),
                   ],
                 ),
               ),
@@ -177,66 +214,137 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
                 compact: true,
                 onPatienceExhausted: _giveUp)
           else
-            for (final q in _quotes) _card(q),
+            ReorderableListView(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              // `onReorderItem`, not the deprecated `onReorder` — it hands
+              // over a post-removal index, which is what the store expects.
+              onReorderItem: (o, n) async {
+                setState(() => _quotes.insert(n, _quotes.removeAt(o)));
+                await StockWatchlist.instance.reorder(o, n);
+                await _load();
+              },
+              children: [
+                for (var i = 0; i < _quotes.length; i++)
+                  Padding(
+                    key: ValueKey(_quotes[i].symbol),
+                    padding: const EdgeInsets.only(bottom: Obsidian.gutter),
+                    child: _card(_quotes[i], i),
+                  ),
+              ],
+            ),
+          if (_quotes.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+                'Drag ⠿ to reorder — the dashboard swipes through this list '
+                'in this order. Tap the bell to silence a stock, × to stop '
+                'following it. Only stocks with a fitted model produce a '
+                'call.',
+                style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+          ],
         ],
       ),
     );
   }
 
-  Widget _card(StockQuote q) {
+  Widget _card(StockQuote q, int index) {
     final up = (q.changePct ?? 0) >= 0;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: Obsidian.gutter),
-      child: GlassPanel(
-        padding: const EdgeInsets.all(16),
-        onTap: () => widget.onPick(q.symbol),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(q.symbol,
-                      style:
-                          Obsidian.dataTable(size: 16, w: FontWeight.w700)),
-                  const SizedBox(height: 4),
-                  Text(
-                      q.known
-                          ? _sub(q)
-                          // A symbol the nightly table has never seen. Kept in
-                          // the list rather than dropped, and labelled.
-                          : 'Not in the table yet',
-                      style: Obsidian.body(
-                          color: Obsidian.outline, size: 11)),
-                ],
-              ),
+    final muted = Muted.instance.isMuted(q.symbol);
+    final extUp = (q.extendedChangePct ?? 0) >= 0;
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      onTap: () => widget.onPick(q.symbol),
+      child: Row(
+        children: [
+          ReorderableDragStartListener(
+            index: index,
+            child: const Padding(
+              padding: EdgeInsets.only(right: 10),
+              child: Icon(Icons.drag_indicator_rounded,
+                  size: 18, color: Obsidian.outlineVariant),
             ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(q.price == null
-                        ? '—'
-                        : '\$${q.price!.toStringAsFixed(2)}',
-                    style: Obsidian.dataTable(size: 15)),
-                if (q.changePct != null)
-                  Text(
-                      '${up ? '+' : ''}${q.changePct!.toStringAsFixed(2)}%',
-                      style: Obsidian.dataTable(
-                          size: 12,
-                          color: up ? Obsidian.green : Obsidian.red)),
+                Row(
+                  children: [
+                    Text(q.symbol,
+                        style: Obsidian.dataTable(
+                            size: 15, w: FontWeight.w700)),
+                    const SizedBox(width: 8),
+                    // Trained or not, per timeframe — the same thing the
+                    // crypto list shows. A stock with no model has no call
+                    // behind it, and the list should not imply otherwise.
+                    if (q.trained.isEmpty)
+                      _tag('no model', Obsidian.outlineVariant)
+                    else
+                      _tag(q.trained.join(' '), Obsidian.green),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(q.name.isNotEmpty ? q.name : _sub(q),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Obsidian.body(color: Obsidian.outline, size: 11)),
               ],
             ),
-            IconButton(
-              icon: const Icon(Icons.close_rounded, size: 16),
-              color: Obsidian.outline,
-              visualDensity: VisualDensity.compact,
-              onPressed: () => _remove(q.symbol),
-            ),
-          ],
-        ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(q.price == null
+                      ? '—'
+                      : '\$${q.price!.toStringAsFixed(2)}',
+                  style: Obsidian.dataTable(size: 14)),
+              if (q.changePct != null)
+                Text('${up ? '+' : ''}${q.changePct!.toStringAsFixed(2)}%',
+                    style: Obsidian.dataTable(
+                        size: 11,
+                        color: up ? Obsidian.green : Obsidian.red)),
+              // Pre-market and after hours, on their own line and labelled.
+              // Never folded into the close above it.
+              if (q.isExtended)
+                Text(
+                    '${q.sessionLabel.toLowerCase()} '
+                    '\$${q.extendedPrice!.toStringAsFixed(2)}'
+                    '${q.extendedChangePct == null ? '' : ' '
+                        '(${extUp ? '+' : ''}'
+                        '${q.extendedChangePct!.toStringAsFixed(2)}%)'}',
+                    style: Obsidian.labelSm(size: 8.5, color: Obsidian.amber)),
+            ],
+          ),
+          IconButton(
+            icon: Icon(
+                muted
+                    ? Icons.notifications_off_rounded
+                    : Icons.notifications_active_rounded,
+                size: 17),
+            color: muted ? Obsidian.outline : Obsidian.green,
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _openBell(q.symbol),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close_rounded, size: 16),
+            color: Obsidian.outline,
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _remove(q.symbol),
+          ),
+        ],
       ),
     );
   }
+
+  Widget _tag(String text, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+            color: c.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(5)),
+        child: Text(text.toUpperCase(),
+            style: Obsidian.labelSm(size: 8, color: c)),
+      );
 
   static String _sub(StockQuote q) {
     final bits = <String>[];

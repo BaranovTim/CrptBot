@@ -17,14 +17,17 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/patient_loader.dart';
 import '../widgets/sparkline.dart';
+import '../widgets/timeframe_bar.dart';
 
 class StockScreen extends StatefulWidget {
   const StockScreen({super.key, required this.client, required this.symbol,
-    this.catalogue, this.onClose});
+    this.catalogue, this.onClose, this.neighbours = const [],
+    this.onSwipe});
 
   final ApiClient client;
   final String symbol;
@@ -36,6 +39,11 @@ class StockScreen extends StatefulWidget {
   /// Non-null when this is a pushed page rather than a tab.
   final VoidCallback? onClose;
 
+  /// The other followed stocks, in order, so a flick moves between them the
+  /// way it moves between coins on the crypto dashboard.
+  final List<String> neighbours;
+  final void Function(int direction)? onSwipe;
+
   @override
   State<StockScreen> createState() => _StockScreenState();
 }
@@ -46,6 +54,15 @@ class _StockScreenState extends State<StockScreen> {
   String? _error;
   String? _lastFailure;
   DateTime _waitingSince = DateTime.now();
+
+  /// Which timeframe the chart is on. Daily by default: it is the only one
+  /// with a decade of history behind it, and the only one where a single bar
+  /// is not mostly market microstructure.
+  String _interval = '1d';
+
+  /// The user's signal-strength setting, applied to stocks exactly as it is
+  /// to crypto — one setting, both markets.
+  String _sensitivity = 'strong';
 
   /// The metric groups, in the order they earn their place on a stock page.
   static const _groups = <String, List<String>>{
@@ -62,6 +79,8 @@ class _StockScreenState extends State<StockScreen> {
   void initState() {
     super.initState();
     _cat = widget.catalogue;
+    Settings.instance.sensitivity().then(
+        (v) => mounted ? setState(() => _sensitivity = v) : null);
     _load();
   }
 
@@ -79,7 +98,8 @@ class _StockScreenState extends State<StockScreen> {
 
   Future<void> _load() async {
     try {
-      final d = await widget.client.stock(widget.symbol);
+      final d = await widget.client.stock(widget.symbol,
+          interval: _interval);
       final c = _cat ?? await widget.client.screenerCatalogue();
       if (!mounted) return;
       setState(() {
@@ -105,13 +125,13 @@ class _StockScreenState extends State<StockScreen> {
     final d = _data;
     final cat = _cat;
     if (d == null || cat == null) {
-      return WaitingPanel(
+      return _swipeable(WaitingPanel(
           since: _waitingSince,
           what: 'Loading ${widget.symbol}',
-          onPatienceExhausted: _giveUp);
+          onPatienceExhausted: _giveUp));
     }
 
-    return RefreshIndicator(
+    return _swipeable(RefreshIndicator(
       onRefresh: _load,
       backgroundColor: Obsidian.surfaceContainer,
       color: Obsidian.primary,
@@ -123,14 +143,65 @@ class _StockScreenState extends State<StockScreen> {
         children: [
           _header(d, cat),
           const SizedBox(height: 14),
+          TimeframeBar(
+            timeframes: [
+              for (final iv in d.intervals)
+                TimeframeInfo.fromJson({
+                  'interval': iv,
+                  'label': iv.toUpperCase(),
+                  // `trained` drives the lock icon. Every equity timeframe is
+                  // chartable whether or not a model exists for it, and the
+                  // model's absence is already stated in its own card — two
+                  // places saying it would be nagging.
+                  'trained': true,
+                }),
+            ],
+            selected: d.interval,
+            onSelect: (tf) {
+              setState(() {
+                _interval = tf.interval;
+                _data = null;
+                _waitingSince = DateTime.now();
+              });
+              _load();
+            },
+          ),
+          const SizedBox(height: Obsidian.gutter),
           _chartCard(d),
           const SizedBox(height: Obsidian.gutter),
-          _noSignalCard(d),
+          _recommendation(d),
           const SizedBox(height: Obsidian.gutter),
-          ..._metricGroups(d, cat),
+          // WHAT THE MODEL SAYS COMES FIRST, and when there is a model the
+          // company figures move BELOW it and collapse.
+          //
+          // A trained stock's page is about the prediction; P/E and debt are
+          // the context you check afterwards. Leading with six panels of
+          // fundamentals buried the one number the page exists for.
+          ...(d.trained ? _predictions(d) : const <Widget>[]),
+          ..._metricGroups(d, cat, collapsed: d.trained),
           _footer(d),
         ],
       ),
+    ));
+  }
+
+  /// Horizontal flick -> previous/next followed stock.
+  ///
+  /// `onHorizontalDragEnd` rather than a PageView, and the threshold is on
+  /// VELOCITY not distance — the same reasoning as the crypto dashboard: the
+  /// body is a ListView inside a RefreshIndicator, and nesting that in a
+  /// PageView makes the two gestures fight until pull-to-refresh stops
+  /// working. A slow diagonal drag while scrolling must not change stock.
+  Widget _swipeable(Widget child) {
+    if (widget.onSwipe == null || widget.neighbours.isEmpty) return child;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragEnd: (d) {
+        final v = d.primaryVelocity ?? 0;
+        if (v.abs() < 240) return;              // too slow to be deliberate
+        widget.onSwipe!(v < 0 ? 1 : -1);        // drag left = next
+      },
+      child: child,
     );
   }
 
@@ -183,7 +254,7 @@ class _StockScreenState extends State<StockScreen> {
           children: [
             Row(
               children: [
-                Text('PRICE · 12 MONTHS',
+                Text('PRICE · ${d.interval.toUpperCase()}',
                     style: Obsidian.labelSm(size: 10.5)),
                 const Spacer(),
                 if (d.series.isNotEmpty)
@@ -213,40 +284,205 @@ class _StockScreenState extends State<StockScreen> {
         ),
       );
 
-  /// The absence, stated. See the library doc.
-  Widget _noSignalCard(StockDetail d) => Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Obsidian.amber.withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(Obsidian.rMd),
-          border:
-              Border.all(color: Obsidian.amber.withValues(alpha: 0.22)),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Icon(Icons.info_outline_rounded,
-                size: 16, color: Obsidian.amber),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('No buy or sell call for stocks',
-                      style: Obsidian.body(size: 12.5, color: Obsidian.amber)
-                          .copyWith(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 4),
-                  Text(d.signalNote,
-                      style: Obsidian.body(
-                          color: Obsidian.outline, size: 11.5)),
-                ],
-              ),
+  /// The call, drawn exactly as the crypto dashboard draws it.
+  ///
+  /// Same widget shape, same colours, same sensitivity gate — because it is
+  /// the same `Recommendation`, produced by the same model code. A stock is
+  /// not a different kind of thing to this app; it is a different market.
+  Widget _recommendation(StockDetail d) {
+    final r = d.recommendation;
+    if (r == null) return _untrained(d);
+
+    final gated = r.action != 'FLAT' &&
+        r.action != 'STALE' &&
+        r.strength.isNotEmpty &&
+        !r.clears(_sensitivity);
+    final action = gated ? 'FLAT' : r.action;
+    final tone = gated ? 'flat' : r.tone;
+    final c = Obsidian.tone(tone);
+    final glowing = tone == 'up' || tone == 'down';
+
+    return GlassPanel(
+      active: true,
+      radius: Obsidian.rLg,
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 26),
+      glow: glowing ? c : null,
+      glowOpacity: 0.35,
+      child: Column(
+        children: [
+          Text('RECOMMENDED ACTION', style: Obsidian.labelSm(size: 11.5)),
+          const SizedBox(height: 12),
+          Text(action,
+              style: Obsidian.displayLg(color: c).copyWith(
+                fontSize: 52,
+                shadows: glowing
+                    ? [BoxShadow(
+                        color: c.withValues(alpha: 0.55), blurRadius: 28)]
+                    : null,
+              )),
+          const SizedBox(height: 12),
+          Text(
+              gated
+                  ? 'A ${r.strength} signal is available here. Your setting '
+                      'is "$_sensitivity", so it is not shown as a call.'
+                  : r.detail,
+              textAlign: TextAlign.center,
+              style: Obsidian.body(size: 14.5)),
+          if (r.pNeeded != null || r.ev != null) ...[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 20,
+              alignment: WrapAlignment.center,
+              children: [
+                if (r.ev != null)
+                  _stat('EV', '${r.ev! >= 0 ? '+' : ''}'
+                      '${r.ev!.toStringAsFixed(3)}%'),
+                if (r.pNeeded != null)
+                  _stat('NEEDS', r.pNeeded!.toStringAsFixed(3)),
+                if (r.sizePct != null)
+                  _stat('SIZE', '${r.sizePct!.toStringAsFixed(2)}%'),
+              ],
             ),
+          ],
+          if (d.takeProfit != null && d.stopLoss != null) ...[
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _stat('TAKE PROFIT', d.takeProfit!.toStringAsFixed(2),
+                    color: Obsidian.green),
+                _stat('STOP LOSS', d.stopLoss!.toStringAsFixed(2),
+                    color: Obsidian.red),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _stat(String label, String value, {Color? color}) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, style: Obsidian.labelSm(size: 9)),
+          const SizedBox(height: 3),
+          Text(value, style: Obsidian.dataTable(size: 13.5, color: color)),
+        ],
+      );
+
+  /// No model for THIS timeframe yet — the same panel the crypto side shows
+  /// for an untrained pair, with the command that fixes it.
+  Widget _untrained(StockDetail d) => GlassPanel(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            const Icon(Icons.model_training_rounded,
+                size: 30, color: Obsidian.outline),
+            const SizedBox(height: 12),
+            Text('No model for ${d.symbol} ${d.interval}',
+                style: Obsidian.headlineMd()),
+            const SizedBox(height: 10),
+            Text(d.untrainedNote,
+                textAlign: TextAlign.center,
+                style: Obsidian.body(color: Obsidian.outline, size: 12)),
+            if (d.trainCommand.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Obsidian.surfaceLowest.withValues(alpha: 0.8),
+                  borderRadius: BorderRadius.circular(Obsidian.rMd),
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                ),
+                child: SelectableText(d.trainCommand,
+                    style: Obsidian.dataTable(size: 11.5)),
+              ),
+            ],
           ],
         ),
       );
 
-  List<Widget> _metricGroups(StockDetail d, ScreenerCatalogue cat) {
+  /// The model's own readings — the indicator grid the crypto dashboard
+  /// shows, from the same payload.
+  List<Widget> _predictions(StockDetail d) {
+    if (d.indicators.isEmpty) return const [];
+    return [
+      GlassPanel(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('WHAT THE MODEL IS READING',
+                style: Obsidian.labelSm(size: 10.5)),
+            const SizedBox(height: 12),
+            for (final ind in d.indicators)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 4,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(ind.label,
+                              style: Obsidian.body(size: 12.5)),
+                          const SizedBox(height: 2),
+                          Text(ind.note,
+                              style: Obsidian.body(
+                                  color: Obsidian.outline, size: 10.5)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(ind.value,
+                        style: Obsidian.dataTable(
+                            size: 13.5, color: Obsidian.tone(ind.tone))),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+      const SizedBox(height: Obsidian.gutter),
+    ];
+  }
+
+  /// Collapsed once a model exists — see the note at the call site.
+  bool _figuresOpen = false;
+
+  List<Widget> _metricGroups(StockDetail d, ScreenerCatalogue cat,
+      {bool collapsed = false}) {
+    if (collapsed && !_figuresOpen) {
+      return [
+        GlassPanel(
+          padding: const EdgeInsets.all(14),
+          onTap: () => setState(() => _figuresOpen = true),
+          child: Row(
+            children: [
+              const Icon(Icons.business_rounded,
+                  size: 16, color: Obsidian.outline),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('Company figures',
+                    style: Obsidian.body(size: 12.5)),
+              ),
+              const Icon(Icons.expand_more_rounded,
+                  size: 18, color: Obsidian.outline),
+            ],
+          ),
+        ),
+        const SizedBox(height: Obsidian.gutter),
+      ];
+    }
+    return _metricGroupsBody(d, cat);
+  }
+
+  List<Widget> _metricGroupsBody(StockDetail d, ScreenerCatalogue cat) {
     final byId = cat.byId;
     final out = <Widget>[];
     for (final entry in _groups.entries) {

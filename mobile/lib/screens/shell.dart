@@ -92,6 +92,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     // shell rebuilds when it changes rather than each screen polling it.
     MarketModeStore.instance.addListener(_onModeChanged);
     MarketModeStore.instance.load();
+    _loadFollowed();
   }
 
   @override
@@ -451,6 +452,39 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   /// switched markets.
   String? _stock;
 
+  /// The first stock on the watchlist, so the dashboard opens on something
+  /// rather than telling you to pick a stock you have already picked.
+  ///
+  /// Loaded once and kept: reading storage inside `build` would hit the disk
+  /// on every frame.
+  String? _firstFollowed;
+
+  /// The whole followed list, in order, so a swipe knows where to go next.
+  List<String> _followed = const [];
+
+  /// Move to the next or previous followed stock, wrapping at both ends.
+  ///
+  /// Wrapping rather than stopping: with three stocks, a hard stop at the
+  /// last one reads as the gesture having failed.
+  void _swipeStock(String current, int direction) {
+    if (_followed.length < 2) return;
+    final i = _followed.indexOf(current);
+    if (i < 0) return;
+    final next = (i + direction) % _followed.length;
+    setState(() => _stock = _followed[next < 0 ? next + _followed.length : next]);
+  }
+
+  Future<void> _loadFollowed() async {
+    final list = await StockWatchlist.instance.load();
+    if (!mounted) return;
+    setState(() {
+      _followed = list;
+      _firstFollowed = list.isEmpty ? null : list.first;
+      // A stock removed from the watchlist must not stay on the dashboard.
+      if (_stock != null && !list.contains(_stock)) _stock = null;
+    });
+  }
+
   /// The stocks half of the app.
   ///
   /// Dashboard and Market are real pages now. News stays crypto-only: the
@@ -476,22 +510,37 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       case NavTab.market:
         return StockMarketScreen(
           client: widget.client,
-          onPick: (s) => setState(() {
-            _stock = s;
-            _tab = NavTab.dashboard;
-          }),
+          onPick: (s) {
+            setState(() {
+              _stock = s;
+              _tab = NavTab.dashboard;
+            });
+            _loadFollowed();
+          },
         );
       case NavTab.dashboard:
-        final s = _stock;
+        final s = _stock ?? _firstFollowed;
         if (s == null) return _pickAStock();
         return StockScreen(
+          // Keyed by symbol, so a swipe DISPOSES this state and builds a
+          // fresh one. Exactly the fix that killed the stale-data flicker on
+          // the crypto dashboard: clearing fields by hand missed something
+          // twice, and this makes the whole class of bug impossible.
           key: ValueKey(s),
           client: widget.client,
           symbol: s,
+          neighbours: _followed.where((x) => x != s).toList(),
+          onSwipe: (dir) => _swipeStock(s, dir),
           onClose: () => setState(() => _stock = null),
         );
       case NavTab.news:
-        return _cryptoOnly();
+        return NewsScreen(
+          key: const ValueKey('stocks-news'),
+          client: widget.client,
+          // The stock on the dashboard, so "just this one" filters to it.
+          symbol: _stock ?? _firstFollowed ?? '',
+          market: 'stocks',
+        );
     }
   }
 
@@ -527,40 +576,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         ),
       );
 
-  /// A tab that genuinely has no equities equivalent.
-  Widget _cryptoOnly() => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(Obsidian.containerPadding),
-          child: GlassPanel(
-            padding: const EdgeInsets.all(22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.article_outlined,
-                    color: Obsidian.outline, size: 34),
-                const SizedBox(height: 14),
-                Text('News is crypto only', style: Obsidian.headlineMd()),
-                const SizedBox(height: 10),
-                Text('The feeds behind this tab are crypto publishers. '
-                    'Showing them under a stocks header would be a lie about '
-                    'where they came from.',
-                    textAlign: TextAlign.center,
-                    style: Obsidian.body(color: Obsidian.outline, size: 12)),
-                const SizedBox(height: 18),
-                TextButton(
-                  onPressed: () =>
-                      MarketModeStore.instance.set(MarketMode.crypto),
-                  child: Text('Back to crypto',
-                      style: Obsidian.body(color: Obsidian.primary)),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-
   void _onModeChanged() {
     if (!mounted) return;
+    // The screener's Follow button writes the same list, so coming back to
+    // stocks has to re-read it rather than trusting what was loaded at start.
+    _loadFollowed();
     // Leaving a stocks-only tab when switching back to crypto, rather than
     // sitting on a page that has nothing to show.
     setState(() {
@@ -654,7 +674,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               Text('$_symbol · $_interval',
                   style: Obsidian.labelSm(size: 11)),
             const SizedBox(width: 8),
-            _marketSwitch(),
+            // NOT on the screener: it is stocks-only, so the control would
+            // offer a market with nothing behind it. A switch that takes you
+            // somewhere empty is worse than no switch.
+            if (_tab != NavTab.screener) _marketSwitch(),
           ],
         ));
   }

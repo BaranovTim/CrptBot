@@ -82,7 +82,9 @@ NEEDS_ESTIMATES = ("eps_growth_next_year", "eps_growth_next_5y", "peg")
 
 # Concepts that cover a PERIOD and must be summed across four quarters.
 # Everything else is a balance at an instant and must not be.
-FLOWS = ("revenue", "net_income", "eps_diluted", "dividends_per_share")
+FLOWS = ("revenue", "net_income", "eps_diluted", "dividends_per_share",
+         "cost_of_revenue", "operating_income", "depreciation",
+         "operating_cash_flow", "capex")
 
 # A flow whose period ended longer ago than this is not a current figure.
 # Fifteen months, not twelve: a late annual filer is still a going concern,
@@ -246,6 +248,11 @@ def fundamentals(facts: dict, price: Optional[float] = None,
     out["eps_growth_qtr"] = _qtr_growth(facts, "eps_diluted", as_of)
     out["sales_growth_qtr"] = _qtr_growth(facts, "revenue", as_of)
 
+    _extended(facts, out, as_of, price,
+              equity=equity, net_income=net_income, eps=eps, dps=dps,
+              debt_long=debt_l, debt_short=debt_s, assets_c=assets_c,
+              liab_c=liab_c)
+
     newest = latest_fact(facts, TAGS["equity"], as_of=as_of) or \
         latest_fact(facts, TAGS["net_income"], as_of=as_of)
     if newest and newest.get("filed"):
@@ -275,7 +282,7 @@ def _series(facts: dict, concept: str, as_of: Optional[date]):
     # Merged on (end, filed) so the same period reported under two tags counts
     # once — otherwise a trailing-twelve-month sum could take the same quarter
     # twice and double it.
-    seen, rows = set(), []
+    seen: Dict[tuple, tuple] = {}
     for name in TAGS[concept]:
         block = gaap.get(name) or dei.get(name)
         if not block:
@@ -289,10 +296,22 @@ def _series(facts: dict, concept: str, as_of: Optional[date]):
                 # collapsing them here would discard the one we want before
                 # `_spans` ever sees it.
                 key = (r.get("start"), r.get("end"))
-                if key in seen:
+                prev = seen.get(key)
+                # THE LATEST FILING OF A PERIOD WINS, not the first seen.
+                #
+                # A restatement supersedes the original by definition, and one
+                # restatement matters more than all the others: after a stock
+                # split, later filings carry the SPLIT-ADJUSTED per-share
+                # figures for prior periods while the as-filed originals stay
+                # pre-split. Keeping the original made NVIDIA's five-year EPS
+                # growth read as -6.6% across its 10-for-1 split, while sales
+                # over the same period grew 67%. Both numbers were computed
+                # from real filings; one was comparing pre-split cents with
+                # post-split cents.
+                if prev is not None and str(r.get("filed", "")) <= prev[0]:
                     continue
-                seen.add(key)
-                rows.append(r)
+                seen[key] = (str(r.get("filed", "")), r)
+    rows = [entry for _, entry in seen.values()]
     rows.sort(key=lambda r: (r.get("end", ""), r.get("filed", "")))
     return rows
 
@@ -325,3 +344,179 @@ def _year_growth(facts: dict, concept: str,
     if len(rows) < 2:
         return None
     return _growth(_val(rows[-1]), _val(rows[-2]))
+
+
+def _extended(facts: dict, out: Dict[str, Optional[float]],
+              as_of, price, **known) -> None:
+    """The Finviz-shaped company fields, computed in place.
+
+    NOTHING HERE INVENTS A NUMBER. Every ratio needs both halves, and a
+    missing half leaves the ratio None rather than substituting a zero — a
+    P/B of 0 would pass every "under 3" screen ever written, and an operating
+    margin of 0 would read as a company that breaks exactly even.
+
+    THE NEGATIVE-DENOMINATOR RULE. A company with negative equity or negative
+    EBITDA produces a negative multiple, which sorts BELOW every healthy
+    company and therefore passes every "cheap" filter. Those are left blank
+    for the same reason a negative P/E is: the filter's user means "cheap",
+    not "broken in a way that makes the arithmetic flip sign".
+    """
+    revenue = _ttm(facts, "revenue", as_of)
+    cogs = _ttm(facts, "cost_of_revenue", as_of)
+    op_income = _ttm(facts, "operating_income", as_of)
+    depreciation = _ttm(facts, "depreciation", as_of)
+    ocf = _ttm(facts, "operating_cash_flow", as_of)
+    capex = _ttm(facts, "capex", as_of)
+
+    assets = _point(facts, "assets", as_of)
+    cash = _point(facts, "cash", as_of)
+    inventory = _point(facts, "inventory", as_of)
+
+    equity = known.get("equity")
+    net_income = known.get("net_income")
+    assets_c = known.get("assets_c")
+    liab_c = known.get("liab_c")
+    debt_l = known.get("debt_long")
+    debt_s = known.get("debt_short")
+    shares = out.get("shares_outstanding")
+    cap = out.get("market_cap")
+
+    def positive(v):
+        return v if (v is not None and v > 0) else None
+
+    # ---------------------------------------------------------- margins
+    if revenue:
+        if cogs is not None:
+            out["gross_margin"] = (revenue - cogs) / revenue * 100.0
+        if op_income is not None:
+            out["operating_margin"] = op_income / revenue * 100.0
+        if net_income is not None:
+            out["net_margin"] = net_income / revenue * 100.0
+
+    # ---------------------------------------------------------- returns
+    if net_income is not None:
+        out["roa"] = _pct(_div(net_income, positive(assets)))
+        total_debt = sum(x for x in (debt_l, debt_s) if x is not None) or None
+        invested = None
+        if equity is not None:
+            invested = equity + (total_debt or 0.0)
+        out["roic"] = _pct(_div(net_income, positive(invested)))
+
+    # ------------------------------------------------------- liquidity
+    if liab_c:
+        # Quick ratio strips inventory, which is the whole difference from
+        # the current ratio: a retailer with warehouses full of unsold stock
+        # looks solvent on one and not on the other.
+        quick_assets = None
+        if assets_c is not None:
+            quick_assets = assets_c - (inventory or 0.0)
+        out["quick_ratio"] = _div(quick_assets, positive(liab_c))
+    out["lt_debt_equity"] = _div(debt_l, positive(equity))
+
+    # ------------------------------------------------------- valuation
+    if cap:
+        out["pb"] = _div(cap, positive(equity))
+        out["ps"] = _div(cap, positive(revenue))
+        out["price_cash"] = _div(cap, positive(cash))
+        if ocf is not None and capex is not None:
+            fcf = ocf - abs(capex)
+            out["price_fcf"] = _div(cap, positive(fcf))
+
+        total_debt = sum(x for x in (debt_l, debt_s) if x is not None)
+        ev = cap + total_debt - (cash or 0.0)
+        if ev > 0:
+            out["ev_sales"] = _div(ev, positive(revenue))
+            if op_income is not None:
+                ebitda = op_income + (depreciation or 0.0)
+                out["ev_ebitda"] = _div(ev, positive(ebitda))
+
+    if shares:
+        out["shares_outstanding"] = shares
+
+    # ---------------------------------------------------------- growth
+    out["eps_growth_ttm"] = _annualised(facts, "eps_diluted", as_of, years=1)
+    out["sales_growth_ttm"] = _annualised(facts, "revenue", as_of, years=1)
+    out["eps_growth_3y"] = _annualised(facts, "eps_diluted", as_of, years=3)
+    out["eps_growth_5y"] = _annualised(facts, "eps_diluted", as_of, years=5)
+    out["sales_growth_3y"] = _annualised(facts, "revenue", as_of, years=3)
+    out["sales_growth_5y"] = _annualised(facts, "revenue", as_of, years=5)
+    out["dividend_growth_5y"] = _annualised(facts, "dividends_per_share",
+                                          as_of, years=5)
+
+
+def _pct(v):
+    return None if v is None else v * 100.0
+
+
+def _annualised(facts: dict, concept: str, as_of,
+                years: int) -> Optional[float]:
+    """Annualised growth over `years`, from annual figures.
+
+    NAMED `_annualised`, not `_growth`, because `_growth(latest, older)`
+    already exists in this file and shadowing it silently blanked EVERY
+    company field — market cap, P/E, ROE, all of it — while the caller's
+    broad `except Exception` reported it at debug level. The table rebuilt
+    cleanly and returned nothing.
+
+    ANNUALISED, not cumulative: "EPS growth past 5 years" on a screener means
+    the compound annual rate, and reporting the total instead would make every
+    threshold someone types about five times too easy.
+
+    Returns None when either endpoint is missing OR when the older one is not
+    positive. A company that went from a loss to a profit has no meaningful
+    growth RATE — the percentage change from a negative base has the wrong
+    sign and an arbitrary magnitude.
+    """
+    rows = [r for r in _series(facts, concept, as_of)
+            if r.get("fp") == "FY" and _spans(r, 340, 380)]
+    if len(rows) < 2:
+        return None
+    # SELECTED BY DATE, not by position in the list.
+    #
+    # Indexing back `years` entries assumes a filing for every intervening
+    # year, and real filers have gaps — a missed annual report, a changed
+    # fiscal year end, a company that only began filing partway through. The
+    # target is "the year closest to N years before the latest", and if
+    # nothing lands near it the answer is None rather than a rate computed
+    # over the wrong span and reported as if it were five years.
+    by_end = {}
+    for r in rows:
+        v = _val(r)
+        if v is not None:
+            by_end[r["end"]] = v
+    if len(by_end) < 2:
+        return None
+
+    ends = sorted(by_end)
+    try:
+        newest = datetime.strptime(ends[-1], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    target = newest.replace(year=newest.year - years)
+
+    best, best_gap = None, None
+    for e in ends[:-1]:
+        try:
+            d = datetime.strptime(e, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        gap = abs((d - target).days)
+        if best_gap is None or gap < best_gap:
+            best, best_gap = e, gap
+    # Half a year of slack: a fiscal year ending in June against a target in
+    # December is the same year for this purpose. More than that and the
+    # "annualised over N years" label stops being true.
+    if best is None or best_gap > 190:
+        return None
+
+    latest, older = by_end[ends[-1]], by_end[best]
+    if older <= 0:
+        return None
+    # The actual span, not the requested one — a 3.2 year gap annualised as
+    # 3 years overstates the rate.
+    span = max((newest - datetime.strptime(best, "%Y-%m-%d").date()).days
+               / 365.25, 0.5)
+    try:
+        return ((latest / older) ** (1.0 / span) - 1.0) * 100.0
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None

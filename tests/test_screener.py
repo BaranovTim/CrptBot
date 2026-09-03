@@ -428,3 +428,123 @@ def test_a_year_to_date_figure_is_never_counted_as_a_quarter():
     assert abs(m["eps_ttm"] - 8.0) < 1e-6, m["eps_ttm"]
     assert abs(m["pe"] - 12.5) < 1e-6, m["pe"]
     return True
+
+
+def test_a_stock_split_does_not_invert_multi_year_eps_growth():
+    """THE BUG THIS PINS, found on NVIDIA's real filings.
+
+    As-filed XBRL is not split-adjusted: the original 10-Q for a pre-split
+    year reports pre-split EPS forever. Later filings restate the same period
+    on a post-split basis. Keeping the FIRST value seen for a period compared
+    pre-split cents with post-split cents and produced -6.6% five-year EPS
+    growth for a company whose sales grew 67% over the same window.
+
+    The rule is simply that a restatement supersedes the original — the
+    latest FILED version of a period wins.
+    """
+    from screener.fundamentals import fundamentals
+
+    def fy(val, end, filed):
+        return {"val": val, "start": f"{int(end[:4]) - 1}{end[4:]}",
+                "end": end, "filed": filed, "fy": int(end[:4]), "fp": "FY"}
+
+    import datetime as _dt
+
+    newest = _dt.date.today() - _dt.timedelta(days=40)
+    old_end = newest.replace(year=newest.year - 3).isoformat()
+    recent = newest.isoformat()
+
+    facts = {"facts": {"us-gaap": {"EarningsPerShareDiluted": {
+        "units": {"USD": [
+            # the original, pre-split: $20 a share
+            fy(20.0, old_end, old_end),
+            # the same period restated after a 10-for-1 split: $2 a share
+            fy(2.0, old_end, newest.replace(year=newest.year - 1).isoformat()),
+            fy(4.0, recent, recent),
+        ]}}}}}
+
+    m = fundamentals(facts, price=100.0)
+    # 2.00 -> 4.00 over three years is +26% a year. Comparing the pre-split
+    # 20.00 against 4.00 would give roughly -38%.
+    g = m["eps_growth_3y"]
+    assert g is not None and 20 < g < 30, g
+    return True
+
+
+def test_growth_is_annualised_not_cumulative():
+    """A screener's "past 5 years" means the compound annual rate. Reporting
+    the total would make every threshold about five times too easy."""
+    from screener.fundamentals import _annualised
+
+    import datetime as _dt
+
+    # EXACTLY three years apart. The rate is computed over the ACTUAL span
+    # between the two filings, not the requested one — a 2.6 year gap
+    # annualised as 3 years would understate the rate — so a fixture that is
+    # only roughly three years apart tests arithmetic rather than intent.
+    newest = _dt.date.today() - _dt.timedelta(days=40)
+    older = newest.replace(year=newest.year - 3)
+
+    def fy(val, end):
+        return {"val": val,
+                "start": end.replace(year=end.year - 1).isoformat(),
+                "end": end.isoformat(), "filed": end.isoformat(),
+                "fy": end.year, "fp": "FY"}
+
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        fy(100.0, older), fy(200.0, newest),
+    ]}}}}}
+    # 100 -> 200 over 3 years is 26% a year, not 100%
+    g = _annualised(facts, "revenue", None, years=3)
+    assert g is not None and 25 < g < 27, g
+
+    # and the span really is measured: the same doubling over one year is
+    # 100%, not 26%
+    facts1 = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        fy(100.0, newest.replace(year=newest.year - 1)), fy(200.0, newest),
+    ]}}}}}
+    g1 = _annualised(facts1, "revenue", None, years=1)
+    assert g1 is not None and 99 < g1 < 101, g1
+    return True
+
+
+def test_growth_from_a_loss_is_blank_rather_than_a_giant_number():
+    """A company that went from a loss to a profit has no meaningful growth
+    RATE — the percentage change from a negative base has the wrong sign and
+    an arbitrary magnitude."""
+    from screener.fundamentals import _annualised
+
+    import datetime as _dt
+    year = _dt.date.today().year
+    recent = (_dt.date.today() - _dt.timedelta(days=40)).isoformat()
+
+    def fy(val, end):
+        return {"val": val, "start": f"{int(end[:4]) - 1}{end[4:]}",
+                "end": end, "filed": end, "fy": int(end[:4]), "fp": "FY"}
+
+    facts = {"facts": {"us-gaap": {"EarningsPerShareDiluted": {
+        "units": {"USD": [fy(-2.0, f"{year - 3}-12-31"), fy(3.0, recent)]}}}}}
+    assert _annualised(facts, "eps_diluted", None, years=3) is None
+    return True
+
+
+def test_a_negative_denominator_leaves_the_multiple_blank():
+    """Negative equity produces a negative P/B, which sorts below every
+    healthy company and so passes every "cheap" filter ever written. Same
+    reasoning as the negative P/E rule."""
+    from screener.fundamentals import fundamentals
+
+    import datetime as _dt
+    ends = _recent_quarter_ends(4)
+    facts = {"facts": {"us-gaap": {
+        "StockholdersEquity": {"units": {"USD": [
+            {"val": -500.0, "end": ends[-1], "filed": ends[-1],
+             "fy": int(ends[-1][:4]), "fp": "Q4"}]}},
+        "CommonStockSharesOutstanding": {"units": {"shares": [
+            {"val": 1000.0, "end": ends[-1], "filed": ends[-1],
+             "fy": int(ends[-1][:4]), "fp": "Q4"}]}},
+    }}}
+    m = fundamentals(facts, price=10.0)
+    assert m["market_cap"] == 10000.0
+    assert m["pb"] is None, m["pb"]
+    return True

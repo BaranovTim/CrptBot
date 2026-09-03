@@ -210,9 +210,10 @@ class ApiClient {
     return IndicatorSeries.fromJson(await _get('/api/indicator?$q'));
   }
 
-  Future<List<NewsItem>> news({int limit = 20, String? symbol}) async {
+  Future<List<NewsItem>> news({int limit = 20, String? symbol,
+      String market = 'crypto'}) async {
     final q = symbol == null ? '' : '&symbol=$symbol';
-    final j = await _get('/api/news?limit=$limit$q');
+    final j = await _get('/api/news?limit=$limit$q&market=$market');
     return ((j['items'] as List?) ?? const [])
         .map((e) => NewsItem.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -237,7 +238,7 @@ class ApiClient {
     List<ScreenerFilter>? filters,
     String? sortBy,
     bool descending = true,
-    bool includeUnknown = true,
+    bool includeUnknown = false,
     int limit = 200,
   }) async {
     final q = StringBuffer('/api/screener?limit=$limit');
@@ -255,8 +256,9 @@ class ApiClient {
         timeout: const Duration(seconds: 45)));
   }
 
-  Future<StockDetail> stock(String symbol) async =>
-      StockDetail.fromJson(await _get('/api/stock?symbol=$symbol',
+  Future<StockDetail> stock(String symbol, {String interval = '1d'}) async =>
+      StockDetail.fromJson(await _get(
+          '/api/stock?symbol=$symbol&interval=$interval',
           timeout: const Duration(seconds: 40)));
 
   Future<List<StockQuote>> stockQuotes(List<String> symbols) async {

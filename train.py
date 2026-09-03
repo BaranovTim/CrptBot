@@ -151,6 +151,30 @@ def compute_frames(bars, htf: str, symbol: str, interval: str):
     return frames, max(warm), ""
 
 
+def _cost_for(symbol: str) -> dict:
+    """Round-trip cost, which is not the same in both markets.
+
+    The default 0.10% is a crypto perpetual: taker fees both sides plus
+    slippage. US equities at a commission-free broker are cheaper — the cost
+    is the spread, which on a liquid large cap is a couple of basis points
+    each way.
+
+    This is not a detail. `p_needed = 0.5 + (threshold + cost) / (2 * span)`,
+    so the cost sets how confident the model has to be before it says anything
+    at all. Training a stock at crypto costs would silently demand an accuracy
+    no equity model reaches, and every timeframe would read FLAT forever —
+    which looks exactly like a model that learned nothing.
+
+    Deliberately NOT optimistic: 0.05% assumes a liquid name. A thinly traded
+    small cap costs far more than this, and its model will therefore promise
+    more than it can deliver. That is a limitation of one number standing in
+    for a whole market, and it is on the model card.
+    """
+    return {} if symbol.upper().endswith(("USDT", "USD", "BUSD")) else {
+        "round_trip_cost_pct": 0.05,
+    }
+
+
 def train_one(symbol: str, interval: str, slot: int, hold: int, k: float,
               bars, frames, warm: int, save: bool = True) -> Outcome:
     from agent5 import Agent5Config, JudgeAgent
@@ -158,7 +182,8 @@ def train_one(symbol: str, interval: str, slot: int, hold: int, k: float,
     t0 = time.time()
     out = Outcome(symbol, interval, slot, ok=False, bars=len(bars))
     # symmetric, so "chance down" is honestly 1 - "chance up"
-    cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k)
+    cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k,
+                       **_cost_for(symbol))
     judge = JudgeAgent(cfg)
     ds = judge.build(bars, warmup=warm, **frames)
     report = judge.fit(ds, with_shuffle=True, with_ablation=False,

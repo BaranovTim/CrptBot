@@ -288,7 +288,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not sym:
                     self._send({"error": "symbol is required"}, status=400)
                     return
-                self._send(_detail.detail(sym, _u.load()))
+                self._send(_detail.detail(sym, _u.load(),
+                                          interval=opt("interval") or "1d"))
             elif route == "/api/stock/quotes":
                 from screener import detail as _detail
                 from screener import universe as _u
@@ -315,7 +316,8 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/screener":
                 from screener import universe as _u
                 from screener.engine import run as _run
-                from screener.filters import Filter, PRESETS_BY_ID
+                from screener.filters import (UNAVAILABLE as _UNAVAILABLE,
+                                              Filter, PRESETS_BY_ID)
 
                 table = _u.load()
                 rows = table.get("rows") or {}
@@ -323,7 +325,11 @@ class Handler(BaseHTTPRequestHandler):
                 preset = opt("preset")
                 raw = q.get("filters", [None])[0]
                 if preset and preset in PRESETS_BY_ID:
-                    filters = list(PRESETS_BY_ID[preset].filters)
+                    # The judgeable criteria only — same list the catalogue
+                    # hands the app, so running a preset by name and running
+                    # the rows it filled in cannot disagree.
+                    filters = [f for f in PRESETS_BY_ID[preset].filters
+                               if f.field not in _UNAVAILABLE]
                 elif raw:
                     try:
                         filters = [Filter.from_json(f)
@@ -359,10 +365,28 @@ class Handler(BaseHTTPRequestHandler):
                                      interval=opt("interval"),
                                      n=arg("n", 96)))
             elif route == "/api/whales":
-                self._send({"events": svc.whales(limit=arg("limit", 20))})
+                sym = opt("symbol")
+                if (opt("market") or "crypto") == "stocks" and sym:
+                    from screener import detail as _detail
+
+                    self._send({"events": _detail.insiders(
+                        sym, limit=arg("limit", 25))})
+                else:
+                    self._send({"events": svc.whales(limit=arg("limit", 20))})
             elif route == "/api/news":
-                self._send({"items": svc.news(limit=arg("limit", 20),
-                                              symbol=opt("symbol"))})
+                market = opt("market") or "crypto"
+                sym = opt("symbol")
+                items = svc.news(limit=arg("limit", 20), symbol=sym,
+                                 market=market)
+                if market == "stocks" and sym:
+                    # Filings for THIS company, fetched on demand and merged
+                    # ahead of the market-wide feed. The collector cannot
+                    # pre-fetch them: which symbols anyone follows is a
+                    # device preference the server never sees.
+                    from screener import detail as _detail
+
+                    items = _detail.stock_news(sym) + items
+                self._send({"items": items[:arg("limit", 20)]})
             elif route == "/api/alerts":
                 raw = q.get("after", [None])[0]
                 try:

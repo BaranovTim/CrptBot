@@ -150,6 +150,27 @@ class StockWatchlist {
     return List.unmodifiable(list);
   }
 
+  /// Drag to reorder, same as the crypto list — and for the same reason:
+  /// this order is what a swipe on the dashboard moves through.
+  ///
+  /// `newIndex` is POST-REMOVAL, exactly as `Watchlist.reorder` takes it.
+  /// I first wrote this with a `if (newIndex > oldIndex) newIndex -= 1`
+  /// correction, which is right for the deprecated `onReorder` and wrong for
+  /// `onReorderItem` — the framework has already adjusted it, and adjusting
+  /// again lands every downward drag one row short. The crypto version says
+  /// "do not add a correction here" for this exact reason.
+  Future<List<String>> reorder(int oldIndex, int newIndex) async {
+    final list = List<String>.from(await load());
+    if (oldIndex < 0 || oldIndex >= list.length) {
+      return List.unmodifiable(list);
+    }
+    newIndex = newIndex.clamp(0, list.length - 1);
+    list.insert(newIndex, list.removeAt(oldIndex));
+    _cache = list;
+    await _persist();
+    return List.unmodifiable(list);
+  }
+
   Future<void> _persist() async {
     try {
       final prefs = await SharedPreferences.getInstance();

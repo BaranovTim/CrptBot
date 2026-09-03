@@ -85,6 +85,92 @@ FIELDS: Tuple[Field, ...] = (
           help="FINRA short interest over float. Published twice a month, so "
                "it is days old by construction."),
 
+    Field("gap_pct", "Gap", "Price & volume", PERCENT,
+          help="Open against the previous close."),
+    Field("change_from_open", "Change from open", "Price & volume", PERCENT),
+    Field("atr_pct", "Average true range", "Price & volume", PERCENT,
+          help="ATR(14) as a percent of price, so it compares across "
+               "stocks at different prices."),
+    Field("volatility_w", "Volatility (week)", "Price & volume", PERCENT),
+    Field("volatility_m", "Volatility (month)", "Price & volume", PERCENT),
+    Field("at_20d_high", "At 20-day high", "Price & volume", BOOL),
+    Field("at_20d_low", "At 20-day low", "Price & volume", BOOL),
+    Field("at_52w_high", "At 52-week high", "Price & volume", BOOL),
+    Field("at_52w_low", "At 52-week low", "Price & volume", BOOL),
+    Field("off_52w_high", "Below 52-week high", "Price & volume", PERCENT,
+          help="How far under the 52-week high, as a positive percent."),
+    Field("off_52w_low", "Above 52-week low", "Price & volume", PERCENT),
+    Field("at_all_time_high", "At all-time high", "Price & volume", BOOL,
+          help="All-time within the history held — about ten years, not "
+               "since listing."),
+    Field("perf_week", "Performance (week)", "Performance", PERCENT),
+    Field("perf_month", "Performance (month)", "Performance", PERCENT),
+    Field("perf_quarter", "Performance (quarter)", "Performance", PERCENT),
+    Field("perf_half", "Performance (6 months)", "Performance", PERCENT),
+    Field("perf_year", "Performance (year)", "Performance", PERCENT),
+    Field("perf_ytd", "Performance (YTD)", "Performance", PERCENT),
+
+    Field("pb", "P/B", "Valuation", RATIO, needs="filings"),
+    Field("ps", "P/S", "Valuation", RATIO, needs="filings"),
+    Field("price_cash", "Price / cash", "Valuation", RATIO, needs="filings"),
+    Field("price_fcf", "Price / free cash flow", "Valuation", RATIO,
+          needs="filings"),
+    Field("ev_ebitda", "EV / EBITDA", "Valuation", RATIO, needs="filings"),
+    Field("ev_sales", "EV / sales", "Valuation", RATIO, needs="filings"),
+
+    Field("roa", "Return on assets", "Quality", PERCENT, needs="filings"),
+    Field("roic", "Return on invested capital", "Quality", PERCENT,
+          needs="filings"),
+    Field("quick_ratio", "Quick ratio", "Quality", RATIO, needs="filings"),
+    Field("lt_debt_equity", "LT debt / equity", "Quality", RATIO,
+          needs="filings"),
+    Field("gross_margin", "Gross margin", "Quality", PERCENT,
+          needs="filings"),
+    Field("operating_margin", "Operating margin", "Quality", PERCENT,
+          needs="filings"),
+    Field("net_margin", "Net profit margin", "Quality", PERCENT,
+          needs="filings"),
+
+    Field("eps_growth_ttm", "EPS growth TTM", "Growth", PERCENT,
+          needs="filings"),
+    Field("sales_growth_ttm", "Sales growth TTM", "Growth", PERCENT,
+          needs="filings"),
+    Field("eps_growth_3y", "EPS growth past 3 years", "Growth", PERCENT,
+          needs="filings", help="Annualised."),
+    Field("eps_growth_5y", "EPS growth past 5 years", "Growth", PERCENT,
+          needs="filings", help="Annualised."),
+    Field("sales_growth_3y", "Sales growth past 3 years", "Growth", PERCENT,
+          needs="filings", help="Annualised."),
+    Field("sales_growth_5y", "Sales growth past 5 years", "Growth", PERCENT,
+          needs="filings", help="Annualised."),
+    Field("dividend_growth_5y", "Dividend growth", "Growth", PERCENT,
+          needs="filings", help="Annualised over five years."),
+
+    Field("shares_outstanding", "Shares outstanding", "Company", SHARES,
+          needs="filings"),
+    Field("float_shares", "Float", "Company", SHARES, needs="filings"),
+    Field("days_to_cover", "Days to cover", "Short interest", RATIO,
+          needs="finra"),
+    Field("sector_code", "Sector (SIC)", "Company", NUMBER, needs="filings",
+          help="The SEC's own SIC classification, as a number. Filterable "
+               "by range: 2000-3999 is manufacturing, 6000-6799 finance."),
+
+    # Declared, and permanently blank on this data stack. Kept in the
+    # registry so the app can SAY they are unavailable rather than quietly
+    # omitting a filter the user came looking for.
+    Field("forward_pe", "Forward P/E", "Valuation", RATIO, needs="estimates"),
+    Field("target_price", "Target price", "Analyst", CURRENCY,
+          needs="estimates"),
+    Field("analyst_recom", "Analyst recommendation", "Analyst", RATIO,
+          needs="estimates"),
+    Field("earnings_date_days", "Days to earnings", "Analyst", NUMBER,
+          needs="estimates"),
+    Field("eps_surprise", "Earnings surprise", "Analyst", PERCENT,
+          needs="estimates"),
+    Field("insider_ownership", "Insider ownership", "Ownership", PERCENT,
+          needs="estimates"),
+    Field("institutional_ownership", "Institutional ownership", "Ownership",
+          PERCENT, needs="estimates"),
     Field("eps_growth_next_year", "EPS growth next year", "Growth", PERCENT,
           needs="estimates",
           help="Analyst consensus. NOT AVAILABLE on the free data stack."),
@@ -190,9 +276,20 @@ class Preset:
             "id": self.id,
             "name": self.name,
             "note": self.note,
-            "filters": [f.to_json() for f in self.filters],
-            # Named explicitly so the page can say WHICH criterion it cannot
-            # honour, rather than quietly returning results that ignore it.
+            # ONLY THE CRITERIA THAT CAN ACTUALLY BE JUDGED.
+            #
+            # Shipping the unjudgeable ones made every affected preset return
+            # "0 matched, 671 unjudged" — technically honest and practically
+            # useless, because the screen you asked for produced nothing. A
+            # preset is a starting position, and a starting position that
+            # matches nothing is not one.
+            #
+            # The dropped criteria are still named below, so the page can say
+            # what it left out instead of pretending the screen was complete.
+            "filters": [f.to_json() for f in self.filters
+                        if f.field not in UNAVAILABLE],
+            "dropped": [f.to_json() for f in self.filters
+                        if f.field in UNAVAILABLE],
             "unavailable": missing,
         }
 

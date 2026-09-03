@@ -690,6 +690,9 @@ class ScreenerPreset {
         filters = ((j['filters'] as List?) ?? const [])
             .map((e) => ScreenerFilter.fromJson(e as Map<String, dynamic>))
             .toList(),
+        dropped = ((j['dropped'] as List?) ?? const [])
+            .map((e) => ScreenerFilter.fromJson(e as Map<String, dynamic>))
+            .toList(),
         unavailable = ((j['unavailable'] as List?) ?? const [])
             .map((e) => '$e')
             .toList();
@@ -699,6 +702,14 @@ class ScreenerPreset {
   /// The filters this preset expands into. Copied on use, never shared —
   /// editing a preset's numbers must not rewrite the preset itself.
   final List<ScreenerFilter> filters;
+
+  /// Criteria left OUT because nothing can judge them.
+  ///
+  /// Shipped separately from `filters` rather than silently omitted: the
+  /// screen runs without them, and the page says which ones it dropped. A
+  /// preset that quietly ignored a criterion you asked for would be worse
+  /// than one that returned nothing.
+  final List<ScreenerFilter> dropped;
 
   /// Which of its criteria the server cannot judge on the free data stack.
   final List<String> unavailable;
@@ -753,6 +764,10 @@ class ScreenerRow {
   final Map<String, dynamic> metrics;
   final List<String> passed, failed, unknown;
 
+  /// The company. A screener row reading only "CLMT" tells you nothing about
+  /// what you just matched.
+  String get name => (metrics['name'] as String?) ?? '';
+
   double? metric(String id) {
     final v = metrics[id];
     return v is num ? v.toDouble() : null;
@@ -797,7 +812,23 @@ class StockDetail {
         series = ((j['series'] as List?) ?? const [])
             .map((e) => (e as num).toDouble())
             .toList(),
-        signalNote = j['signal_note'] as String? ?? '',
+        trained = j['trained'] as bool? ?? false,
+        recommendation = j['recommendation'] == null
+            ? null
+            : Recommendation.fromJson(
+                j['recommendation'] as Map<String, dynamic>),
+        takeProfit = _d((j['levels'] as Map?)?['take_profit']),
+        stopLoss = _d((j['levels'] as Map?)?['stop_loss']),
+        anchor = _d((j['levels'] as Map?)?['anchor']),
+        indicators = ((j['indicators'] as List?) ?? const [])
+            .map((e) => Indicator.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        untrainedNote = j['untrained_note'] as String? ?? '',
+        trainCommand = j['train_command'] as String? ?? '',
+        interval = j['interval'] as String? ?? '1d',
+        intervals = ((j['intervals'] as List?) ?? const ['1d'])
+            .map((e) => '$e')
+            .toList(),
         builtAt = j['built_at'] == null
             ? null
             : DateTime.tryParse(j['built_at'] as String);
@@ -809,7 +840,30 @@ class StockDetail {
   final bool known;
   final Map<String, dynamic> metrics;
   final List<double> series;
-  final String signalNote;
+  /// Whether a model exists for this symbol AND this interval.
+  ///
+  /// Per interval, not per symbol: a stock with a daily model and no hourly
+  /// one is trained for one and untrained for the other, exactly as a crypto
+  /// pair is.
+  final bool trained;
+
+  /// The fitted model's call — the same object the crypto dashboard draws,
+  /// produced by the same code. Null when nothing is fitted yet.
+  final Recommendation? recommendation;
+
+  /// Flattened the same way `Dashboard` flattens them, rather than wrapped in
+  /// a class of their own — two shapes for the same three numbers is how the
+  /// two pages start disagreeing.
+  final double? takeProfit, stopLoss, anchor;
+  final List<Indicator> indicators;
+
+  /// Why there is no call, and the exact command that would fix it.
+  final String untrainedNote, trainCommand;
+
+  /// Which timeframe the series is on, and which are offered. Sent by the
+  /// server so a new one appears without shipping an APK.
+  final String interval;
+  final List<String> intervals;
   final DateTime? builtAt;
 
   double? metric(String id) {
@@ -824,13 +878,40 @@ class StockQuote {
   StockQuote.fromJson(Map<String, dynamic> j)
       : symbol = j['symbol'] as String,
         known = j['known'] as bool? ?? false,
+        name = j['name'] as String? ?? '',
         price = _d(j['price']),
         changePct = _d(j['change_pct']),
         rsi14 = _d(j['rsi14']),
         marketCap = _d(j['market_cap']),
-        relVolume = _d(j['rel_volume']);
+        relVolume = _d(j['rel_volume']),
+        trained = ((j['trained'] as List?) ?? const [])
+            .map((e) => '$e')
+            .toList(),
+        session = j['session'] as String? ?? '',
+        sessionLabel = j['session_label'] as String? ?? '',
+        extendedPrice = _d(j['extended_price']),
+        extendedChangePct = _d(j['extended_change_pct']);
 
   final String symbol;
   final bool known;
+
+  /// The company, not the ticker. "CLMT" tells you nothing.
+  final String name;
   final double? price, changePct, rsi14, marketCap, relVolume;
+
+  /// Which timeframes have a fitted model. Empty means no call exists for
+  /// this stock at any timeframe — shown, not implied.
+  final List<String> trained;
+
+  /// open | pre | post | closed, and a label for it. Crypto never needed
+  /// this; a stock price with no session attached is Friday's close being
+  /// read on a Tuesday.
+  final String session, sessionLabel;
+
+  /// Where it is trading outside the regular session. Kept SEPARATE from
+  /// `price`, never merged: "the close" and "trading now" are different
+  /// numbers and conflating them is how a stale figure gets acted on.
+  final double? extendedPrice, extendedChangePct;
+
+  bool get isExtended => extendedPrice != null;
 }

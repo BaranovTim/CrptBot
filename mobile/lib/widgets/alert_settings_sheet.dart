@@ -37,10 +37,14 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
   /// (alert kind, label). `spike` deliberately rides with `signal`: both are
   /// the model telling you something moved, and splitting them would give two
   /// switches for one idea.
+  /// Only two things interrupt you now.
+  ///
+  /// Spikes were removed, and news and filings no longer notify on their own
+  /// — they ride along as context on an action change. Switches for kinds
+  /// that can never fire would be controls that do nothing, which reads as a
+  /// broken app rather than a simplified one.
   static const _kinds = [
-    ('signal', 'Trade signals'),
-    ('spike', 'Sudden moves'),
-    ('whale', 'Whale filings'),
+    ('signal', 'When the call changes'),
     ('calendar', 'Scheduled releases'),
   ];
 
@@ -170,15 +174,18 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
                     },
                   ),
                 const SizedBox(height: 14),
-                Text('NEWS', style: Obsidian.labelSm(size: 11)),
+                Text('NEWS IN CONTEXT', style: Obsidian.labelSm(size: 11)),
                 const SizedBox(height: 6),
                 for (final n in _newsLevels) _newsRow(n.$1, n.$2, n.$3),
                 const SizedBox(height: 8),
                 Text(
+                    'Headlines no longer buzz on their own — they are '
+                    'attached to a notification when the call changes. This '
+                    'chooses which ones are worth attaching.\n\n'
                     'BULL, BEAR and impact come from a keyword scorer that '
-                    'stays silent on about half of all headlines. Anything '
-                    'but "Everything" trusts it to have read the one that '
-                    'mattered.',
+                    'stays silent on about half of all headlines, and it is '
+                    'not an input to the model — so an attached headline is '
+                    'what was happening at the time, never the reason.',
                     style: Obsidian.body(color: Obsidian.outline, size: 11)),
               ],
               const SizedBox(height: 6),

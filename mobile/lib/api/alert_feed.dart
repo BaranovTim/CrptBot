@@ -71,10 +71,11 @@ Future<void> saveCursor(int cursor) async {
 /// headline. Within a kind, newest first.
 int _rank(Alert a) => switch (a.kind) {
       'signal' => 0,
-      'spike' => 1,
-      'calendar' => 2,
-      'whale' => 3,
-      _ => 4,
+      'calendar' => 1,
+      // spike, news and whale no longer arrive as alerts at all — news and
+      // filings ride along inside a signal's body. Kept in the switch so an
+      // older server still sorts sensibly rather than throwing.
+      _ => 2,
     };
 
 /// The alerts that should actually be delivered, in the order to deliver them.

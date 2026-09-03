@@ -91,6 +91,18 @@ TAGS: Dict[str, List[str]] = {
     "shares_outstanding": ["CommonStockSharesOutstanding",
                            "EntityCommonStockSharesOutstanding",
                            "WeightedAverageNumberOfDilutedSharesOutstanding"],
+    "assets": ["Assets"],
+    "cash": ["CashAndCashEquivalentsAtCarryingValue",
+             "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+    "inventory": ["InventoryNet"],
+    "cost_of_revenue": ["CostOfRevenue", "CostOfGoodsAndServicesSold"],
+    "operating_income": ["OperatingIncomeLoss"],
+    "depreciation": ["DepreciationDepletionAndAmortization",
+                     "DepreciationAmortizationAndAccretionNet"],
+    "operating_cash_flow": [
+        "NetCashProvidedByUsedInOperatingActivities",
+        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
+    "capex": ["PaymentsToAcquirePropertyPlantAndEquipment"],
 }
 
 
@@ -130,16 +142,39 @@ def ticker_map(refresh: bool = False) -> Dict[str, int]:
             pass                      # corrupt cache re-downloads, not crashes
 
     raw = json.loads(_get(TICKER_URL))
-    # the file is {"0": {"cik_str": 320193, "ticker": "AAPL", ...}, ...}
-    out = {}
+    # the file is {"0": {"cik_str": 320193, "ticker": "AAPL",
+    #                    "title": "Apple Inc."}, ...}
+    out, names = {}, {}
     for row in raw.values():
         t = str(row.get("ticker", "")).upper().strip()
         if t:
             out[t] = int(row["cik_str"])
+            title = str(row.get("title", "")).strip()
+            if title:
+                names[t] = title
     STORE.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out))
-    log.info("edgar: %d tickers mapped to CIKs", len(out))
+    # Names in their own file rather than a tuple in this one: the CIK map is
+    # a join key read on every build, and doubling its size to carry a display
+    # string would slow the thing nobody is looking at.
+    (STORE / "names.json").write_text(json.dumps(names))
+    log.info("edgar: %d tickers mapped to CIKs, %d names", len(out), len(names))
     return out
+
+
+def ticker_names(refresh: bool = False) -> Dict[str, str]:
+    """TICKER -> company name. "AAPL" is not a company anyone recognises."""
+    path = STORE / "names.json"
+    if not refresh and path.exists():
+        try:
+            return json.loads(path.read_text())
+        except (ValueError, OSError):
+            pass
+    ticker_map(refresh=True)                 # writes both files
+    try:
+        return json.loads(path.read_text())
+    except (ValueError, OSError):
+        return {}
 
 
 def _usable(entry: dict, as_of: Optional[date]) -> bool:

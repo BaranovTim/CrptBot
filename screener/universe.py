@@ -165,6 +165,8 @@ def _add_filings(rows: Dict[str, dict]) -> None:
         if cik is not None:
             by_cik.setdefault(cik, []).append(sym)
 
+    failures: Dict[str, int] = {}
+
     def apply(cik, facts) -> int:
         n = 0
         for sym in by_cik.get(cik, ()):
@@ -173,6 +175,15 @@ def _add_filings(rows: Dict[str, dict]) -> None:
                                               price=rows[sym].get("price")))
                 n += 1
             except Exception as e:          # one malformed filer, not the run
+                # COUNTED, not just logged at debug.
+                #
+                # A rename inside `fundamentals` once made this throw for
+                # EVERY company, and the debug-level message meant the table
+                # rebuilt cleanly with every company field blank. One filer
+                # failing is normal; all of them failing is a bug, and the
+                # difference has to be visible without turning on debug logs.
+                failures[type(e).__name__] = failures.get(
+                    type(e).__name__, 0) + 1
                 log.debug("screener: %s fundamentals failed: %s", sym, e)
         return n
 
@@ -183,11 +194,32 @@ def _add_filings(rows: Dict[str, dict]) -> None:
     # downloading all of it to fill in three tickers — which is what a
     # `--symbols AAPL,MSFT,NVDA` run does — is absurd. Below the crossover the
     # per-company endpoint is faster even at 10 requests/second.
+    # The display name, joined for every symbol whether or not its filings
+    # parse. A screener row reading only "CLMT" tells you nothing about what
+    # you just matched.
+    try:
+        from marketdata.edgar import ticker_names
+
+        names = ticker_names()
+        for sym in rows:
+            n = names.get(sym)
+            if n:
+                rows[sym]["name"] = n
+    except Exception as e:
+        log.warning("screener: company names unavailable: %s", e)
+
     from marketdata.edgar import STORE as EDGAR_STORE
     bulk = EDGAR_STORE / "companyfacts.zip"
     filled = 0
 
-    if len(by_cik) <= 300 and not bulk.exists():
+    # SMALL LISTS TAKE THE PER-COMPANY PATH EVEN WHEN THE BULK FILE EXISTS.
+    #
+    # It used to fall through to the archive as soon as one had been
+    # downloaded, so verifying three tickers streamed a 1.4GB zip. On a
+    # 967MB box that is not merely slow — it competes for memory with
+    # whatever else is running and drops SSH sessions, which is how this was
+    # noticed.
+    if len(by_cik) <= 300:
         from marketdata.edgar import company_facts
         for cik in by_cik:
             try:
@@ -212,6 +244,13 @@ def _add_filings(rows: Dict[str, dict]) -> None:
         except Exception as e:
             log.warning("screener: bulk filings unreadable: %s", e)
     log.info("screener: filings joined for %d of %d symbols", filled, len(rows))
+    if failures:
+        total = sum(failures.values())
+        detail = ", ".join(f"{k} x{v}" for k, v in
+                           sorted(failures.items(), key=lambda x: -x[1]))
+        # Above a handful it is not bad data, it is broken code.
+        speak = log.error if total > max(10, 0.2 * len(by_cik)) else log.info
+        speak("screener: %d symbols failed fundamentals (%s)", total, detail)
 
 
 def _add_short_interest(rows: Dict[str, dict]) -> None:

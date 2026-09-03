@@ -56,7 +56,13 @@ def technicals(bars: pd.DataFrame,
         ("price", "change_pct", "sma20", "sma50", "sma200",
          "above_sma20", "above_sma50", "above_sma200", "rsi14",
          "high_50d", "low_50d", "at_50d_high", "at_50d_low",
-         "avg_volume", "current_volume", "rel_volume", "beta", "bars")
+         "avg_volume", "current_volume", "rel_volume", "beta", "bars",
+         "gap_pct", "change_from_open", "atr_pct",
+         "volatility_w", "volatility_m",
+         "at_20d_high", "at_20d_low", "at_52w_high", "at_52w_low",
+         "off_52w_high", "off_52w_low", "at_all_time_high",
+         "perf_week", "perf_month", "perf_quarter", "perf_half",
+         "perf_year", "perf_ytd")
     }
     if bars is None or bars.empty or "close" not in bars:
         return out
@@ -113,6 +119,7 @@ def technicals(bars: pd.DataFrame,
     if benchmark is not None and len(close) >= 60:
         out["beta"] = _beta(close, benchmark)
 
+    _extended(bars, out)
     return out
 
 
@@ -136,3 +143,90 @@ def _beta(close: pd.Series, benchmark: pd.Series,
         return None
     cov = float(joined.iloc[:, 0].cov(joined.iloc[:, 1]))
     return cov / var
+
+
+def _extended(bars: pd.DataFrame, out: Dict[str, Optional[float]]) -> None:
+    """The rest of the Finviz-shaped price fields, computed in place.
+
+    EVERY ONE OF THESE IS None WHEN THE HISTORY IS TOO SHORT.
+    A stock listed three months ago has no one-year performance, and the
+    tempting default — 0.0 — would put it in the middle of every performance
+    screen instead of out of one.
+    """
+    close = bars["close"].astype(float).dropna()
+    if close.empty:
+        return
+    price = float(close.iloc[-1])
+
+    # Gap: today's open against yesterday's close. Meaningless for crypto,
+    # which is why it never existed here; for equities it is one of the most
+    # watched numbers of the session, because the market was shut in between.
+    if "open" in bars and len(close) >= 2:
+        try:
+            op = float(bars["open"].astype(float).iloc[-1])
+            prev = float(close.iloc[-2])
+            if prev:
+                out["gap_pct"] = (op / prev - 1.0) * 100.0
+            if op:
+                out["change_from_open"] = (price / op - 1.0) * 100.0
+        except (TypeError, ValueError):
+            pass
+
+    if {"high", "low"} <= set(bars.columns) and len(bars) >= 15:
+        try:
+            from agent1.indicators import atr as _atr
+
+            a = _atr(bars["high"].astype(float), bars["low"].astype(float),
+                     close, 14).dropna()
+            # As a PERCENT of price, never in dollars: a $3 range means
+            # something completely different on a $10 stock and a $900 one.
+            if not a.empty and price:
+                out["atr_pct"] = float(a.iloc[-1]) / price * 100.0
+        except Exception:
+            pass
+
+    # Standard deviation of daily returns, in percent. NOT annualised —
+    # Finviz's is not either, and annualising silently would make every
+    # threshold anyone types wrong by about sixteen times.
+    rets = close.pct_change().dropna()
+    for key, n in (("volatility_w", 5), ("volatility_m", 21)):
+        if len(rets) >= n:
+            out[key] = float(rets.tail(n).std() * 100.0)
+
+    def extremes(window, hi_key, lo_key):
+        if len(close) < window:
+            return None, None
+        hi, lo = float(close.tail(window).max()), float(close.tail(window).min())
+        out[hi_key] = 1.0 if price >= hi else 0.0
+        out[lo_key] = 1.0 if price <= lo else 0.0
+        return hi, lo
+
+    extremes(20, "at_20d_high", "at_20d_low")
+    hi52, lo52 = extremes(252, "at_52w_high", "at_52w_low")
+    if hi52 and hi52 > 0:
+        # Positive means "below the high", which is how it reads out loud.
+        out["off_52w_high"] = (hi52 - price) / hi52 * 100.0
+    if lo52 and lo52 > 0:
+        out["off_52w_low"] = (price - lo52) / lo52 * 100.0
+
+    # "All time" within the history held — about ten years, not since listing.
+    # Said in the field help rather than implied by the name.
+    out["at_all_time_high"] = 1.0 if price >= float(close.max()) else 0.0
+
+    for key, n in (("perf_week", 5), ("perf_month", 21),
+                   ("perf_quarter", 63), ("perf_half", 126),
+                   ("perf_year", 252)):
+        if len(close) > n:
+            base = float(close.iloc[-(n + 1)])
+            if base:
+                out[key] = (price / base - 1.0) * 100.0
+
+    # Year to date needs the CALENDAR, not a bar count: 63 trading days is a
+    # quarter in March and nothing like year-to-date in November.
+    try:
+        year = close.index[-1].year
+        ytd = close[close.index >= f"{year}-01-01"]
+        if len(ytd) >= 2 and float(ytd.iloc[0]):
+            out["perf_ytd"] = (price / float(ytd.iloc[0]) - 1.0) * 100.0
+    except Exception:
+        pass

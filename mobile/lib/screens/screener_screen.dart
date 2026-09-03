@@ -28,6 +28,7 @@ library;
 import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
+import '../api/watchlist.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/patient_loader.dart';
@@ -60,10 +61,16 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
   String? _sortBy;
   final bool _descending = true;
 
+  /// Which results are already followed, so the button reads correctly on
+  /// first paint rather than flickering from Follow to Following.
+  Set<String> _following = const {};
+
   @override
   void initState() {
     super.initState();
     _loadCatalogue();
+    StockWatchlist.instance.load().then(
+        (l) => mounted ? setState(() => _following = l.toSet()) : null);
   }
 
   Future<void> _loadCatalogue() async {
@@ -152,6 +159,7 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
               style: Obsidian.body(color: Obsidian.outline, size: 12)),
           const SizedBox(height: 18),
           _presetBar(cat),
+          ..._droppedNote(cat),
           const SizedBox(height: 10),
           _filterSection(cat),
           const SizedBox(height: 22),
@@ -208,6 +216,100 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
     );
   }
 
+  /// What the active preset had to leave out, and why.
+  ///
+  /// Only shown when something WAS left out. A permanent disclaimer is
+  /// wallpaper; one that appears on the three presets it applies to is
+  /// information.
+  List<Widget> _droppedNote(ScreenerCatalogue cat) {
+    final p = _fromPreset == null
+        ? null
+        : cat.presets.where((x) => x.id == _fromPreset).firstOrNull;
+    if (p == null || p.dropped.isEmpty) return const [];
+    final byId = cat.byId;
+    final names =
+        p.dropped.map((f) => byId[f.field]?.label ?? f.field).join(', ');
+    return [
+      const SizedBox(height: 6),
+      InkWell(
+        onTap: () => _explainMissing(names),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.lock_outline_rounded,
+                size: 12, color: Obsidian.amber),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('Running without $names — tap to see why',
+                  style: Obsidian.body(color: Obsidian.amber, size: 10.5)),
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  /// The honest answer to "why can't you screen on this".
+  ///
+  /// Everything else in this app comes from sources that are free AND
+  /// redistributable — prices from Alpaca, filings from the SEC, short
+  /// interest from FINRA. Forward estimates are the one category that is
+  /// neither: they are opinions collected from banks and sold, and there is
+  /// no public filing to derive them from.
+  Future<void> _explainMissing(String names) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(Obsidian.containerPadding),
+          child: GlassPanel(
+            active: true,
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('WHY THIS CRITERION IS MISSING',
+                    style: Obsidian.labelSm(size: 11)),
+                const SizedBox(height: 12),
+                Text(names,
+                    style: Obsidian.body(size: 13.5, color: Obsidian.amber)),
+                const SizedBox(height: 12),
+                Text(
+                    'These are analyst estimates — what banks think a company '
+                    'will earn next year. They are opinions that firms collect '
+                    'and sell, not facts filed with a regulator, so unlike '
+                    'every other field here there is no public source to '
+                    'compute them from.\n\n'
+                    'Everything else in this screener is free and legal to '
+                    'show you: prices from Alpaca, company figures from SEC '
+                    'filings, short interest from FINRA.\n\n'
+                    'Unlocking these needs a paid data subscription — around '
+                    '\$60 a month for the data itself, plus a separate '
+                    'licence to display it to subscribers, which providers '
+                    'quote individually and do not publish.\n\n'
+                    'Until then the screen runs without them rather than '
+                    'returning nothing.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 12)),
+                const SizedBox(height: 8),
+                Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text('Close',
+                        style: Obsidian.body(color: Obsidian.primary)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _pickPreset(ScreenerCatalogue cat) async {
     final picked = await showModalBottomSheet<ScreenerPreset>(
       context: context,
@@ -235,14 +337,17 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
               color: Colors.white.withValues(alpha: 0.08)),
         ),
         const SizedBox(width: 10),
+        // MATCHED ONLY.
+        //
+        // The unjudged count is gone from here on purpose: a screen exists to
+        // return the stocks that meet every criterion, and a second number
+        // beside it saying "and these nearly did" is an invitation to treat
+        // near-misses as results. The presets no longer carry criteria that
+        // cannot be judged, so a near-miss now means a genuinely missing
+        // filing, which is not a match.
         if (r != null)
-          Text('${r.matched} matched',
+          Text('${r.matched} of ${r.scanned}',
               style: Obsidian.labelSm(size: 10, color: Obsidian.green)),
-        if (r != null && r.unjudged > 0) ...[
-          const SizedBox(width: 8),
-          Text('${r.unjudged} unjudged',
-              style: Obsidian.labelSm(size: 10, color: Obsidian.amber)),
-        ],
         if (_busy) ...[
           const SizedBox(width: 8),
           const SizedBox(
@@ -468,6 +573,10 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
     // one list and there is no telling where the controls end. A result is a
     // solid card with a left edge in the verdict's colour: green when
     // everything was judged and passed, amber when something could not be.
+    // Every row is a full match now — `includeUnknown` is false — so the
+    // edge is always the pass colour. Kept as an expression rather than a
+    // constant because a hand-built filter on a field with gaps can still
+    // produce one, and that row should still look different.
     final clean = row.unknown.isEmpty;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -490,9 +599,26 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(row.symbol,
-                  style: Obsidian.dataTable(size: 15, w: FontWeight.w700)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(row.symbol,
+                      style:
+                          Obsidian.dataTable(size: 15, w: FontWeight.w700)),
+                  if (row.name.isNotEmpty)
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 170),
+                      child: Text(row.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Obsidian.body(
+                              color: Obsidian.outlineVariant, size: 10.5)),
+                    ),
+                ],
+              ),
               const SizedBox(width: 8),
               if (row.unknown.isNotEmpty)
                 Container(
@@ -501,7 +627,7 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
                   decoration: BoxDecoration(
                       color: Obsidian.amber.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(5)),
-                  child: Text('${row.unknown.length} unjudged',
+                  child: Text('${row.unknown.length} no data',
                       style:
                           Obsidian.labelSm(size: 8.5, color: Obsidian.amber)),
                 ),
@@ -524,7 +650,7 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
           if (row.unknown.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
-                'Cannot judge: ${row.unknown.map((u) => byId[u]?.label ?? u).join(', ')}',
+                'No data: ${row.unknown.map((u) => byId[u]?.label ?? u).join(', ')}',
                 style: Obsidian.body(color: Obsidian.amber, size: 10.5)),
           ],
           const SizedBox(height: 8),
@@ -535,6 +661,11 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
                       Obsidian.labelSm(size: 9.5, color: Obsidian.primary)),
               const Icon(Icons.chevron_right_rounded,
                   size: 14, color: Obsidian.primary),
+              const Spacer(),
+              // Following is the point of finding it. Without this the only
+              // route from a screener result to your watchlist was
+              // remembering the ticker and typing it into another tab.
+              _followButton(row.symbol),
             ],
           ),
             ],
@@ -557,6 +688,46 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
                   color: unknown ? Obsidian.amber : null)),
         ],
       );
+
+  Widget _followButton(String symbol) {
+    final followed = _following.contains(symbol);
+    return InkWell(
+      onTap: () => _toggleFollow(symbol),
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: (followed ? Obsidian.green : Obsidian.primary)
+              .withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(followed ? Icons.check_rounded : Icons.add_rounded,
+                size: 12,
+                color: followed ? Obsidian.green : Obsidian.primary),
+            const SizedBox(width: 4),
+            Text(followed ? 'Following' : 'Follow',
+                style: Obsidian.labelSm(
+                    size: 8.5,
+                    color: followed ? Obsidian.green : Obsidian.primary)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleFollow(String symbol) async {
+    if (_following.contains(symbol)) {
+      await StockWatchlist.instance.remove(symbol);
+    } else {
+      await StockWatchlist.instance.add(symbol);
+    }
+    final list = await StockWatchlist.instance.load();
+    if (!mounted) return;
+    setState(() => _following = list.toSet());
+  }
 
   /// Opens the stock's own page, not a browser.
   ///
@@ -719,7 +890,7 @@ class _PresetSheet extends StatelessWidget {
                           ),
                           // The one thing worth saying about a preset before
                           // you pick it: whether we can actually judge it.
-                          if (p.unavailable.isNotEmpty)
+                          if (p.dropped.isNotEmpty)
                             Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 6, vertical: 2),
@@ -727,7 +898,8 @@ class _PresetSheet extends StatelessWidget {
                                   color: Obsidian.amber
                                       .withValues(alpha: 0.14),
                                   borderRadius: BorderRadius.circular(5)),
-                              child: Text('${p.unavailable.length} unjudged',
+                              child: Text(
+                                  '−${p.dropped.length} criteria',
                                   style: Obsidian.labelSm(
                                       size: 8.5, color: Obsidian.amber)),
                             ),

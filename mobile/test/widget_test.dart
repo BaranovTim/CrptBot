@@ -17,6 +17,7 @@ import 'package:tradingbot_app/widgets/patient_loader.dart';
 import 'package:tradingbot_app/api/alert_feed.dart';
 import 'package:tradingbot_app/api/market_mode.dart';
 import 'package:tradingbot_app/widgets/frosted_nav.dart';
+import 'package:tradingbot_app/screens/dashboard_screen.dart';
 import 'package:flutter/material.dart';
 
 void main() {
@@ -660,5 +661,51 @@ void main() {
     // rather than leaving you on a page with nothing to show.
     expect(FrostedNav.stocksOnly, contains(NavTab.screener));
     expect(FrostedNav.stocksOnly, isNot(contains(NavTab.dashboard)));
+  });
+
+  test('the countdown never contradicts the date printed beside it', () {
+    // THE BUG THIS PINS. `Duration.inDays` truncates, so an event 3 days and
+    // 20 hours away rendered as "in 3 days" directly above a date four
+    // calendar days later. Two halves of one panel disagreeing, with the
+    // smaller number the one people act on.
+    String c(Duration d) => DashboardScreen.countdown(d);
+
+    expect(c(const Duration(days: 3, hours: 20)), 'in 3d 20h');
+    expect(c(const Duration(days: 1, hours: 13, minutes: 44)), 'in 1d 13h');
+    // exactly on a day boundary still says the hours, so the format never
+    // changes shape underneath you as it counts down
+    expect(c(const Duration(days: 2)), 'in 2d 0h');
+
+    // under a day it switches to hours and minutes
+    expect(c(const Duration(hours: 5, minutes: 20)), 'in 5h 20m');
+    expect(c(const Duration(hours: 47, minutes: 59)), 'in 1d 23h');
+    // and under an hour, to minutes
+    expect(c(const Duration(minutes: 45)), 'in 45 min');
+    expect(c(const Duration(minutes: 1)), 'in 1 min');
+    // a release already under way is not "in -3 minutes"
+    expect(c(const Duration(minutes: -3)), 'now');
+  });
+
+  test('a stock drag lands where it was dropped, like the crypto list', () async {
+    // I wrote this one WITH the off-by-one correction that `onReorderItem`
+    // already applies, so every downward drag would have landed a row short
+    // in storage while looking right on screen — until the next load snapped
+    // it back. The crypto version carries a "do not add a correction here"
+    // comment for exactly this reason.
+    SharedPreferences.setMockInitialValues({});
+    final w = StockWatchlist.instance;
+    for (final s in ['AAPL', 'NVDA', 'META', 'GOOGL']) {
+      await w.add(s);
+    }
+    final start = await w.load();
+    expect(start, ['AAPL', 'NVDA', 'META', 'GOOGL']);
+
+    // post-removal coordinates: move AAPL to index 2
+    final moved = await w.reorder(0, 2);
+    expect(moved[2], 'AAPL', reason: 'landed short of where it was dropped');
+    expect(moved.toSet(), start.toSet(), reason: 'reorder lost a symbol');
+
+    final back = await w.reorder(2, 0);
+    expect(back, start);
   });
 }

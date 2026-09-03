@@ -44,6 +44,10 @@ class StubService:
 
     def __init__(self, action="FLAT", live=None, whales=None, news=None):
         self.action, self._live = action, live
+        # Steerable, because "one signal per bar" means a second transition
+        # inside the same bar is correctly suppressed — a test that wants to
+        # see one has to move the clock.
+        self._bar = "2026-08-28T12:59:59.999000+00:00"
         self._whales, self._news = whales or [], news or []
         self.symbol = "BTCUSDT"
         self.interval = "1h"
@@ -60,7 +64,7 @@ class StubService:
     def dashboard(self, symbol=None, interval=None):
         return {
             "symbol": "BTCUSDT",
-            "last_closed_bar": "2026-08-28T12:59:59.999000+00:00",
+            "last_closed_bar": self._bar,
             "recommendation": {"action": self.action, "tone": "flat",
                                "detail": "d", "ev": 0.1, "size_pct": 1.0,
                                "window_ends": "x"},
@@ -169,14 +173,19 @@ def test_returning_to_flat_does_not_alert():
     return True
 
 
-def test_a_spike_alerts_once_per_bar():
+def test_a_spike_no_longer_interrupts_anyone():
+    """Deliberately removed.
+
+    "It moved 2% in three minutes" is a state of the market, not a change in
+    what to do about it, and it fired many times over for every call that
+    actually changed. The move is still on the dashboard; it just does not
+    buzz a phone.
+    """
     svc = StubService(live=None)
-    e = _engine(svc)               # prime with a quiet bar first
+    e = _engine(svc)
     svc._live = {"beyond_spike_threshold": True,
                  "move_pct": -2.0, "move_atr": -1.5}
-    first = e.refresh()
-    assert [a.kind for a in first] == ["spike"], first
-    assert e.refresh() == [], "the same spike alerted twice in one bar"
+    assert e.refresh() == [], "a spike still produced an alert"
     return True
 
 
@@ -201,17 +210,21 @@ def test_a_mechanical_filing_never_alerts():
     return True
 
 
-def test_a_filing_carries_the_TRADE_date_not_the_filing_date():
-    """Otherwise a five-day-old trade reads as breaking news."""
+def test_a_filing_is_context_now_and_still_carries_the_TRADE_date():
+    """Filings no longer notify on their own — they ride along with the next
+    action change. The trade date still matters: a five-day-old trade offered
+    as context for a call made today would imply a freshness it does not have.
+    """
     svc = StubService(whales=[_whale(traded_days_ago=4)])
     e = AlertEngine(svc, state_path=_state_path())
     e._calendar = lambda: []
-    a = e._whales()[0]
-    age_days = (NOW - a.at).days
-    assert age_days >= 3, f"alert timestamped {age_days}d old, expected ~4"
-    assert "disclosed_at" in a.extra, "the disclosure time was dropped"
-    assert a.extra["disclosed_at"] != a.at.isoformat(), (
-        "trade time and disclosure time collapsed into one")
+
+    assert e._whales() == [], "a filing produced a standalone alert"
+    assert len(e._context) == 1, e._context
+    entry = e._context[0]
+    assert entry["kind"] == "whale"
+    age_days = (NOW - entry["at"]).days
+    assert age_days >= 3, f"context timestamped {age_days}d old, expected ~4"
     return True
 
 
@@ -351,38 +364,102 @@ def test_a_signal_alert_says_how_strong_it_is():
     return True
 
 
-def test_a_news_alert_carries_the_reading_the_phone_filters_on():
-    """The four news levels are decided on the phone, from these two fields.
-
-    Without them the app can only filter on a headline string, which means it
-    cannot filter at all — and "only strong news" would silently mean "all
-    news" or "no news" depending on which way the guess fell.
-    """
+def test_news_is_context_and_carries_its_reading_into_the_text():
+    """A headline no longer interrupts anyone. Its BULL/BEAR reading rides
+    into the context line, so the one notification you do get says what was
+    happening rather than just that something was."""
     svc = StubService(news=[_story("Fed cuts rates", "BULL", "STRONG IMPACT")])
-    # NOT `_engine`, which primes: priming marks this item seen, and the
-    # probe would then correctly return nothing
     e = AlertEngine(svc, state_path=_state_path())
-    a = e._news()[0]
-    assert a.bias == "BULL"
-    assert a.impact == "STRONG IMPACT"
-    assert a.to_json()["bias"] == "BULL"
-    # a strong story earns a heads-up banner; an unreadable one does not
-    assert a.severity == "high"
+    e._calendar = lambda: []
+
+    assert e._news() == [], "a headline produced a standalone alert"
+    assert len(e._context) == 1, e._context
+    text = e._context[0]["text"]
+    assert "Fed cuts rates" in text
+    assert "BULL" in text and "STRONG IMPACT" in text, text
     return True
 
 
-def test_the_headline_is_the_title_not_the_words_news_released():
-    """A collapsed notification has room for one line. It should be the news.
-
-    The title used to be the literal string "News released" for every item,
-    so four of them in the shade said "News released" four times and nothing
-    else.
-    """
-    svc = StubService(news=[_story("Ireland bars crypto from tax scheme")])
+def test_an_unreadable_headline_does_not_get_a_fabricated_label():
+    svc = StubService(news=[_story("Something happened")])
     e = AlertEngine(svc, state_path=_state_path())
-    a = e._news()[0]
-    assert a.title == "Ireland bars crypto from tax scheme"
-    # and an unreadable story says so rather than implying a verdict
-    assert "no directional reading" in a.body
-    assert a.severity == "medium"
+    e._calendar = lambda: []
+    e._news()
+    assert "NO READING" not in e._context[0]["text"]
+    assert e._context[0]["text"] == "Something happened"
+    return True
+
+
+def test_every_transition_alerts_including_the_exit_to_flat():
+    """THE CHANGE THIS PINS.
+
+    The old rule returned early unless the new action was BUY or SELL, so
+    being told to CLOSE a position never notified — only being told to open
+    one. An exit is a decision too, and it is the one you most want to hear
+    about while you are holding something.
+    """
+    svc = StubService(action="FLAT")
+    e = _engine(svc)
+
+    svc.action = "BUY"
+    opened = e.refresh()
+    assert [a.kind for a in opened] == ["signal"], opened
+    assert "FLAT" in opened[0].title and "BUY" in opened[0].title
+    assert opened[0].severity == "high"
+
+    # and back out again — this used to be silent
+    svc.action = "FLAT"
+    svc._bar = "2026-08-28T13:59:59.999000+00:00"      # a new bar
+    closed = e.refresh()
+    assert [a.kind for a in closed] == ["signal"], closed
+    assert closed[0].extra["from"] == "BUY"
+    assert closed[0].extra["to"] == "FLAT"
+    # closing is worth telling you; it is not an emergency
+    assert closed[0].severity == "medium"
+    return True
+
+
+def test_a_steady_call_still_never_alerts():
+    svc = StubService(action="BUY")
+    e = _engine(svc)
+    for _ in range(5):
+        assert e.refresh() == [], "an unchanged call produced an alert"
+    return True
+
+
+def test_context_rides_along_and_never_claims_to_be_the_cause():
+    """News is not an input to the model — see the note at the top of
+    `train.py`. So the wording has to be temporal, not causal. Saying
+    "because of" would be inventing a mechanism that does not exist.
+    """
+    svc = StubService(action="FLAT",
+                      news=[_story("SEC approves spot ETF", "BULL",
+                                   "STRONG IMPACT")])
+    e = _engine(svc)
+    svc.action = "BUY"
+    fired = e.refresh()
+
+    assert len(fired) == 1, fired
+    body = fired[0].body
+    assert "Around the same time" in body, body
+    assert "SEC approves spot ETF" in body
+    for forbidden in ("because", "caused", "due to", "driven by"):
+        assert forbidden not in body.lower(), (forbidden, body)
+    return True
+
+
+def test_context_older_than_the_window_is_not_attached():
+    """A headline from last week is history, not context for a call made
+    today."""
+    import datetime as _dt
+
+    from api.alerts import CONTEXT_WINDOW
+
+    svc = StubService(action="FLAT")
+    e = _engine(svc)
+    e._context.append({"kind": "news", "text": "ancient news",
+                       "at": NOW - CONTEXT_WINDOW - _dt.timedelta(hours=1)})
+    svc.action = "SELL"
+    fired = e.refresh()
+    assert "ancient news" not in fired[0].body, fired[0].body
     return True

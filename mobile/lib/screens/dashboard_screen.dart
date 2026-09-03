@@ -39,6 +39,11 @@ import '../widgets/timeframe_bar.dart';
 import '../widgets/status_dot.dart';
 
 class DashboardScreen extends StatefulWidget {
+  /// Exposed for testing: the countdown format is the thing that was wrong,
+  /// so it is the thing worth asserting on directly rather than through a
+  /// rendered widget.
+  static String countdown(Duration away) => _DashboardScreenState.countdown(away);
+
   const DashboardScreen({
     super.key,
     required this.client,
@@ -229,14 +234,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final away = e.away;
     if (away.isNegative || away.inDays > 3) return const [];
 
-    final hours = away.inHours;
-    final when = hours >= 48
-        ? 'in ${away.inDays} days'
-        : hours >= 1
-            ? 'in ${hours}h ${away.inMinutes % 60}m'
-            : 'in ${away.inMinutes} min';
+    final when = countdown(away);
     // inside two hours it stops being a diary note and starts being a warning
-    final imminent = hours < 2;
+    final imminent = away.inHours < 2;
     final tone = imminent ? Obsidian.redSoft : Obsidian.primary;
 
     return [
@@ -290,6 +290,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       const SizedBox(height: Obsidian.gutter),
     ];
+  }
+
+  /// A countdown that cannot disagree with the date beside it.
+  ///
+  /// THE BUG THIS FIXES: `Duration.inDays` TRUNCATES. An event 3 days and 20
+  /// hours away rendered as "in 3 days" directly above a date four calendar
+  /// days later, so the two halves of the same panel contradicted each other
+  /// and the shorter number was the one people read.
+  ///
+  /// Days now always carry their hours, and nothing is rounded away.
+  static String countdown(Duration away) {
+    if (away.isNegative) return 'now';
+    final d = away.inDays;
+    final h = away.inHours % 24;
+    final m = away.inMinutes % 60;
+    if (d > 0) return 'in ${d}d ${h}h';
+    if (away.inHours > 0) return 'in ${away.inHours}h ${m}m';
+    return 'in $m min';
   }
 
   static String _localTime(DateTime utc) {
