@@ -613,17 +613,17 @@ class ScreenerField {
       case 'currency':
         return _compactMoney(v);
       case 'shares':
-        return _compact(v);
+        return compact(v);
       case 'ratio':
         return v.toStringAsFixed(2);
       case 'bool':
         return v == 0 ? 'no' : 'yes';
       default:
-        return v.abs() >= 1000 ? _compact(v) : v.toStringAsFixed(2);
+        return v.abs() >= 1000 ? compact(v) : v.toStringAsFixed(2);
     }
   }
 
-  static String _compact(num v) {
+  static String compact(num v) {
     final a = v.abs();
     if (a >= 1e12) return '${(v / 1e12).toStringAsFixed(2)}T';
     if (a >= 1e9) return '${(v / 1e9).toStringAsFixed(2)}B';
@@ -632,7 +632,7 @@ class ScreenerField {
     return v.toStringAsFixed(2);
   }
 
-  static String _compactMoney(num v) => '\$${_compact(v)}';
+  static String _compactMoney(num v) => '\$${compact(v)}';
 }
 
 class ScreenerFilter {
@@ -720,7 +720,8 @@ class ScreenerPreset {
 
 class ScreenerCatalogue {
   ScreenerCatalogue.fromJson(Map<String, dynamic> j)
-      : fields = ((j['fields'] as List?) ?? const [])
+      : market = j['market'] as String? ?? 'stocks',
+        fields = ((j['fields'] as List?) ?? const [])
             .map((e) => ScreenerField.fromJson(e as Map<String, dynamic>))
             .toList(),
         operators =
@@ -736,6 +737,9 @@ class ScreenerCatalogue {
             : DateTime.tryParse(j['built_at'] as String),
         symbols = (j['symbols'] as num?)?.toInt() ?? 0;
 
+  /// stocks or crypto. Two completely different field sets — a perpetual has
+  /// no earnings and a stock has no funding rate.
+  final String market;
   final List<ScreenerField> fields;
   final List<String> operators;
   final List<ScreenerPreset> presets;
@@ -772,6 +776,18 @@ class ScreenerRow {
     final v = metrics[id];
     return v is num ? v.toDouble() : null;
   }
+
+  /// Which timeframes this app has a fitted model for. Crypto rows carry it;
+  /// equity rows do not yet, so an empty list means "not known", not "no".
+  List<String> get trainedIntervals =>
+      ((metrics['trained_intervals'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList();
+
+  /// The short ticker for the medallion. BTCUSDT reads as BTC.
+  String get short => symbol.endsWith('USDT')
+      ? symbol.substring(0, symbol.length - 4)
+      : symbol;
 
   String get yahooUrl => 'https://finance.yahoo.com/quote/$symbol';
 }
@@ -971,4 +987,69 @@ class HorizonReport {
   final double historyYears;
   final String disclaimer;
   final List<HorizonRow> rows;
+}
+
+/// A queued or completed model fit, triggered from the app.
+class TrainJob {
+  TrainJob.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        symbol = j['symbol'] as String,
+        interval = j['interval'] as String,
+        state = j['state'] as String? ?? 'queued',
+        note = j['note'] as String? ?? '',
+        atChance = j['at_chance'] as bool? ?? false,
+        elapsed = (j['elapsed'] as num?)?.toInt(),
+        results = ((j['results'] as List?) ?? const [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+
+  final String id, symbol, interval, state, note;
+
+  /// The pipeline's own verdict, carried through rather than left in a log.
+  /// A fit that finds nothing is the most useful thing it can report.
+  final bool atChance;
+  final int? elapsed;
+  final List<Map<String, dynamic>> results;
+
+  bool get running => state == 'running';
+  bool get queued => state == 'queued';
+  bool get done => state == 'done';
+  bool get failed => state == 'failed';
+
+  /// The best AUC across horizons, for a one-line summary.
+  double? get bestAuc {
+    double? best;
+    for (final r in results) {
+      final a = (r['auc'] as num?)?.toDouble();
+      if (a != null && (best == null || a > best)) best = a;
+    }
+    return best;
+  }
+}
+
+class TrainStatus {
+  TrainStatus.fromJson(Map<String, dynamic> j)
+      : current = j['current'] == null
+            ? null
+            : TrainJob.fromJson(j['current'] as Map<String, dynamic>),
+        queued = ((j['queued'] as List?) ?? const [])
+            .map((e) => TrainJob.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        finished = ((j['finished'] as List?) ?? const [])
+            .map((e) => TrainJob.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        minutesPerFit = (j['minutes_per_fit'] as num?)?.toInt() ?? 40;
+
+  final TrainJob? current;
+  final List<TrainJob> queued, finished;
+
+  /// So the app can say "about eighty minutes" instead of "soon".
+  final int minutesPerFit;
+
+  TrainJob? jobFor(String symbol, String interval) {
+    for (final j in [?current, ...queued, ...finished]) {
+      if (j.symbol == symbol && j.interval == interval) return j;
+    }
+    return null;
+  }
 }

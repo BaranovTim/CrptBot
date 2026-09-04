@@ -54,6 +54,22 @@ log = logging.getLogger(__name__)
 # One engine per process: it holds the previous recommendation and the set of
 # filings already alerted on, which is what makes an alert a transition rather
 # than a repeated state.
+def _screener_table(market: str) -> dict:
+    """The right universe for the market. Two tables, never one merged.
+
+    A crypto perpetual has no P/E and a stock has no funding rate, so a
+    combined table would be half nulls in both directions and every filter
+    would need to know which kind of row it was looking at.
+    """
+    if market == "crypto":
+        from screener import crypto as _c
+
+        return _c.load()
+    from screener import universe as _u
+
+    return _u.load()
+
+
 _ENGINE = None
 
 
@@ -251,7 +267,8 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/screener", "/api/stock",
                                           "/api/stock/quotes",
                                           "/api/stock/search",
-                                          "/api/horizon"]})
+                                          "/api/horizon", "/api/train",
+                                          "/api/train/status"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -279,6 +296,10 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/dashboard":
                 self._send(svc.dashboard(symbol=opt("symbol"),
                                          interval=opt("interval")))
+            elif route == "/api/train/status":
+                from api.trainer import get_trainer
+
+                self._send(get_trainer().status(symbol=opt("symbol")))
             elif route == "/api/horizon":
                 from agent5.longhorizon import report
 
@@ -318,21 +339,22 @@ class Handler(BaseHTTPRequestHandler):
                     opt("q") or "", _u.load(), limit=arg("limit", 40))})
             elif route == "/api/screener/catalogue":
                 from screener.filters import catalogue
-                from screener import universe as _u
 
-                table = _u.load()
-                self._send({**catalogue(),
+                market = opt("market") or "stocks"
+                table = _screener_table(market)
+                self._send({**catalogue(market),
                             # so the page can say how old the table is rather
                             # than presenting an overnight snapshot as live
                             "built_at": table.get("built_at"),
                             "symbols": table.get("symbols", 0)})
             elif route == "/api/screener":
-                from screener import universe as _u
                 from screener.engine import run as _run
                 from screener.filters import (UNAVAILABLE as _UNAVAILABLE,
-                                              Filter, PRESETS_BY_ID)
+                                              Filter, presets_for)
 
-                table = _u.load()
+                market = opt("market") or "stocks"
+                PRESETS_BY_ID = presets_for(market)
+                table = _screener_table(market)
                 rows = table.get("rows") or {}
 
                 preset = opt("preset")
@@ -360,6 +382,7 @@ class Handler(BaseHTTPRequestHandler):
                               include_unknown=(opt("unknown") == "1"))
                 self._send({**result,
                             "built_at": table.get("built_at"),
+                            "market": market,
                             "preset": preset,
                             "filters": [f.to_json() for f in filters]})
             elif route == "/api/track":
@@ -489,6 +512,30 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         try:
+            if route == "/api/train":
+                # Gated like every other paid endpoint by `_gate` above, and
+                # deliberately NOT throttled by the login limiter: the queue
+                # itself is the limiter — one fit at a time, duplicates
+                # refused, MAX_QUEUE enforced.
+                from api.trainer import get_trainer
+
+                operator, user = self._principal()
+                r = get_trainer().submit(
+                    str(body.get("symbol") or ""),
+                    str(body.get("interval") or ""),
+                    market=str(body.get("market") or "crypto"),
+                    # The daily cap is per account, so it needs to know which
+                    # one. The operator key is one identity like any other.
+                    account="operator" if operator else (
+                        user.identifier if user else "anon"))
+                self._send(r, status=200 if r.get("ok") else 409)
+                return
+            if route == "/api/train/cancel":
+                from api.trainer import get_trainer
+
+                r = get_trainer().cancel(str(body.get("id") or ""))
+                self._send(r, status=200 if r.get("ok") else 409)
+                return
             if route == "/api/auth/register":
                 u = acc.register(ident, password)
                 throttle.forget(ip, ident)

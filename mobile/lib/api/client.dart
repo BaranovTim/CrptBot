@@ -224,8 +224,10 @@ class ApiClient {
   /// Fetched rather than hardcoded so a filter added on the server appears
   /// without shipping an APK, and an older build simply does not show it
   /// instead of rendering a control that does nothing.
-  Future<ScreenerCatalogue> screenerCatalogue() async =>
-      ScreenerCatalogue.fromJson(await _get('/api/screener/catalogue'));
+  Future<ScreenerCatalogue> screenerCatalogue(
+          {String market = 'stocks'}) async =>
+      ScreenerCatalogue.fromJson(
+          await _get('/api/screener/catalogue?market=$market'));
 
   /// Run a screen.
   ///
@@ -234,6 +236,7 @@ class ApiClient {
   /// is edited the app sends the filters instead, so what runs is always what
   /// is on screen.
   Future<ScreenerResult> screen({
+    String market = 'stocks',
     String? preset,
     List<ScreenerFilter>? filters,
     String? sortBy,
@@ -241,7 +244,7 @@ class ApiClient {
     bool includeUnknown = false,
     int limit = 200,
   }) async {
-    final q = StringBuffer('/api/screener?limit=$limit');
+    final q = StringBuffer('/api/screener?limit=$limit&market=$market');
     if (includeUnknown) q.write('&unknown=1');
     if (sortBy != null) q.write('&sort=$sortBy&dir=${descending ? 'desc' : 'asc'}');
     if (filters != null) {
@@ -281,6 +284,20 @@ class ApiClient {
           {String market = 'crypto'}) async =>
       HorizonReport.fromJson(
           await _get('/api/horizon?symbol=$symbol&market=$market'));
+
+  /// Queue a fit. Returns immediately — a fit takes about forty minutes, so
+  /// the app polls `trainStatus` rather than waiting on the socket.
+  Future<Map<String, dynamic>> train(String symbol, String interval,
+          {String market = 'crypto'}) =>
+      _post('/api/train',
+          {'symbol': symbol, 'interval': interval, 'market': market});
+
+  Future<TrainStatus> trainStatus({String? symbol}) async =>
+      TrainStatus.fromJson(await _get(
+          '/api/train/status${symbol == null ? '' : '?symbol=$symbol'}'));
+
+  Future<Map<String, dynamic>> cancelTraining(String id) =>
+      _post('/api/train/cancel', {'id': id});
 
   Future<Map<String, dynamic>> health() async => _get('/api/health');
 

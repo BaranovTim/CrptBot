@@ -21,6 +21,7 @@ import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/patient_loader.dart';
+import '../widgets/train_button.dart';
 import '../widgets/sparkline.dart';
 import '../widgets/timeframe_bar.dart';
 
@@ -385,22 +386,18 @@ class _StockScreenState extends State<StockScreen> {
             Text(d.untrainedNote,
                 textAlign: TextAlign.center,
                 style: Obsidian.body(color: Obsidian.outline, size: 12)),
-            if (d.trainCommand.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                  color: Obsidian.surfaceLowest.withValues(alpha: 0.8),
-                  borderRadius: BorderRadius.circular(Obsidian.rMd),
-                  border:
-                      Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                ),
-                child: SelectableText(d.trainCommand,
-                    style: Obsidian.dataTable(size: 11.5)),
-              ),
-            ],
+            const SizedBox(height: 18),
+            // The button, not the command. Copying a shell line into a
+            // terminal on another machine was never the point — it was just
+            // the only thing available before the server could queue its own
+            // work.
+            TrainButton(
+              client: widget.client,
+              symbol: d.symbol,
+              interval: d.interval,
+              market: 'stocks',
+              onTrained: _load,
+            ),
           ],
         ),
       );

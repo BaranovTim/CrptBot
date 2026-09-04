@@ -35,9 +35,15 @@ import '../widgets/patient_loader.dart';
 import 'stock_screen.dart';
 
 class ScreenerScreen extends StatefulWidget {
-  const ScreenerScreen({super.key, required this.client});
+  const ScreenerScreen({super.key, required this.client,
+    this.market = 'stocks'});
 
   final ApiClient client;
+
+  /// stocks or crypto. Two field sets and two preset sets, because a
+  /// perpetual has no earnings and a stock has no funding rate — see
+  /// `filters.py`. Changing it reloads everything.
+  final String market;
 
   @override
   State<ScreenerScreen> createState() => _ScreenerScreenState();
@@ -73,9 +79,27 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
         (l) => mounted ? setState(() => _following = l.toSet()) : null);
   }
 
+  @override
+  void didUpdateWidget(covariant ScreenerScreen old) {
+    super.didUpdateWidget(old);
+    if (old.market != widget.market) {
+      // A crypto filter cannot survive into a stocks screen: the field does
+      // not exist there. Cleared rather than translated.
+      setState(() {
+        _cat = null;
+        _result = null;
+        _filters.clear();
+        _fromPreset = null;
+        _waitingSince = DateTime.now();
+      });
+      _loadCatalogue();
+    }
+  }
+
   Future<void> _loadCatalogue() async {
     try {
-      final c = await widget.client.screenerCatalogue();
+      final c =
+          await widget.client.screenerCatalogue(market: widget.market);
       if (!mounted) return;
       setState(() {
         _cat = c;
@@ -99,6 +123,7 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
     setState(() => _busy = true);
     try {
       final r = await widget.client.screen(
+        market: widget.market,
         // Once anything has been edited the preset name is gone, so what runs
         // is exactly the list on screen.
         preset: _filters.isEmpty ? _fromPreset : null,
@@ -153,11 +178,8 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
         padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
             Obsidian.containerPadding, Obsidian.navClearance + 24),
         children: [
-          Text('Screener', style: Obsidian.displayLg()),
-          const SizedBox(height: 4),
-          Text(_subtitle(cat),
-              style: Obsidian.body(color: Obsidian.outline, size: 12)),
-          const SizedBox(height: 18),
+          _title(cat),
+          const SizedBox(height: 16),
           _presetBar(cat),
           ..._droppedNote(cat),
           const SizedBox(height: 10),
@@ -168,6 +190,50 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
           ..._results(cat),
         ],
       ),
+    );
+  }
+
+  /// The header from the design: title, PRO badge, subtitle.
+  Widget _title(ScreenerCatalogue cat) {
+    final crypto = widget.market == 'crypto';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(crypto ? 'Crypto Screener' : 'Stock Screener',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Obsidian.displayLg().copyWith(fontSize: 30)),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Obsidian.green.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: Obsidian.green.withValues(alpha: 0.45)),
+                    ),
+                    child: Text('PRO',
+                        style: Obsidian.labelSm(
+                            size: 9.5, color: Obsidian.green)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Text('Multi-factor filter matrix · ${_subtitle(cat)}',
+                  style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -361,14 +427,27 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
   }
 
   // ------------------------------------------------------------- filters
-  Widget _filterSection(ScreenerCatalogue cat) => GlassPanel(
-        padding: const EdgeInsets.all(16),
+  //
+  // THE CRITERIA MATRIX, from the design: a grid of labelled cells rather
+  // than a list of rows. Each cell names its field and shows the condition,
+  // and an ACTIVE cell is outlined in mint with a dot — so the ones doing
+  // work are visible without reading every value.
+  Widget _filterSection(ScreenerCatalogue cat) => Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Obsidian.surfaceLow.withValues(alpha: 0.8),
+          borderRadius: BorderRadius.circular(Obsidian.rLg),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Text('FILTERS', style: Obsidian.labelSm(size: 10.5)),
+                const Icon(Icons.filter_alt_rounded,
+                    size: 15, color: Obsidian.green),
+                const SizedBox(width: 8),
+                Text('ACTIVE CRITERIA', style: Obsidian.labelSm(size: 10.5)),
                 const Spacer(),
                 if (_filters.isNotEmpty)
                   InkWell(
@@ -379,31 +458,77 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
                       });
                       _run();
                     },
-                    child: Text('Clear',
-                        style: Obsidian.labelSm(
-                            size: 10, color: Obsidian.redSoft)),
+                    child: Text('Reset All',
+                        style: Obsidian.body(
+                                color: Obsidian.outline, size: 11)
+                            .copyWith(
+                                decoration: TextDecoration.underline,
+                                decorationColor: Obsidian.outlineVariant)),
                   ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             if (_filters.isEmpty)
-              Text('No filters — every stock matches. Pick a recommendation '
-                  'above, or add one.',
+              Text('Nothing filtered — every ${widget.market == 'crypto'
+                      ? 'pair' : 'stock'} matches. Pick a recommendation '
+                  'above, or add a criterion.',
                   style: Obsidian.body(color: Obsidian.outline, size: 11.5))
             else
-              for (var i = 0; i < _filters.length; i++)
-                _filterRow(cat, i),
-            const SizedBox(height: 10),
-            InkWell(
-              onTap: () => _addFilter(cat),
+              // Two columns, as in the design. An odd count leaves the last
+              // cell full width rather than a gap beside it.
+              Column(
+                children: [
+                  for (var i = 0; i < _filters.length; i += 2)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(child: _criterion(cat, i)),
+                            if (i + 1 < _filters.length) ...[
+                              const SizedBox(width: 8),
+                              Expanded(child: _criterion(cat, i + 1)),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            const SizedBox(height: 4),
+            Divider(color: Colors.white.withValues(alpha: 0.06), height: 18),
+            // The applied bar: every criterion as a removable chip, scrolling
+            // sideways, with Add Filter at the end.
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  const Icon(Icons.add_rounded,
-                      size: 16, color: Obsidian.primary),
-                  const SizedBox(width: 6),
-                  Text('Add a filter',
-                      style: Obsidian.body(
-                          color: Obsidian.primary, size: 12.5)),
+                  Text('APPLIED:',
+                      style: Obsidian.labelSm(
+                          size: 9, color: Obsidian.outlineVariant)),
+                  const SizedBox(width: 8),
+                  for (var i = 0; i < _filters.length; i++) ...[
+                    _appliedChip(cat, i),
+                    const SizedBox(width: 6),
+                  ],
+                  InkWell(
+                    onTap: () => _addFilter(cat),
+                    borderRadius: BorderRadius.circular(20),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Obsidian.primary.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color: Obsidian.primary.withValues(alpha: 0.35)),
+                      ),
+                      child: Text('+ Add Filter',
+                          style: Obsidian.labelSm(
+                              size: 9.5, color: Obsidian.primary)),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -411,74 +536,208 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
         ),
       );
 
-  Widget _filterRow(ScreenerCatalogue cat, int i) {
+  /// One cell of the matrix. Tapping it opens the editor for that criterion.
+  Widget _criterion(ScreenerCatalogue cat, int i) {
     final f = _filters[i];
     final field = cat.byId[f.field];
-    final boolish = f.op == 'is_true' || f.op == 'is_false';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 5,
-            child: Text(field?.label ?? f.field,
-                style: Obsidian.body(
-                    size: 12.5,
-                    color: (field?.unavailable ?? false)
-                        ? Obsidian.amber
-                        : null)),
-          ),
-          Expanded(
-            flex: 3,
-            child: DropdownButton<String>(
-              value: f.op,
-              isDense: true,
-              isExpanded: true,
-              underline: const SizedBox.shrink(),
-              dropdownColor: Obsidian.surfaceHigh,
-              style: Obsidian.dataTable(size: 11.5),
-              items: [
-                for (final op in _opsFor(field))
-                  DropdownMenuItem(value: op, child: Text(_opLabel(op))),
+    return InkWell(
+      onTap: () => _editCriterion(cat, i),
+      borderRadius: BorderRadius.circular(Obsidian.rMd),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+        decoration: BoxDecoration(
+          color: Obsidian.surfaceLowest.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(Obsidian.rMd),
+          border: Border.all(color: Obsidian.green.withValues(alpha: 0.28)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                      (field?.label ?? f.field).toUpperCase(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Obsidian.labelSm(
+                          size: 8.5, color: Obsidian.green)),
+                ),
+                Container(
+                  width: 5,
+                  height: 5,
+                  decoration: const BoxDecoration(
+                      color: Obsidian.green, shape: BoxShape.circle),
+                ),
               ],
-              onChanged: (v) {
-                if (v == null) return;
-                setState(() => f.op = v);
-                _edited();
-                _run();
-              },
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 3,
-            child: boolish
-                ? const SizedBox.shrink()
-                : TextFormField(
-                    initialValue: _trim(f.value),
-                    keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true, signed: true),
-                    style: Obsidian.dataTable(size: 12.5),
-                    decoration: const InputDecoration(
-                        isDense: true, border: UnderlineInputBorder()),
-                    onFieldSubmitted: (v) {
-                      setState(() => f.value = double.tryParse(v));
-                      _edited();
-                      _run();
-                    },
-                  ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close_rounded, size: 15),
-            color: Obsidian.outline,
-            visualDensity: VisualDensity.compact,
-            onPressed: () {
+            const SizedBox(height: 5),
+            Text(_condition(f, field),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Obsidian.body(size: 12.5, color: Obsidian.onSurface)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _condition(ScreenerFilter f, ScreenerField? field) {
+    switch (f.op) {
+      case 'is_true':
+        return field?.id.startsWith('above_') ?? false ? 'Above' : 'Yes';
+      case 'is_false':
+        return field?.id.startsWith('above_') ?? false ? 'Below' : 'No';
+      case 'between':
+        return '${field?.format(f.value)} – ${field?.format(f.value2)}';
+      case 'lt':
+        return 'Under ${field?.format(f.value)}';
+      case 'lte':
+        return 'At most ${field?.format(f.value)}';
+      case 'gte':
+        return 'At least ${field?.format(f.value)}';
+      default:
+        return 'Over ${field?.format(f.value)}';
+    }
+  }
+
+  Widget _appliedChip(ScreenerCatalogue cat, int i) {
+    final f = _filters[i];
+    final field = cat.byId[f.field];
+    return Container(
+      padding: const EdgeInsets.only(left: 10, right: 4, top: 4, bottom: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Obsidian.green.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(f.describe(field),
+              style: Obsidian.dataTable(size: 10.5, color: Obsidian.green)),
+          InkWell(
+            onTap: () {
               setState(() => _filters.removeAt(i));
               _edited();
               _run();
             },
+            customBorder: const CircleBorder(),
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(Icons.close_rounded,
+                  size: 11, color: Obsidian.outline),
+            ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Editing one criterion — operator and value — in a sheet rather than
+  /// inline. The matrix cell has room for the answer, not for the controls.
+  Future<void> _editCriterion(ScreenerCatalogue cat, int i) async {
+    final f = _filters[i];
+    final field = cat.byId[f.field];
+    final controller =
+        TextEditingController(text: _trim(f.value));
+    var op = f.op;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          top: false,
+          child: Padding(
+            padding: EdgeInsets.only(
+                left: Obsidian.containerPadding,
+                right: Obsidian.containerPadding,
+                top: 16,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 16),
+            child: GlassPanel(
+              active: true,
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text((field?.label ?? f.field).toUpperCase(),
+                      style: Obsidian.labelSm(size: 11)),
+                  if ((field?.help ?? '').isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(field!.help,
+                        style: Obsidian.body(
+                            color: Obsidian.outline, size: 11.5)),
+                  ],
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final o in _opsFor(field))
+                        ChoiceChip(
+                          label: Text(_opLabel(o),
+                              style: Obsidian.labelSm(size: 10)),
+                          selected: op == o,
+                          onSelected: (_) => setSheet(() => op = o),
+                          selectedColor:
+                              Obsidian.primary.withValues(alpha: 0.25),
+                          backgroundColor: Obsidian.surfaceHigh,
+                        ),
+                    ],
+                  ),
+                  if (op != 'is_true' && op != 'is_false') ...[
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true, signed: true),
+                      style: Obsidian.dataTable(size: 16),
+                      decoration: const InputDecoration(
+                          isDense: true, labelText: 'Value'),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          setState(() => _filters.removeAt(i));
+                          Navigator.of(ctx).pop();
+                          _edited();
+                          _run();
+                        },
+                        child: Text('Remove',
+                            style:
+                                Obsidian.body(color: Obsidian.redSoft)),
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        style: FilledButton.styleFrom(
+                            backgroundColor: Obsidian.primary,
+                            foregroundColor: Obsidian.onPrimary),
+                        onPressed: () {
+                          setState(() {
+                            f.op = op;
+                            f.value = double.tryParse(controller.text);
+                          });
+                          Navigator.of(ctx).pop();
+                          _edited();
+                          _run();
+                        },
+                        child: const Text('Apply'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -561,23 +820,15 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
 
   Widget _resultCard(ScreenerRow row, ScreenerCatalogue cat) {
     final byId = cat.byId;
-    // Whatever the filters are about, plus price — so the card always says
-    // something even with no filters set.
-    final shown = <String>{'price', ..._filters.map((f) => f.field)}
-        .where((id) => byId.containsKey(id))
-        .take(6)
-        .toList();
-    // DELIBERATELY NOT A GlassPanel.
-    //
-    // The filters above are glass; if the results were too, the two read as
-    // one list and there is no telling where the controls end. A result is a
-    // solid card with a left edge in the verdict's colour: green when
-    // everything was judged and passed, amber when something could not be.
-    // Every row is a full match now — `includeUnknown` is false — so the
-    // edge is always the pass colour. Kept as an expression rather than a
-    // constant because a hand-built filter on a field with gaps can still
-    // produce one, and that row should still look different.
-    final clean = row.unknown.isEmpty;
+    final change = row.metric('change_pct');
+    final up = (change ?? 0) >= 0;
+    final trained = row.trainedIntervals;
+    final rsi = row.metric('rsi14');
+    final vol = row.metric('quote_volume') ?? row.metric('avg_volume');
+
+    // A solid card with a verdict-coloured left edge — deliberately NOT the
+    // glass used by the controls above, so the eye can tell where the screen
+    // ends and the matches begin.
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
@@ -585,7 +836,8 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
         borderRadius: BorderRadius.circular(Obsidian.rMd),
         border: Border(
           left: BorderSide(
-              color: clean ? Obsidian.green : Obsidian.amber, width: 3),
+              color: row.unknown.isEmpty ? Obsidian.green : Obsidian.amber,
+              width: 3),
         ),
       ),
       child: Material(
@@ -594,100 +846,114 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
           onTap: () => _open(row),
           borderRadius: BorderRadius.circular(Obsidian.rMd),
           child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(row.symbol,
-                      style:
-                          Obsidian.dataTable(size: 15, w: FontWeight.w700)),
-                  if (row.name.isNotEmpty)
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 170),
-                      child: Text(row.name,
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+            child: Row(
+              children: [
+                // The ticker medallion from the design.
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Obsidian.surfaceLowest,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.10)),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                      row.short.length > 4
+                          ? row.short.substring(0, 4)
+                          : row.short,
+                      style: Obsidian.labelSm(
+                          size: 10, color: Obsidian.onSurfaceVariant)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                          widget.market == 'crypto'
+                              ? '${row.short} / USDT'
+                              : row.symbol,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Obsidian.body(
-                              color: Obsidian.outlineVariant, size: 10.5)),
-                    ),
-                ],
-              ),
-              const SizedBox(width: 8),
-              if (row.unknown.isNotEmpty)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                      color: Obsidian.amber.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(5)),
-                  child: Text('${row.unknown.length} no data',
-                      style:
-                          Obsidian.labelSm(size: 8.5, color: Obsidian.amber)),
+                          style: Obsidian.bodyLg()
+                              .copyWith(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          if (trained.isNotEmpty) ...[
+                            Container(
+                              width: 5,
+                              height: 5,
+                              decoration: const BoxDecoration(
+                                  color: Obsidian.green,
+                                  shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 5),
+                            Text('BOT TRAINED',
+                                style: Obsidian.labelSm(
+                                    size: 8.5, color: Obsidian.green)),
+                            const SizedBox(width: 8),
+                          ] else if (row.name.isNotEmpty) ...[
+                            Flexible(
+                              child: Text(row.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Obsidian.body(
+                                      color: Obsidian.outlineVariant,
+                                      size: 10.5)),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          if (rsi != null)
+                            Text('RSI ${rsi.toStringAsFixed(1)}',
+                                style: Obsidian.dataTable(
+                                    size: 10, color: Obsidian.outline)),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              const Spacer(),
-              Text(byId['price']?.format(row.metric('price')) ?? '—',
-                  style: Obsidian.dataTable(size: 14)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 12,
-            runSpacing: 6,
-            children: [
-              for (final id in shown)
-                if (id != 'price')
-                  _metric(byId[id]!, row.metric(id),
-                      row.unknown.contains(id)),
-            ],
-          ),
-          if (row.unknown.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-                'No data: ${row.unknown.map((u) => byId[u]?.label ?? u).join(', ')}',
-                style: Obsidian.body(color: Obsidian.amber, size: 10.5)),
-          ],
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Text('Open ${row.symbol}',
-                  style:
-                      Obsidian.labelSm(size: 9.5, color: Obsidian.primary)),
-              const Icon(Icons.chevron_right_rounded,
-                  size: 14, color: Obsidian.primary),
-              const Spacer(),
-              // Following is the point of finding it. Without this the only
-              // route from a screener result to your watchlist was
-              // remembering the ticker and typing it into another tab.
-              _followButton(row.symbol),
-            ],
-          ),
-            ],
-          ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(byId['price']?.format(row.metric('price')) ?? '—',
+                        style: Obsidian.dataTable(
+                            size: 14, w: FontWeight.w600)),
+                    const SizedBox(height: 3),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (change != null)
+                          Text(
+                              '${up ? '+' : ''}'
+                              '${change.toStringAsFixed(1)}%',
+                              style: Obsidian.dataTable(
+                                  size: 11,
+                                  color: up ? Obsidian.green : Obsidian.red)),
+                        if (vol != null) ...[
+                          const SizedBox(width: 6),
+                          Text('Vol ${ScreenerField.compact(vol)}',
+                              style: Obsidian.labelSm(
+                                  size: 8.5,
+                                  color: Obsidian.outlineVariant)),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    _followButton(row.symbol),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
-
-  Widget _metric(ScreenerField f, double? v, bool unknown) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(f.label.toUpperCase(), style: Obsidian.labelSm(size: 8.5)),
-          const SizedBox(height: 2),
-          Text(unknown ? '—' : f.format(v),
-              style: Obsidian.dataTable(
-                  size: 12.5,
-                  color: unknown ? Obsidian.amber : null)),
-        ],
-      );
 
   Widget _followButton(String symbol) {
     final followed = _following.contains(symbol);

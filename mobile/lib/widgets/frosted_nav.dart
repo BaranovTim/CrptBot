@@ -40,10 +40,11 @@ class FrostedNav extends StatelessWidget {
 
   /// Tabs that exist only in one market.
   ///
-  /// The screener is stocks-only for now: the crypto presets have not been
-  /// specified yet, and a screener with no filters defined for the market you
-  /// are in is worse than no tab at all.
-  static const stocksOnly = {NavTab.screener};
+  /// Empty now: the screener has its own field set and presets in BOTH
+  /// markets, so it no longer forces a switch. Kept rather than deleted
+  /// because the shell still asks, and a future one-market tab should have
+  /// somewhere to be declared.
+  static const stocksOnly = <NavTab>{};
 
   @override
   Widget build(BuildContext context) {

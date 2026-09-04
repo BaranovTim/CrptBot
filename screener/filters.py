@@ -369,13 +369,111 @@ PRESETS: Tuple[Preset, ...] = (
 PRESETS_BY_ID: Dict[str, Preset] = {p.id: p for p in PRESETS}
 
 
-def catalogue() -> dict:
+# ------------------------------------------------------------ crypto
+#
+# A SEPARATE SET, not the equity presets with the company fields removed.
+#
+# Half the equity criteria are category errors here: a perpetual future has
+# no earnings, no equity and no dividend, so "P/E under 20" is not a filter
+# that returns nothing — it is a question that cannot be asked. And crypto has
+# a criterion equities do not: whether this app has a fitted model for the
+# pair, which is the whole point of the screener existing inside this app.
+
+CRYPTO_FIELDS: Tuple[Field, ...] = (
+    Field("price", "Price", "Price & volume", CURRENCY),
+    Field("change_pct", "24h change", "Price & volume", PERCENT),
+    Field("quote_volume", "24h volume", "Price & volume", CURRENCY,
+          help="In dollars, not tokens. Base volume ranks a billion-supply "
+               "memecoin above Bitcoin."),
+    Field("rsi14", "RSI (14)", "Price & volume", NUMBER),
+    Field("above_sma20", "Price vs SMA20", "Price & volume", BOOL),
+    Field("above_sma50", "Price vs SMA50", "Price & volume", BOOL),
+    Field("above_sma200", "Price vs SMA200", "Price & volume", BOOL),
+    Field("at_50d_high", "At 50-day high", "Price & volume", BOOL),
+    Field("at_52w_high", "At 52-week high", "Price & volume", BOOL),
+    Field("off_52w_high", "Below 52-week high", "Price & volume", PERCENT),
+    Field("rel_volume", "Relative volume", "Price & volume", RATIO,
+          help="Today against its own 50-day average. A RATIO, not a count."),
+    Field("atr_pct", "Average true range", "Price & volume", PERCENT),
+    Field("volatility_m", "Volatility (month)", "Price & volume", PERCENT),
+    Field("beta", "Beta vs BTC", "Price & volume", RATIO,
+          help="Against BTC, not an equity index — in this market BTC is "
+               "the market."),
+    Field("perf_week", "Performance (week)", "Performance", PERCENT),
+    Field("perf_month", "Performance (month)", "Performance", PERCENT),
+    Field("perf_quarter", "Performance (quarter)", "Performance", PERCENT),
+    Field("perf_year", "Performance (year)", "Performance", PERCENT),
+    Field("trained", "Bot has a model", "This app", BOOL,
+          help="Whether ThusIldy has a fitted model for this pair on any "
+               "timeframe. Nothing else screens on this."),
+)
+
+CRYPTO_BY_ID: Dict[str, Field] = {f.id: f for f in CRYPTO_FIELDS}
+
+CRYPTO_PRESETS: Tuple[Preset, ...] = (
+    Preset("crypto_oversold", "Oversold bounce",
+           "Sold off hard, still liquid, turning up.",
+           [Filter("rsi14", LT, 35),
+            Filter("quote_volume", GT, 50e6),
+            Filter("change_pct", GT, 0),
+            Filter("rel_volume", GT, 1.5)]),
+
+    Preset("crypto_breakout", "Breakout momentum",
+           "Above every average and at a new high, on real volume.",
+           [Filter("above_sma20", IS_TRUE),
+            Filter("above_sma50", IS_TRUE),
+            Filter("above_sma200", IS_TRUE),
+            Filter("at_50d_high", IS_TRUE),
+            Filter("quote_volume", GT, 100e6)]),
+
+    Preset("crypto_confluence", "Top confluence",
+           "What the bot has a model for AND the chart agrees with.",
+           [Filter("trained", IS_TRUE),
+            Filter("above_sma200", IS_TRUE),
+            Filter("rsi14", LT, 70),
+            Filter("quote_volume", GT, 100e6)]),
+
+    Preset("crypto_dip", "Deep discount",
+           "Well off the highs but still trading.",
+           [Filter("off_52w_high", GT, 50),
+            Filter("quote_volume", GT, 50e6),
+            Filter("rsi14", LT, 45)]),
+
+    Preset("crypto_momentum", "Strong momentum",
+           "Outperforming over a month, not just today.",
+           [Filter("perf_month", GT, 20),
+            Filter("above_sma20", IS_TRUE),
+            Filter("quote_volume", GT, 100e6),
+            Filter("rsi14", LT, 75)]),
+
+    Preset("crypto_calm", "Low volatility majors",
+           "Large and comparatively quiet.",
+           [Filter("quote_volume", GT, 500e6),
+            Filter("volatility_m", LT, 4),
+            Filter("above_sma50", IS_TRUE)]),
+)
+
+CRYPTO_PRESETS_BY_ID: Dict[str, Preset] = {
+    p.id: p for p in CRYPTO_PRESETS}
+
+
+def catalogue(market: str = "stocks") -> dict:
     """Everything the app needs to draw the screener without hardcoding it."""
+    crypto = market == "crypto"
+    fields = CRYPTO_FIELDS if crypto else FIELDS
+    presets = CRYPTO_PRESETS if crypto else PRESETS
     return {
+        "market": market,
         "fields": [{"id": f.id, "label": f.label, "group": f.group,
                     "kind": f.kind, "needs": f.needs, "help": f.help}
-                   for f in FIELDS],
+                   for f in fields],
         "operators": [GT, GTE, LT, LTE, BETWEEN, IS_TRUE, IS_FALSE],
-        "presets": [p.to_json() for p in PRESETS],
-        "unavailable": list(UNAVAILABLE),
+        "presets": [p.to_json() for p in presets],
+        # Nothing in the crypto set needs analyst estimates — there are no
+        # analysts to estimate a perpetual's next-year earnings.
+        "unavailable": [] if crypto else list(UNAVAILABLE),
     }
+
+
+def presets_for(market: str) -> Dict[str, Preset]:
+    return CRYPTO_PRESETS_BY_ID if market == "crypto" else PRESETS_BY_ID

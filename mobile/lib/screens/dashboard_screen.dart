@@ -37,6 +37,7 @@ import '../widgets/indicator_sheet.dart';
 import '../widgets/patient_loader.dart';
 import '../widgets/sparkline.dart';
 import '../widgets/timeframe_bar.dart';
+import '../widgets/train_button.dart';
 import '../widgets/status_dot.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -1604,9 +1605,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 style: Obsidian.body(size: 13.5),
               ),
               const SizedBox(height: 18),
-              // The command, in place. This used to be a button into a whole
-              // Training tab; the tab is gone, and the only part of it anyone
-              // needed was this line.
+              TrainButton(
+                client: widget.client,
+                symbol: widget.symbol,
+                interval: widget.interval,
+                onTrained: _load,
+              ),
+              const SizedBox(height: 18),
+              // The command is kept underneath, for running it from a machine
+              // when the server is busy or unreachable.
               Container(
                 width: double.infinity,
                 padding:

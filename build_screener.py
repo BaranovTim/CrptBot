@@ -34,6 +34,8 @@ def main() -> int:
     ap.add_argument("--download-filings", action="store_true",
                     help="fetch SEC's bulk companyfacts.zip first (large, "
                          "and the company fields are all blank without it)")
+    ap.add_argument("--crypto", action="store_true",
+                    help="build the crypto table instead of the equity one")
     ap.add_argument("--filings-only", action="store_true",
                     help="re-join filings and short interest onto the table "
                          "already on disk, without re-fetching prices")
@@ -49,6 +51,17 @@ def main() -> int:
         except Exception as e:
             # A stale short interest file is far better than no table.
             print(f"  short interest refresh failed, using what is on disk: {e}")
+
+    if args.crypto:
+        from screener import crypto as _c
+
+        t0 = time.time()
+        rows = _c.build()
+        _c.save(rows)
+        trained = sum(1 for r in rows.values() if r.get("trained"))
+        print(f"\n  {len(rows):,} crypto pairs in {time.time() - t0:.0f}s "
+              f"({trained} with a fitted model)")
+        return 0
 
     if args.download_filings:
         from marketdata.edgar import download_bulk

@@ -258,23 +258,35 @@ def test_the_cost_drag_is_reported_and_flags_the_untradeable():
 
 
 # ------------------------------------------------------------ the universe
-def test_writes_touch_accounts_and_nothing_else():
-    """The read-only rule, narrowed rather than dropped.
+def test_writes_touch_accounts_billing_and_training_and_nothing_else():
+    """The read-only rule, narrowed a second time — deliberately.
 
-    This used to assert the handler had no verb but GET, because the whole
-    security argument was "a compromise yields what your terminal already
-    prints". Accounts changed that: sign-in has to write. So the line moved
-    to where it still means something —
+    It began as "the handler has no verb but GET", because the security
+    argument was that a compromise yields what your terminal already prints.
+    Accounts moved that line once: sign-in has to write.
 
-        MARKET DATA IS STILL READ-ONLY.
+    TRAINING MOVES IT AGAIN, and the new position is weaker, so it is written
+    down rather than assumed:
 
-    Nothing reachable by POST writes a bar, a model, a watchlist or a
-    training run. If a route that is not an account or billing operation
-    appears in `do_POST`, that argument needs rewriting again.
+        MARKET DATA IS STILL READ-ONLY. Nothing reachable by POST writes a
+        bar, a price, a watchlist or an account balance.
+
+        BUT A POST CAN NOW SPEND CPU. `/api/train` queues a forty-minute fit
+        on a single-core server. A compromised session cannot read anything
+        it could not read before, and cannot corrupt market data — but it CAN
+        make the box slow.
+
+        The mitigations are structural, not hopeful: one fit at a time,
+        duplicates refused, MAX_QUEUE, and MAX_PER_DAY per account. If those
+        are weakened, this paragraph is wrong.
+
+    Anything OUTSIDE these three families appearing in `do_POST` means the
+    argument needs rewriting a third time.
     """
     import inspect
 
     from api.server import Handler
+    from api.trainer import MAX_PER_DAY, MAX_QUEUE
 
     verbs = sorted(m for m in dir(Handler) if m.startswith("do_"))
     assert verbs == ["do_GET", "do_OPTIONS", "do_POST"], verbs
@@ -283,8 +295,13 @@ def test_writes_touch_accounts_and_nothing_else():
     routes = re.findall(r'route == "(/api/[^"]+)"', src)
     assert routes, "no routes found in do_POST"
     for r in routes:
-        assert r.startswith(("/api/auth/", "/api/billing/")), \
-            f"{r} writes something that is not an account"
+        assert r.startswith(("/api/auth/", "/api/billing/", "/api/train")), \
+            f"{r} writes something that is not an account, a payment or a fit"
+
+    # The limits the paragraph above depends on. If someone raises these to
+    # something that no longer bounds the damage, this fails and they read it.
+    assert MAX_QUEUE <= 16, MAX_QUEUE
+    assert MAX_PER_DAY <= 24, MAX_PER_DAY
     return True
 
 

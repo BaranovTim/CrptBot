@@ -372,7 +372,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                           setState(() => _interval = iv),
                     ),
                   NavTab.screener =>
-                    ScreenerScreen(client: widget.client),
+                    ScreenerScreen(client: widget.client, market: 'crypto'),
                   NavTab.news => NewsScreen(
                       client: widget.client, symbol: _symbol),
                   NavTab.market =>
@@ -422,9 +422,6 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           // rather than showing an empty page. Doing it silently would be
           // worse than not switching at all, so the top bar's toggle moves
           // visibly with it.
-          if (t == NavTab.screener && !MarketModeStore.instance.isStocks) {
-            MarketModeStore.instance.set(MarketMode.stocks);
-          }
           setState(() => _tab = t);
         },
       ),
@@ -493,7 +490,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   Widget _stocksBody() {
     switch (_tab) {
       case NavTab.screener:
-        return ScreenerScreen(client: widget.client);
+        return ScreenerScreen(client: widget.client, market: 'stocks');
       case NavTab.profile:
         return _entitled
             ? ProfileScreen(
@@ -674,10 +671,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               Text('$_symbol · $_interval',
                   style: Obsidian.labelSm(size: 11)),
             const SizedBox(width: 8),
-            // NOT on the screener: it is stocks-only, so the control would
-            // offer a market with nothing behind it. A switch that takes you
-            // somewhere empty is worse than no switch.
-            if (_tab != NavTab.screener) _marketSwitch(),
+            // Back on the screener now that crypto has one of its own. It was
+            // hidden here while the tab was stocks-only, because a switch
+            // that takes you somewhere empty is worse than no switch.
+            _marketSwitch(),
           ],
         ));
   }

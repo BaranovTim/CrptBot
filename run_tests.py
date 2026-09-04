@@ -40,6 +40,7 @@ MODULES = [
     "tests.test_technicals",
     "tests.test_screener",
     "tests.test_longhorizon",
+    "tests.test_trainer",
     "tests.test_monitor",
     "tests.test_whalefeed",
 ]

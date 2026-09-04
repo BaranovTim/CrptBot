@@ -656,11 +656,13 @@ void main() {
     await store.set(MarketMode.crypto);
   });
 
-  test('the screener tab is declared stocks-only', () {
-    // So the shell can move you off it when you switch back to crypto,
-    // rather than leaving you on a page with nothing to show.
-    expect(FrostedNav.stocksOnly, contains(NavTab.screener));
-    expect(FrostedNav.stocksOnly, isNot(contains(NavTab.dashboard)));
+  test('no tab forces a market switch any more', () {
+    // The screener WAS stocks-only, and selecting it flipped the market for
+    // you. It has its own field set and presets in both markets now — a
+    // perpetual has no P/E and a stock has no funding rate, so they are two
+    // catalogues rather than one filtered — and nothing should silently move
+    // you between markets.
+    expect(FrostedNav.stocksOnly, isEmpty);
   });
 
   test('the countdown never contradicts the date printed beside it', () {
