@@ -54,6 +54,39 @@ log = logging.getLogger(__name__)
 # One engine per process: it holds the previous recommendation and the set of
 # filings already alerted on, which is what makes an alert a transition rather
 # than a repeated state.
+def _equity_daily(symbol: str):
+    """Ten years of daily bars for one stock, however we can get them.
+
+    The training store first, because a trained symbol already has them on
+    disk and reading a file beats a round trip. Otherwise straight from
+    Alpaca — the long view is worth showing for a stock nobody has trained,
+    and requiring a fit first would make the panel appear only where it was
+    least needed.
+    """
+    from livefeed import BarStore
+
+    try:
+        bars = BarStore(symbol, "1d").load()
+        if bars is not None and len(bars) > 60:
+            return bars
+    except Exception:
+        pass
+
+    from datetime import datetime, timedelta, timezone
+
+    from marketdata.alpaca import Alpaca, AlpacaError
+
+    try:
+        client = Alpaca()
+        if not client.configured:
+            return None
+        start = datetime.now(timezone.utc) - timedelta(days=3650)
+        return client.bars([symbol], start=start).get(symbol.upper())
+    except AlpacaError as e:
+        log.warning("horizon %s: %s", symbol, e)
+        return None
+
+
 def _screener_table(market: str) -> dict:
     """The right universe for the market. Two tables, never one merged.
 
@@ -306,9 +339,7 @@ class Handler(BaseHTTPRequestHandler):
                 sym = (opt("symbol") or svc.symbol).upper()
                 market = opt("market") or "crypto"
                 if market == "stocks":
-                    from livefeed import BarStore
-
-                    bars = BarStore(sym, "1d").load()
+                    bars = _equity_daily(sym)
                 else:
                     bars = svc._bars(sym, "1d")
                 self._send(report(sym, bars))

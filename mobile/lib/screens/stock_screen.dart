@@ -24,6 +24,7 @@ import '../theme/liquid_obsidian.dart';
 import '../widgets/analysis_panels.dart';
 import '../widgets/article_sheet.dart';
 import '../widgets/glass.dart';
+import '../widgets/horizon_sheet.dart';
 import '../widgets/patient_loader.dart';
 import '../widgets/train_button.dart';
 import '../widgets/sparkline.dart';
@@ -225,6 +226,9 @@ class _StockScreenState extends State<StockScreen> {
         children: [
           _header(d, cat),
           const SizedBox(height: 14),
+          // ABOVE the chart. A filing is why the chart looks like it does —
+          // reading the shape first and the reason second is backwards.
+          ..._newsCard(),
           TimeframeBar(
             timeframes: [
               for (final iv in d.intervals)
@@ -252,7 +256,6 @@ class _StockScreenState extends State<StockScreen> {
           const SizedBox(height: Obsidian.gutter),
           _chartCard(d),
           const SizedBox(height: Obsidian.gutter),
-          ..._newsCard(),
           _recommendation(d),
           const SizedBox(height: Obsidian.gutter),
           // WHAT THE MODEL SAYS COMES FIRST, and when there is a model the
@@ -261,7 +264,7 @@ class _StockScreenState extends State<StockScreen> {
           // A trained stock's page is about the prediction; P/E and debt are
           // the context you check afterwards. Leading with six panels of
           // fundamentals buried the one number the page exists for.
-          ...(d.trained ? _predictions(d) : const <Widget>[]),
+          ...(d.trained ? _predictions(d) : _longViewOnly()),
           ..._metricGroups(d, cat, collapsed: d.trained),
           _footer(d),
         ],
@@ -485,6 +488,50 @@ class _StockScreenState extends State<StockScreen> {
         ),
       );
 
+  /// The long view for a stock with no model.
+  ///
+  /// It lives inside the indicator grid once one exists, but it is NOT a
+  /// model output — it is arithmetic over history — so gating it behind a fit
+  /// would hide it from exactly the stocks nobody has trained, which is most
+  /// of them.
+  List<Widget> _longViewOnly() => [
+        IndicatorGrid(
+          indicators: [_horizonTile()],
+          onTap: (_) => _openHorizon(),
+        ),
+        const SizedBox(height: Obsidian.gutter),
+      ];
+
+  Indicator _horizonTile() => Indicator.fromJson({
+        'key': 'horizon',
+        'label': 'THE LONG VIEW',
+        'value': '1M · 6M · 1Y',
+        'note': 'What history did over months, and how little of it there is',
+        'tone': null,
+      });
+
+  Future<void> _openHorizon() async {
+    HorizonReport? r;
+    try {
+      r = await widget.client.horizon(widget.symbol, market: 'stocks');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Obsidian.surfaceHigh,
+        content: Text('Could not load the long view: $e',
+            style: Obsidian.body()),
+      ));
+      return;
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => HorizonSheet(report: r!),
+    );
+  }
+
   /// Exactly the panels the crypto dashboard draws, from the same widgets.
   ///
   /// This was a bespoke "what the model is reading" list — a second rendering
@@ -493,7 +540,15 @@ class _StockScreenState extends State<StockScreen> {
   List<Widget> _predictions(StockDetail d) {
     final out = <Widget>[];
     if (d.indicators.isNotEmpty) {
-      out.add(IndicatorGrid(indicators: d.indicators));
+      out.add(IndicatorGrid(
+        // Same swap the crypto dashboard makes: the higher-timeframe
+        // structure tile is one rung up and says nothing about months, so
+        // that slot carries the long view instead.
+        indicators: d.indicators
+            .map((i) => i.key == 'htf' ? _horizonTile() : i)
+            .toList(),
+        onTap: (ind) => ind.key == 'horizon' ? _openHorizon() : null,
+      ));
       out.add(const SizedBox(height: Obsidian.gutter));
     }
     if (d.takeProfit != null || d.stopLoss != null) {
