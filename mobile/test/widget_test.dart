@@ -367,6 +367,7 @@ void main() {
     String interval = '1h',
     String bias = '',
     String impact = '',
+    String to = '',
     Duration age = Duration.zero,
   }) {
     final at = DateTime.now().toUtc().subtract(age);
@@ -385,7 +386,7 @@ void main() {
       'seq': at.millisecondsSinceEpoch,
       'at': at.toIso8601String(),
       'detected_at': at.toIso8601String(),
-      'extra': <String, String>{},
+      'extra': to.isEmpty ? <String, String>{} : {'to': to},
     });
   }
 
@@ -731,5 +732,48 @@ void main() {
     // handed to an API that would 400 on it
     await s.saveInterval('3h');
     expect(await s.lastInterval(), '1h');
+  });
+
+  test('an exit to FLAT is delivered at every sensitivity setting', () {
+    // THE BUG THIS PINS. A FLAT recommendation carries strength "" — there is
+    // no expected value to grade because nothing is being opened. Running it
+    // through the ENTRY-strength gate rejected every exit: the server sent
+    // them, the phone dropped them, and nothing anywhere recorded it.
+    //
+    // The exit is the alert you most want while you are holding something.
+    final exit = alert(strength: '', to: 'FLAT');
+    for (final setting in ['strong', 'medium', 'small']) {
+      expect(
+          selectDeliverable([exit],
+              sensitivity: setting, isMuted: nothingMuted),
+          hasLength(1),
+          reason: 'exit dropped at sensitivity "$setting"');
+    }
+    expect(exit.isExit, isTrue);
+  });
+
+  test('an entry is still graded, so the gate did not simply get removed', () {
+    // The fix must not become "deliver every signal": a weak ENTRY should
+    // still be withheld when the setting asks for strong ones.
+    final weakEntry = alert(strength: 'small', to: 'BUY');
+    expect(weakEntry.isExit, isFalse);
+    expect(
+        selectDeliverable([weakEntry],
+            sensitivity: 'strong', isMuted: nothingMuted),
+        isEmpty);
+    expect(
+        selectDeliverable([weakEntry],
+            sensitivity: 'small', isMuted: nothingMuted),
+        hasLength(1));
+  });
+
+  test('a muted pair silences its exits too', () {
+    // Exits bypass the STRENGTH gate, not every gate. Someone who silenced a
+    // coin does not want its exits either.
+    final exit = alert(strength: '', to: 'FLAT', symbol: 'ADAUSDT');
+    expect(
+        selectDeliverable([exit],
+            sensitivity: 'strong', isMuted: (s, i) => s == 'ADAUSDT'),
+        isEmpty);
   });
 }

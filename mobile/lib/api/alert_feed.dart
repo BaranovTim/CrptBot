@@ -113,7 +113,16 @@ List<Alert> selectDeliverable(
     //
     // An alert with no strength at all is not a signal (a filing, a headline,
     // a scheduled release) and is never gated by a signal setting.
-    if (a.kind == 'signal' && !clearsSensitivity(a.strength, sensitivity)) {
+    //
+    // NOR IS AN EXIT. "Close the position" carries no strength — there is no
+    // expected value to grade because nothing is being opened — so grading it
+    // by an ENTRY-strength setting rejected every single one. The server sent
+    // them and the phone threw them away without a trace, which is the worst
+    // possible place for that to happen: the exit is the alert you most want
+    // while you are holding something.
+    if (a.kind == 'signal' &&
+        !a.isExit &&
+        !clearsSensitivity(a.strength, sensitivity)) {
       continue;
     }
 

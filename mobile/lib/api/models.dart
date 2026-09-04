@@ -396,6 +396,15 @@ class Alert {
   /// weak to show while its notification was already on the lock screen.
   final String strength;
 
+  /// Is this the call going flat — an EXIT rather than an entry?
+  ///
+  /// An exit has no strength by definition: there is no expected value to
+  /// grade because there is no position being opened. So it must not be
+  /// filtered by a setting that grades entry strength, which is precisely
+  /// what happened — the server sent every exit and the phone dropped all of
+  /// them, silently, because `clearsSensitivity('')` is false.
+  bool get isExit => kind == 'signal' && extra['to'] == 'FLAT';
+
   /// For a news alert: BULL | BEAR | MIXED | NO READING, and
   /// STRONG IMPACT | MEDIUM IMPACT | ALMOST NO IMPACT | NO READING.
   ///
