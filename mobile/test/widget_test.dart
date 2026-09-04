@@ -11,6 +11,7 @@ import 'package:tradingbot_app/api/models.dart';
 import 'dart:convert';
 
 import 'package:tradingbot_app/api/muted.dart';
+import 'package:tradingbot_app/api/settings.dart';
 import 'package:tradingbot_app/api/watchlist.dart';
 import 'package:tradingbot_app/main.dart';
 import 'package:tradingbot_app/widgets/patient_loader.dart';
@@ -709,5 +710,26 @@ void main() {
 
     final back = await w.reorder(2, 0);
     expect(back, start);
+  });
+
+  test('the timeframe is remembered across launches and across markets', () async {
+    // Opening a stock always landed on 1d regardless of what you had been
+    // reading a moment earlier on a coin. The timeframe is a question you
+    // are asking — "how far ahead am I looking" — not a property of the
+    // instrument, so it should not reset when you cross markets.
+    SharedPreferences.setMockInitialValues({});
+    final s = Settings.instance;
+
+    // a sensible default before anything is chosen: 1h is the only timeframe
+    // whose models survived the fold-spread guard
+    expect(await s.lastInterval(), '1h');
+
+    await s.saveInterval('4h');
+    expect(await s.lastInterval(), '4h');
+
+    // a value that is not a real timeframe falls back rather than being
+    // handed to an API that would 400 on it
+    await s.saveInterval('3h');
+    expect(await s.lastInterval(), '1h');
   });
 }

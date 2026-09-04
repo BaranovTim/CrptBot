@@ -31,6 +31,7 @@ import '../api/models.dart';
 import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/article_sheet.dart';
+import '../widgets/analysis_panels.dart';
 import '../widgets/glass.dart';
 import '../widgets/horizon_sheet.dart';
 import '../widgets/indicator_sheet.dart';
@@ -1167,55 +1168,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // ------------------------------------------------------------ indicators
   Widget _indicatorGrid(Dashboard d) {
-    // THE HTF TILE IS REPLACED, NOT REMOVED.
+    // THE HTF TILE IS REPLACED, NOT REMOVED. It read "4H STRUCTURE · BULL" —
+    // one rung up, saying nothing about where this is going over months. The
+    // long view is what that slot is better spent on, and it is the one thing
+    // here that is NOT a model output, so it opens a panel that says so.
     //
-    // It read "4H STRUCTURE · BULL" — the last confirmed higher-timeframe
-    // bar, which is one rung up and says nothing about where this is going
-    // over months. The long view is the question that slot is better spent
-    // on, and it is the one thing on this screen that is NOT a model output,
-    // so it opens a panel that says so rather than a probability.
-    final items = d.indicators
-        .map((i) => i.key == 'htf' ? _horizonTile() : i)
-        .take(4)
-        .toList();
-    if (items.isEmpty) return const SizedBox.shrink();
-    return Column(
-      children: [
-        for (var i = 0; i < items.length; i += 2)
-          Padding(
-            padding: const EdgeInsets.only(bottom: Obsidian.panelGap),
-            // IntrinsicHeight so the pair matches height when one note wraps
-            // to two lines and the other does not. CrossAxisAlignment.stretch
-            // ALONE cannot do this inside a ListView: stretch asks children to
-            // fill the cross axis, the Row's height there is unbounded, and
-            // the layout fails with "BoxConstraints forces an infinite height"
-            // — which takes the whole screen down, not just this row.
-            child: IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(child: _statCard(items[i])),
-                  const SizedBox(width: Obsidian.panelGap),
-                  Expanded(
-                    child: i + 1 < items.length
-                        ? _statCard(items[i + 1])
-                        : const SizedBox.shrink(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-      ],
+    // Rendered by the SHARED grid so the stock dashboard cannot drift from
+    // this one — they were two renderings of the same payload.
+    return IndicatorGrid(
+      indicators:
+          d.indicators.map((i) => i.key == 'htf' ? _horizonTile() : i).toList(),
+      onTap: _openIndicator,
     );
   }
 
-  /// Open one indicator's history.
-  ///
-  /// A SHEET, not an overlay on the price chart. Overlaying was the other
-  /// option and is the wrong one: RSI runs 0-100, volume is a ratio around
-  /// 1, structure is +1/-1, and price is 78,000. Sharing an axis would
-  /// either flatten the indicator to a flat line or need a second axis,
-  /// which is the classic way to make two unrelated series look correlated.
   /// A tile in the indicator grid's shape, standing in for `htf`.
   Indicator _horizonTile() => Indicator.fromJson({
         'key': 'horizon',
@@ -1262,64 +1228,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _statCard(Indicator ind) {
-    final c = Obsidian.tone(ind.tone);
-    return GlassPanel(
-      padding: const EdgeInsets.all(16),
-      onTap: () => _openIndicator(ind),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 26,
-                height: 26,
-                decoration: BoxDecoration(
-                  color: c.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(Obsidian.rSm + 2),
-                ),
-                child: Icon(_iconFor(ind.key), size: 15, color: c),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(ind.label,
-                    style: Obsidian.labelSm(color: c, size: 10)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(ind.value, style: Obsidian.displayLg().copyWith(fontSize: 30)),
-          const SizedBox(height: 6),
-          Text(ind.note, style: Obsidian.body(size: 12.5)),
-          const SizedBox(height: 8),
-          // a card that opens something has to say so, or nobody presses it —
-          // the same mistake swipe-to-delete made on the market screen
-          Row(
-            children: [
-              Text('History',
-                  style: Obsidian.labelSm(size: 9, color: Obsidian.outline)),
-              const SizedBox(width: 3),
-              const Icon(Icons.chevron_right_rounded,
-                  size: 13, color: Obsidian.outline),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  IconData _iconFor(String key) => switch (key) {
-        'rsi' => Icons.bar_chart_rounded,
-        'htf' => Icons.show_chart_rounded,
-        'horizon' => Icons.calendar_month_rounded,
-        'vol' => Icons.waves_rounded,
-        'volume' => Icons.equalizer_rounded,
-        _ => Icons.insights_rounded,
-      };
-
-  // -------------------------------------------------------- recommendation
   Widget _recommendation(Dashboard d) {
     final r = d.recommendation;
 
@@ -1381,65 +1289,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // -------------------------------------------------------------- levels
   Widget _levels(Dashboard d) {
-    final px = _livePrice ?? d.price;
-    // The model fixed the barrier DISTANCE at the last close, not the price
-    // it is measured from. So TP/SL follow the live price: these are the
-    // levels for an entry right now. The probability below is still the one
-    // read at the close — that is what the footnote says.
-    final tp = d.liveTakeProfit(_livePrice);
-    final sl = d.liveStopLoss(_livePrice);
-    return GlassPanel(
-      padding: EdgeInsets.zero,
-      child: Column(
-        children: [
-          _row('Current Price', _money(px), Obsidian.onSurface),
-          _divider(),
-          _row('Take Profit (TP1)', _money(tp), Obsidian.green),
-          _divider(),
-          _row('Stop Loss (SL)', _money(sl), Obsidian.red),
-          if (d.windowPUp != null) ...[
-            _divider(),
-            // the recommendation's own window, so the two never disagree
-            _row(
-              'Chance up (${d.windowBars ?? '?'} × ${d.interval})',
-              '${(d.windowPUp! * 100).toStringAsFixed(1)}%',
-              Obsidian.primary,
-              sub: 'The model\'s probability that price reaches Take Profit '
-                  'before Stop Loss within the next '
-                  '${d.windowBars ?? '?'} ${d.interval} bars. 50% is a coin '
-                  'flip; it is not a forecast of how far price moves.',
-            ),
-          ],
-        ],
-      ),
+    // TP and SL follow the LIVE price: the model fixed the barrier DISTANCE
+    // at the last close, not the price it is measured from, so these are the
+    // levels for an entry right now. The probability is still the one read at
+    // the close — the footnote inside the panel says so.
+    return LevelsPanel(
+      price: _livePrice ?? d.price,
+      takeProfit: d.liveTakeProfit(_livePrice),
+      stopLoss: d.liveStopLoss(_livePrice),
+      pUp: d.windowPUp,
+      windowBars: d.windowBars,
+      interval: d.interval,
     );
   }
-
-  Widget _row(String label, String value, Color c, {String? sub}) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(child: Text(label, style: Obsidian.bodyLg())),
-                Text(value,
-                    style: Obsidian.dataTable(
-                        color: c, size: 15, w: FontWeight.w700)),
-              ],
-            ),
-            if (sub != null) ...[
-              const SizedBox(height: 6),
-              Text(sub,
-                  style: Obsidian.body(color: Obsidian.outline, size: 11)),
-            ],
-          ],
-        ),
-      );
-
-  // "Row separators should be 1px lines at 5% white opacity."
-  Widget _divider() =>
-      Divider(height: 1, thickness: 1, color: Colors.white.withValues(alpha: 0.05));
 
   /// Every fitted timeframe, side by side.
   ///

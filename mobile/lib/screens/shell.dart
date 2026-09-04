@@ -93,6 +93,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     MarketModeStore.instance.addListener(_onModeChanged);
     MarketModeStore.instance.load();
     _loadFollowed();
+    // Restore the timeframe last looked at, in either market. Without this
+    // the setting was written by the stock page and read by nobody.
+    Settings.instance.lastInterval().then(
+        (v) => mounted ? setState(() => _interval = v) : null);
   }
 
   @override
@@ -363,13 +367,18 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                       onSubscribe: () =>
                           setState(() => _tab = NavTab.profile),
                       interval: _interval,
-                      onPickInterval: (iv) => setState(() => _interval = iv),
+                      onPickInterval: (iv) {
+                        Settings.instance.saveInterval(iv);
+                        setState(() => _interval = iv);
+                      },
                       // Selecting an untrained timeframe still selects it —
                       // the dashboard draws the "no model" panel with the
                       // train command in place. It used to jump to a separate
                       // tab, which meant losing your place to read one line.
-                      onNeedsTraining: (iv) =>
-                          setState(() => _interval = iv),
+                      onNeedsTraining: (iv) {
+                        Settings.instance.saveInterval(iv);
+                        setState(() => _interval = iv);
+                      },
                     ),
                   NavTab.screener =>
                     ScreenerScreen(client: widget.client, market: 'crypto'),
@@ -528,7 +537,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           symbol: s,
           neighbours: _followed.where((x) => x != s).toList(),
           onSwipe: (dir) => _swipeStock(s, dir),
-          onClose: () => setState(() => _stock = null),
+          // NO BACK ARROW HERE. This is a tab, not a pushed page — there is
+          // nothing behind it to go back to, and the arrow implied there was.
+          // The screener's pushed copy still passes one, because there it
+          // genuinely returns somewhere.
         );
       case NavTab.news:
         return NewsScreen(

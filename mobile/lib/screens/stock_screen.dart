@@ -12,6 +12,8 @@
 ///     and 21 when you open it.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -19,6 +21,8 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
+import '../widgets/analysis_panels.dart';
+import '../widgets/article_sheet.dart';
 import '../widgets/glass.dart';
 import '../widgets/patient_loader.dart';
 import '../widgets/train_button.dart';
@@ -51,15 +55,18 @@ class StockScreen extends StatefulWidget {
 
 class _StockScreenState extends State<StockScreen> {
   StockDetail? _data;
+  List<NewsItem> _news = const [];
   ScreenerCatalogue? _cat;
   String? _error;
   String? _lastFailure;
   DateTime _waitingSince = DateTime.now();
 
-  /// Which timeframe the chart is on. Daily by default: it is the only one
-  /// with a decade of history behind it, and the only one where a single bar
-  /// is not mostly market microstructure.
-  String _interval = '1d';
+  /// Which timeframe the chart is on.
+  ///
+  /// Restored from the LAST ONE LOOKED AT, in either market — see
+  /// `Settings.lastInterval`. It used to be hardcoded to 1d, so opening a
+  /// stock threw away whatever timeframe you had just been reading.
+  String _interval = '1h';
 
   /// The user's signal-strength setting, applied to stocks exactly as it is
   /// to crypto — one setting, both markets.
@@ -82,7 +89,13 @@ class _StockScreenState extends State<StockScreen> {
     _cat = widget.catalogue;
     Settings.instance.sensitivity().then(
         (v) => mounted ? setState(() => _sensitivity = v) : null);
-    _load();
+    // The timeframe has to be known BEFORE the first fetch, or the page
+    // loads 1h and immediately reloads whatever was actually remembered.
+    Settings.instance.lastInterval().then((v) {
+      if (!mounted) return;
+      _interval = v;
+      _load();
+    });
   }
 
   @override
@@ -101,6 +114,10 @@ class _StockScreenState extends State<StockScreen> {
     try {
       final d = await widget.client.stock(widget.symbol,
           interval: _interval);
+      // Deliberately NOT awaited with the detail: a news outage must not
+      // stop the page rendering, the same way the crypto dashboard treats
+      // its calendar banner.
+      unawaited(_loadNews());
       final c = _cat ?? await widget.client.screenerCatalogue();
       if (!mounted) return;
       setState(() {
@@ -112,6 +129,70 @@ class _StockScreenState extends State<StockScreen> {
     } catch (e) {
       if (!mounted) return;
       _lastFailure = '$e';
+    }
+  }
+
+  /// The most recent filing for this company, in the same card shape the
+  /// crypto dashboard uses for a headline.
+  List<Widget> _newsCard() {
+    if (_news.isEmpty) return const [];
+    final n = _news.first;
+    return [
+      GlassPanel(
+        padding: const EdgeInsets.all(16),
+        onTap: () => showModalBottomSheet<void>(
+          context: context,
+          backgroundColor: Colors.transparent,
+          isScrollControlled: true,
+          builder: (_) => ArticleSheet(item: n),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Obsidian.primary.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: Obsidian.primary.withValues(alpha: 0.40)),
+              ),
+              child: const Icon(Icons.article_outlined,
+                  size: 18, color: Obsidian.primary),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('LATEST FILING', style: Obsidian.labelSm(size: 9.5)),
+                  const SizedBox(height: 5),
+                  Text(n.headline,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Obsidian.body(size: 13)),
+                  const SizedBox(height: 5),
+                  Text(n.source.toUpperCase(),
+                      style: Obsidian.labelSm(
+                          size: 8.5, color: Obsidian.outline)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: Obsidian.gutter),
+    ];
+  }
+
+  Future<void> _loadNews() async {
+    try {
+      final n = await widget.client
+          .news(limit: 8, symbol: widget.symbol, market: 'stocks');
+      if (mounted) setState(() => _news = n);
+    } catch (_) {
+      // no card is the correct failure here
     }
   }
 
@@ -159,6 +240,7 @@ class _StockScreenState extends State<StockScreen> {
             ],
             selected: d.interval,
             onSelect: (tf) {
+              Settings.instance.saveInterval(tf.interval);
               setState(() {
                 _interval = tf.interval;
                 _data = null;
@@ -170,6 +252,7 @@ class _StockScreenState extends State<StockScreen> {
           const SizedBox(height: Obsidian.gutter),
           _chartCard(d),
           const SizedBox(height: Obsidian.gutter),
+          ..._newsCard(),
           _recommendation(d),
           const SizedBox(height: Obsidian.gutter),
           // WHAT THE MODEL SAYS COMES FIRST, and when there is a model the
@@ -402,51 +485,27 @@ class _StockScreenState extends State<StockScreen> {
         ),
       );
 
-  /// The model's own readings — the indicator grid the crypto dashboard
-  /// shows, from the same payload.
+  /// Exactly the panels the crypto dashboard draws, from the same widgets.
+  ///
+  /// This was a bespoke "what the model is reading" list — a second rendering
+  /// of the same payload, which is how two pages start disagreeing about what
+  /// an indicator means.
   List<Widget> _predictions(StockDetail d) {
-    if (d.indicators.isEmpty) return const [];
-    return [
-      GlassPanel(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('WHAT THE MODEL IS READING',
-                style: Obsidian.labelSm(size: 10.5)),
-            const SizedBox(height: 12),
-            for (final ind in d.indicators)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      flex: 4,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(ind.label,
-                              style: Obsidian.body(size: 12.5)),
-                          const SizedBox(height: 2),
-                          Text(ind.note,
-                              style: Obsidian.body(
-                                  color: Obsidian.outline, size: 10.5)),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(ind.value,
-                        style: Obsidian.dataTable(
-                            size: 13.5, color: Obsidian.tone(ind.tone))),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-      const SizedBox(height: Obsidian.gutter),
-    ];
+    final out = <Widget>[];
+    if (d.indicators.isNotEmpty) {
+      out.add(IndicatorGrid(indicators: d.indicators));
+      out.add(const SizedBox(height: Obsidian.gutter));
+    }
+    if (d.takeProfit != null || d.stopLoss != null) {
+      out.add(LevelsPanel(
+        price: d.metric('price'),
+        takeProfit: d.takeProfit,
+        stopLoss: d.stopLoss,
+        interval: d.interval,
+      ));
+      out.add(const SizedBox(height: Obsidian.gutter));
+    }
+    return out;
   }
 
   /// Collapsed once a model exists — see the note at the call site.

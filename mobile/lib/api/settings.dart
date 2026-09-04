@@ -21,6 +21,7 @@ class Settings {
   static const _accountKey = 'api.account.v1';
   static const _signalKey = 'signal.sensitivity.v1';
   static const _newsKey = 'news.alerts.v1';
+  static const _intervalKey = 'timeframe.last.v1';
 
   /// Applies whatever was saved to `client`, falling back to the compile-time
   /// defaults when nothing has been stored.
@@ -114,6 +115,28 @@ class Settings {
   }
 
   Future<void> saveNewsAlerts(String v) => _put(_newsKey, v);
+
+  /// The last timeframe looked at, remembered across launches AND across
+  /// markets.
+  ///
+  /// ONE SETTING FOR BOTH, deliberately. Opening a stock always landed on 1d
+  /// regardless of what you had been reading a moment earlier on a coin —
+  /// the timeframe is a question you are asking ("how far ahead am I
+  /// looking"), not a property of the instrument, and it should not reset
+  /// when you cross markets.
+  Future<String> lastInterval() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = prefs.getString(_intervalKey);
+      return const {'1m', '5m', '15m', '1h', '4h', '1d'}.contains(v)
+          ? v!
+          : '1h';
+    } catch (_) {
+      return '1h';
+    }
+  }
+
+  Future<void> saveInterval(String v) => _put(_intervalKey, v);
 
   Future<void> clearSession() async {
     await _put(_tokenKey, '');
