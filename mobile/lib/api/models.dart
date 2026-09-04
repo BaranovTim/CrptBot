@@ -915,3 +915,60 @@ class StockQuote {
 
   bool get isExtended => extendedPrice != null;
 }
+
+/// What happened over long horizons — counts, not forecasts.
+///
+/// The distinction is the whole reason this type exists separately from
+/// `Recommendation`. That one is a fitted model's output. This is arithmetic
+/// over history, at horizons where no model can be fitted because the
+/// independent observations do not exist: about six one-year windows have
+/// occurred in the entire history of the instrument.
+class HorizonRow {
+  HorizonRow.fromJson(Map<String, dynamic> j)
+      : horizon = j['horizon'] as String,
+        n = (j['n'] as num?)?.toInt() ?? 0,
+        upRate = _d(j['up_rate']),
+        ciLow = _d(j['ci_low']),
+        ciHigh = _d(j['ci_high']),
+        medianPct = _d(j['median_pct']),
+        worstPct = _d(j['worst_pct']),
+        bestPct = _d(j['best_pct']),
+        medianDrawdownPct = _d(j['median_drawdown_pct']),
+        worstDrawdownPct = _d(j['worst_drawdown_pct']),
+        meaningful = j['meaningful'] as bool? ?? false,
+        note = j['note'] as String? ?? '';
+
+  final String horizon;
+
+  /// How many NON-OVERLAPPING windows this is computed from. Shown as
+  /// prominently as the rate itself: six observations and eighty-one are
+  /// different kinds of statement.
+  final int n;
+  final double? upRate, ciLow, ciHigh, medianPct, worstPct, bestPct;
+
+  /// How far underwater a position went before the horizon was reached. For
+  /// anyone actually holding, this matters more than the outcome.
+  final double? medianDrawdownPct, worstDrawdownPct;
+  final bool meaningful;
+  final String note;
+
+  /// The interval is wide enough to contain a coin flip, so the rate cannot
+  /// be read as a tendency in either direction.
+  bool get spansEven =>
+      ciLow != null && ciHigh != null && ciLow! <= 50 && ciHigh! >= 50;
+}
+
+class HorizonReport {
+  HorizonReport.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] as String,
+        historyYears = _d(j['history_years']) ?? 0,
+        disclaimer = j['disclaimer'] as String? ?? '',
+        rows = ((j['horizons'] as List?) ?? const [])
+            .map((e) => HorizonRow.fromJson(e as Map<String, dynamic>))
+            .toList();
+
+  final String symbol;
+  final double historyYears;
+  final String disclaimer;
+  final List<HorizonRow> rows;
+}

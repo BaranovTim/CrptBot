@@ -250,7 +250,8 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/screener/catalogue",
                                           "/api/screener", "/api/stock",
                                           "/api/stock/quotes",
-                                          "/api/stock/search"]})
+                                          "/api/stock/search",
+                                          "/api/horizon"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -278,6 +279,18 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/dashboard":
                 self._send(svc.dashboard(symbol=opt("symbol"),
                                          interval=opt("interval")))
+            elif route == "/api/horizon":
+                from agent5.longhorizon import report
+
+                sym = (opt("symbol") or svc.symbol).upper()
+                market = opt("market") or "crypto"
+                if market == "stocks":
+                    from livefeed import BarStore
+
+                    bars = BarStore(sym, "1d").load()
+                else:
+                    bars = svc._bars(sym, "1d")
+                self._send(report(sym, bars))
             elif route == "/api/consensus":
                 self._send(svc.consensus(opt("symbol")))
             elif route == "/api/stock":

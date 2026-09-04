@@ -277,6 +277,11 @@ class ApiClient {
         .toList();
   }
 
+  Future<HorizonReport> horizon(String symbol,
+          {String market = 'crypto'}) async =>
+      HorizonReport.fromJson(
+          await _get('/api/horizon?symbol=$symbol&market=$market'));
+
   Future<Map<String, dynamic>> health() async => _get('/api/health');
 
   Future<Map<String, dynamic>> plans() async => _get('/api/billing/plans');

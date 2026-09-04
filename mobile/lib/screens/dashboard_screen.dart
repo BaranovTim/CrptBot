@@ -32,6 +32,7 @@ import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/article_sheet.dart';
 import '../widgets/glass.dart';
+import '../widgets/horizon_sheet.dart';
 import '../widgets/indicator_sheet.dart';
 import '../widgets/patient_loader.dart';
 import '../widgets/sparkline.dart';
@@ -1165,7 +1166,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // ------------------------------------------------------------ indicators
   Widget _indicatorGrid(Dashboard d) {
-    final items = d.indicators.take(4).toList();
+    // THE HTF TILE IS REPLACED, NOT REMOVED.
+    //
+    // It read "4H STRUCTURE · BULL" — the last confirmed higher-timeframe
+    // bar, which is one rung up and says nothing about where this is going
+    // over months. The long view is the question that slot is better spent
+    // on, and it is the one thing on this screen that is NOT a model output,
+    // so it opens a panel that says so rather than a probability.
+    final items = d.indicators
+        .map((i) => i.key == 'htf' ? _horizonTile() : i)
+        .take(4)
+        .toList();
     if (items.isEmpty) return const SizedBox.shrink();
     return Column(
       children: [
@@ -1204,7 +1215,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// 1, structure is +1/-1, and price is 78,000. Sharing an axis would
   /// either flatten the indicator to a flat line or need a second axis,
   /// which is the classic way to make two unrelated series look correlated.
+  /// A tile in the indicator grid's shape, standing in for `htf`.
+  Indicator _horizonTile() => Indicator.fromJson({
+        'key': 'horizon',
+        'label': 'THE LONG VIEW',
+        'value': '1M · 6M · 1Y',
+        'note': 'What history did over months, and how little of it there is',
+        'tone': null,
+      });
+
+  Future<void> _openHorizon() async {
+    HorizonReport? r;
+    try {
+      r = await widget.client.horizon(widget.symbol);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Obsidian.surfaceHigh,
+        content: Text('Could not load the long view: $e',
+            style: Obsidian.body()),
+      ));
+      return;
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => HorizonSheet(report: r!),
+    );
+  }
+
   Future<void> _openIndicator(Indicator ind) async {
+    if (ind.key == 'horizon') return _openHorizon();
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -1269,6 +1312,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   IconData _iconFor(String key) => switch (key) {
         'rsi' => Icons.bar_chart_rounded,
         'htf' => Icons.show_chart_rounded,
+        'horizon' => Icons.calendar_month_rounded,
         'vol' => Icons.waves_rounded,
         'volume' => Icons.equalizer_rounded,
         _ => Icons.insights_rounded,
