@@ -27,7 +27,8 @@ import pandas as pd
 
 from core import utc_now
 
-from .binance import DEFAULT_CACHE, VISION_BASE, _days, _download, _to_utc
+from .binance import (DEFAULT_CACHE, VISION_BASE, _days, _download,
+                      _to_utc, prefetch)
 
 METRIC_COLUMNS = [
     "create_time", "symbol", "sum_open_interest", "sum_open_interest_value",
@@ -68,10 +69,20 @@ def load_open_interest(
     sym = symbol.upper()
     frames = []
 
-    for day in _days(start_ts, end_ts):
+    def _paths(day):
         stem = f"{sym}-metrics-{day:%Y-%m-%d}"
-        url = f"{VISION_BASE}/futures/um/daily/metrics/{sym}/{stem}.zip"
-        dest = Path(cache_dir) / "futures/um" / "metrics" / sym / f"{stem}.zip"
+        return (f"{VISION_BASE}/futures/um/daily/metrics/{sym}/{stem}.zip",
+                Path(cache_dir) / "futures/um" / "metrics" / sym / f"{stem}.zip")
+
+    # ONE FILE PER DAY, so a three-year range is ~1,300 requests at 0.83s each
+    # if they are made one at a time — measured at 40 minutes of wall clock for
+    # a single fit, of which 4 minutes was CPU. This fetches them together
+    # first; the loop below is unchanged and simply finds them already on disk.
+    days = list(_days(start_ts, end_ts))
+    prefetch(_paths(d) for d in days)
+
+    for day in days:
+        url, dest = _paths(day)
         if not _download(url, dest):
             continue
         df = _read_csv_zip(dest, METRIC_COLUMNS)
