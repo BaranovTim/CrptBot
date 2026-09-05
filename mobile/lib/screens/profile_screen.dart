@@ -15,8 +15,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../api/background.dart';
 import '../api/client.dart';
 import '../api/models.dart';
+import '../api/power.dart';
 import '../api/muted.dart';
 import '../api/notifications.dart';
 import '../api/push.dart';
@@ -56,14 +58,66 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _pushTopic;
   bool _pushBusy = false;
 
+  /// Whether Android is allowed to defer the alert poll, and when it last
+  /// actually got to run. Both are measurements, not settings: without them
+  /// "the job is throttled" and "the job is fine, nothing happened" look
+  /// identical, and they need opposite responses.
+  bool _batteryExempt = true;
+  DateTime? _bgLastRun;
+  int _bgRuns = 0;
+
   @override
   void initState() {
     super.initState();
     _probe();
     _countMuted();
     _loadPush();
+    _loadBackgroundHealth();
     Settings.instance.sensitivity().then(
         (v) => mounted ? setState(() => _sensitivity = v) : null);
+  }
+
+  Future<void> _loadBackgroundHealth() async {
+    final exempt = await Power.instance.isExempt();
+    final (last, runs) = await lastBackgroundRun();
+    if (!mounted) return;
+    setState(() {
+      _batteryExempt = exempt;
+      _bgLastRun = last;
+      _bgRuns = runs;
+    });
+  }
+
+  /// What the background-check tile says, which is the whole point of it.
+  ///
+  /// A fifteen-minute job that last ran four hours ago is not a mystery to
+  /// investigate, it is a diagnosis on screen.
+  String get _backgroundDetail {
+    if (_bgLastRun == null) {
+      return _bgRuns == 0
+          ? 'Never run yet. On a fresh install that is normal for the first '
+              'quarter of an hour.'
+          : 'Ran $_bgRuns times, last time unknown.';
+    }
+    final ago = DateTime.now().difference(_bgLastRun!);
+    final when = ago.inMinutes < 60
+        ? '${ago.inMinutes}m ago'
+        : ago.inHours < 48
+            ? '${ago.inHours}h ago'
+            : '${ago.inDays}d ago';
+    final late = ago.inMinutes > 45
+        ? ' — the job asks for every 15 minutes, so this one is being '
+            'deferred.'
+        : '';
+    return 'Last checked $when · $_bgRuns times in total$late';
+  }
+
+  Future<void> _fixBattery() async {
+    await Power.instance.requestExemption();
+    // The dialog is another activity; re-read when we come back rather than
+    // assuming the answer, because the user is free to decline it.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    await _loadBackgroundHealth();
   }
 
   Future<void> _loadPush() async {
@@ -140,15 +194,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 12),
                 // The honest explanation, in the place someone reads it.
                 Text(
-                    'iOS only runs this app in the background when it feels '
-                    'like it, and not at all once you swipe it away. That is '
-                    "why alerts kept arriving late, in a clump, the moment "
-                    'you reopened the app.\n\n'
+                    'Both phone systems hold this app\u2019s background checks '
+                    'back while you are not using it — Android can defer them '
+                    'for hours once the app drops into a low usage bucket, '
+                    'and iOS runs them a few times a day at best. That is why '
+                    'alerts kept arriving late, in a clump, the moment you '
+                    'reopened the app.\n\n'
                     'The server now sends them to a free app called ntfy '
-                    'instead, which is allowed to wake your phone. Install '
-                    'ntfy, subscribe to the address below, and alerts arrive '
-                    'about a minute after the server sees them — whatever '
-                    'ThusIldy is doing.',
+                    'instead, which is allowed to wake your phone whenever it '
+                    'likes. Install ntfy, subscribe to the address below, and '
+                    'alerts arrive about a minute after the server sees them '
+                    '— whatever ThusIldy is doing.\n\n'
+                    'On Android, turn on ntfy\u2019s "instant delivery" in its '
+                    'own settings. That makes it about a second instead of '
+                    'about a minute, and nothing on the phone can defer it.',
                     style: Obsidian.body(color: Obsidian.outline, size: 12.5)),
                 const SizedBox(height: 18),
                 Text('YOUR PRIVATE ADDRESS',
@@ -555,6 +614,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       size: 18, color: Obsidian.outline),
               onTap: _sendTests,
             ),
+            _divider(),
+            _tile(
+              icon: Icons.schedule_rounded,
+              title: 'Background checks',
+              subtitle: _backgroundDetail,
+              trailing: StatusDot(
+                  live: _bgLastRun != null &&
+                      DateTime.now().difference(_bgLastRun!).inMinutes <= 45),
+              onTap: _loadBackgroundHealth,
+            ),
+            if (Power.instance.supported && !_batteryExempt) ...[
+              _divider(),
+              _tile(
+                icon: Icons.battery_alert_rounded,
+                title: 'Battery optimisation is on',
+                subtitle: 'Android is free to hold the alert check back for '
+                    'hours while the phone is idle. Turning this off for '
+                    'ThusIldy is the only fix on the device itself.',
+                trailing: const Icon(Icons.chevron_right_rounded,
+                    size: 18, color: Obsidian.amber),
+                onTap: _fixBattery,
+              ),
+            ],
             _divider(),
             _tile(
               icon: _push != null

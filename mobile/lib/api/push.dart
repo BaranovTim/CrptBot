@@ -29,9 +29,16 @@
 ///     a free notification service whose own iOS app holds a real APNs
 ///     entitlement, and can therefore wake a phone that has ours closed.
 ///
-///     You install ntfy from the App Store once, subscribe to the topic this
-///     file generates, and alerts arrive within about a minute of the server
-///     noticing them, forever, whatever this app is doing.
+///     You install ntfy once — Google Play, F-Droid or the App Store — and
+///     subscribe to the topic this file generates. Alerts then arrive within
+///     about a minute of the server noticing them, whatever this app is
+///     doing.
+///
+///     ON ANDROID, turn on ntfy's "instant delivery". That makes it hold its
+///     own connection open behind a foreground service, which is exempt from
+///     every bucket and Doze rule described above, and turns "about a minute"
+///     into "about a second". Without it, ntfy falls back to Firebase, which
+///     still reaches a dozing phone but is not instant.
 ///
 /// THE TOPIC IS A PASSWORD
 ///     ntfy has no accounts. Anyone who knows a topic can read it and post to

@@ -15,19 +15,37 @@
 ///     and both callers go through them.
 ///
 /// WHAT IT IS HONESTLY NOT, ON ANDROID
-///     FIFTEEN MINUTES is WorkManager's floor for a periodic job, and Android
-///     treats even that as a target rather than a promise — a dozing phone can
-///     stretch it. Fine for 1h, 4h and 1d calls and for news; a 15m signal can
-///     arrive late. Real-time delivery to a sleeping phone needs a push
-///     service (FCM), which needs a Firebase project and server credentials.
+///     This is the platform where the registration is right and the delivery
+///     is still late, so it is worth being precise about why.
+///
+///     APP STANDBY IS THE MAIN CAUSE, not the fifteen-minute floor. Android
+///     sorts apps into buckets by how recently they were used, and a periodic
+///     job in the "rare" or "restricted" bucket can wait most of a day for
+///     its window. An app opened a few times a day sits in a low bucket
+///     almost permanently — so the job runs the moment the app is opened,
+///     because opening it promotes the bucket, and then goes quiet again.
+///     Alerts in a clump on reopen is what that looks like from outside.
+///
+///     `power.dart` asks for the battery-optimisation exemption that takes
+///     the app out of those buckets. It is the only lever on the device.
+///
+///     FIFTEEN MINUTES is still WorkManager's floor even when exempted, and
+///     still a target rather than a promise. Fine for 1h, 4h and 1d calls and
+///     for news; a 15m signal can arrive late.
 ///
 ///     FORCE-STOPPING the app from Settings ends this until you open the app
 ///     again — that is Android's rule for every app, not something code can
 ///     opt out of. Swiping it out of the recents list does NOT.
 ///
 ///     AGGRESSIVE BATTERY MANAGEMENT on some manufacturers' phones (Xiaomi,
-///     Huawei, OnePlus, some Samsungs) will kill background work regardless.
-///     If alerts stop, that is the first thing to check.
+///     Huawei, OnePlus, some Samsungs) runs on top of Android's own and will
+///     kill background work regardless of any exemption granted here.
+///
+///     NONE OF WHICH THE RELAY CARES ABOUT. See `push.dart`: the server sends
+///     the alert to an app that is allowed to wake the phone, so it arrives
+///     whatever bucket this one is in. That is the reliable path on Android
+///     as much as on iOS; this file is the fallback, and it is now honest
+///     about being one — `lastBackgroundRun` records whether it ran at all.
 ///
 /// AND ON iOS, WHERE IT IS WEAKER STILL
 ///     This runs as a BGAppRefreshTask. It needs no paid developer account —
@@ -57,6 +75,7 @@ import 'dart:io' show Platform;
 import 'dart:ui' show DartPluginRegistrant;
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'alert_feed.dart';
@@ -114,9 +133,57 @@ void alertPollEntry() {
   });
 }
 
+/// When the background job last actually RAN, and how many times.
+///
+/// WHY THIS IS RECORDED
+///     "Notifications arrive late" and "the background job never runs" look
+///     identical from the outside, and they need completely different
+///     answers. Nothing in the app could tell them apart, so the failure was
+///     invisible: the job could have been dead for a week and the only
+///     evidence would have been a feeling.
+///
+///     Written from inside the isolate, read by the Profile screen. A
+///     timestamp from four hours ago on a fifteen-minute job IS the diagnosis.
+const String lastRunKey = 'bg.last_run.v1';
+const String runCountKey = 'bg.run_count.v1';
+
+Future<void> _recordRun() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(lastRunKey, DateTime.now().millisecondsSinceEpoch);
+    await prefs.setInt(runCountKey, (prefs.getInt(runCountKey) ?? 0) + 1);
+  } catch (_) {
+    // the poll still happened; only the evidence is missing
+  }
+}
+
+/// What the Profile screen shows: when the OS last let this run, and how
+/// often it has since the app was installed.
+Future<(DateTime?, int)> lastBackgroundRun() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    // A fresh read, not the cached one: this is asked right after a
+    // background isolate may have written it, and the cache in this isolate
+    // predates that write.
+    await prefs.reload();
+    final ms = prefs.getInt(lastRunKey);
+    return (
+      ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms),
+      prefs.getInt(runCountKey) ?? 0,
+    );
+  } catch (_) {
+    return (null, 0);
+  }
+}
+
 /// One background collection. Also called directly by the tests.
 Future<int> pollOnce() async {
   final client = ApiClient();
+  // BEFORE the sign-out check. The question this answers is "did Android let
+  // the job run", and it did — whether or not there was an account to poll
+  // for. Recording it only on the happy path would report a throttled job and
+  // a signed-out one identically.
+  await _recordRun();
   await Settings.instance.restore(client);
   if (client.token.isEmpty) {
     // signed out — nothing to ask for, and asking anyway would burn a wake-up

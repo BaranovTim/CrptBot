@@ -245,12 +245,25 @@ first `docker compose build` rather than assuming it is clean.
 
 ## Notifications that reach a closed phone
 
-The app's own background polling cannot be relied on for this, and that is not
-a bug anyone can fix in the app. On iOS a `BGAppRefreshTask` runs when iOS
-decides — a few times a day at best, and never once the app is swiped out of
-the switcher or the phone is in Low Power Mode. The only thing that wakes an
-iOS app on someone else's schedule is APNs, whose entitlement needs a paid
-Apple Developer account.
+The app's own background polling cannot be relied on for this on either
+platform, and the registration is not the reason — the WorkManager job, the
+BGTaskScheduler identifier, the `Info.plist` declarations and the merged
+Android manifest (boot receiver, job service, permissions) were all checked
+against the plugin source and the built APK, and they are correct.
+
+**On Android** it is App Standby. Android buckets apps by how recently they
+were used, and a periodic job in the "rare" or "restricted" bucket can wait
+most of a day for its fifteen-minute window. An app opened a few times a day
+lives in a low bucket, so the job runs when the app is opened — opening it
+promotes the bucket — and then goes quiet. Profile offers the
+battery-optimisation exemption that lifts it out of those buckets; that is the
+only lever on the device, and it does not touch the extra killers Xiaomi,
+Huawei, OnePlus and some Samsungs stack on top.
+
+**On iOS** a `BGAppRefreshTask` runs when iOS decides — a few times a day at
+best, and never once the app is swiped out of the switcher or the phone is in
+Low Power Mode. The only thing that wakes an iOS app on someone else's
+schedule is APNs, whose entitlement needs a paid Apple Developer account.
 
 So the server relays instead. `api/push.py` hands each new alert to
 [ntfy](https://ntfy.sh) — free, no account — whose own iOS and Android apps
@@ -276,6 +289,14 @@ Things worth knowing:
   is no state in which both go quiet.
 * **`PUSH_SERVER`** in `.env` points the relay at a self-hosted ntfy instead of
   the public one. The public server sees the topic and the alert text.
+* **On Android, turn on ntfy's "instant delivery."** It holds its own
+  connection open behind a foreground service, which no bucket or Doze rule
+  can defer — about a second instead of about a minute. Without it ntfy falls
+  back to Firebase, which still reaches a dozing phone but is not instant.
+* **Profile → Background checks** reports when the app's own job last managed
+  to run. A fifteen-minute job that last ran four hours ago is the diagnosis,
+  not a mystery: before this existed, "throttled" and "nothing happened"
+  looked identical from outside the phone.
 
 ```bash
 # is anything registered, and has it been failing?

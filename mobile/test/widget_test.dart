@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
 import 'dart:convert';
 
+import 'package:tradingbot_app/api/background.dart';
 import 'package:tradingbot_app/api/muted.dart';
 import 'package:tradingbot_app/api/push.dart';
 import 'package:tradingbot_app/api/settings.dart';
@@ -186,6 +187,27 @@ void main() {
       expect(t.length, greaterThanOrEqualTo(32));
       expect(RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(t), isTrue);
     }
+  });
+
+  test('a background run is recorded even when signed out', () async {
+    // WHY THIS MATTERS
+    //
+    // "Android throttled the job" and "the job ran, there was nothing to
+    // fetch" look identical from outside the phone, and they need opposite
+    // responses — one is a battery setting, the other is patience. The
+    // Profile screen can only tell them apart if the run is recorded before
+    // the sign-out check, not after it.
+    SharedPreferences.setMockInitialValues({});
+    var (last, runs) = await lastBackgroundRun();
+    expect(last, isNull);
+    expect(runs, 0);
+
+    // no token, so the poll returns immediately — and must still count
+    await pollOnce();
+    (last, runs) = await lastBackgroundRun();
+    expect(runs, 1);
+    expect(last, isNotNull);
+    expect(DateTime.now().difference(last!).inMinutes, lessThan(1));
   });
 
   test('the status badge never claims the bot trades', () {

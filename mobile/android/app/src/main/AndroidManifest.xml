@@ -1,6 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Lets the app ASK to be exempted from battery optimisation.
+         It is the one lever that exists against App Standby deferring the
+         alert poll for most of a day — see MainActivity. The user still
+         approves it in a system dialog; declaring this only makes the dialog
+         reachable. (Google Play restricts apps that request this; this one is
+         sideloaded, so the policy does not apply.) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <application
         android:usesCleartextTraffic="true"
         android:label="ThusIldy"
