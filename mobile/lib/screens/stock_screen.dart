@@ -557,6 +557,9 @@ class _StockScreenState extends State<StockScreen> {
         takeProfit: d.takeProfit,
         stopLoss: d.stopLoss,
         interval: d.interval,
+        side: d.side,
+        pUp: d.windowPUp,
+        windowBars: d.windowBars,
       ));
       out.add(const SizedBox(height: Obsidian.gutter));
     }

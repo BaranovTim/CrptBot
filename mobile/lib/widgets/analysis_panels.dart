@@ -122,6 +122,17 @@ class IndicatorGrid extends StatelessWidget {
 }
 
 /// Current price, take profit, stop loss, and the window probability.
+///
+/// READ FOR THE SIDE THE CALL NAMES, NOT ALWAYS FOR A LONG.
+///     On a SELL the take profit is BELOW the price and the stop is ABOVE,
+///     and the probability that matters is the chance of going DOWN. Drawing
+///     a short's levels with a long's arithmetic is not a cosmetic error: it
+///     puts the stop where the target should be and tells you to protect the
+///     wrong side of the trade.
+///
+///     With no side at all — a FLAT call — these are not a trade's levels.
+///     They are the two barriers the model measures its question against, and
+///     the panel says so rather than implying an entry nobody proposed.
 class LevelsPanel extends StatelessWidget {
   const LevelsPanel({
     super.key,
@@ -131,11 +142,27 @@ class LevelsPanel extends StatelessWidget {
     this.pUp,
     this.windowBars,
     this.interval = '',
+    this.side = '',
   });
 
   final double? price, takeProfit, stopLoss, pUp;
   final int? windowBars;
   final String interval;
+
+  /// LONG, SHORT, or "" when the call is FLAT and no entry was proposed.
+  final String side;
+
+  bool get _short => side == 'SHORT';
+  bool get _flat => side != 'LONG' && side != 'SHORT';
+
+  /// The chance the trade the panel describes WINS.
+  ///
+  /// `pUp` is always the probability of the upper barrier first, because that
+  /// is the question every model here is trained on. For a short that is the
+  /// losing outcome, so the panel reports its complement rather than printing
+  /// a number that means the opposite of what the label says.
+  double? get _pWin =>
+      pUp == null ? null : (_short ? 1 - pUp! : pUp!);
 
   @override
   Widget build(BuildContext context) => GlassPanel(
@@ -144,19 +171,41 @@ class LevelsPanel extends StatelessWidget {
           children: [
             _row('Current Price', money(price), Obsidian.onSurface),
             _divider(),
-            _row('Take Profit (TP1)', money(takeProfit), Obsidian.green),
+            _row(
+              _flat ? 'Upper barrier' : 'Take Profit (TP1)',
+              money(takeProfit),
+              _flat ? Obsidian.onSurface : Obsidian.green,
+              sub: _flat
+                  ? 'No entry is proposed right now, so these two are the '
+                      "model's barriers rather than a trade's levels."
+                  : _short
+                      ? 'Below the price, because the call is a SELL — the '
+                          'short is closed in profit down here.'
+                      : null,
+            ),
             _divider(),
-            _row('Stop Loss (SL)', money(stopLoss), Obsidian.red),
-            if (pUp != null) ...[
+            _row(
+              _flat ? 'Lower barrier' : 'Stop Loss (SL)',
+              money(stopLoss),
+              _flat ? Obsidian.onSurface : Obsidian.red,
+              sub: _short
+                  ? 'Above the price. A short loses as price rises, so the '
+                      'stop sits over it, not under.'
+                  : null,
+            ),
+            if (_pWin != null) ...[
               _divider(),
               _row(
-                'Chance up (${windowBars ?? '?'} × $interval)',
-                '${(pUp! * 100).toStringAsFixed(1)}%',
+                _short
+                    ? 'Chance down (${windowBars ?? '?'} × $interval)'
+                    : 'Chance up (${windowBars ?? '?'} × $interval)',
+                '${(_pWin! * 100).toStringAsFixed(1)}%',
                 Obsidian.primary,
-                sub: "The model's probability that price reaches Take Profit "
-                    'before Stop Loss within the next ${windowBars ?? '?'} '
-                    '$interval bars. 50% is a coin flip; it is not a forecast '
-                    'of how far price moves.',
+                sub: "The model's probability that price reaches "
+                    '${_flat ? 'the upper barrier' : 'Take Profit'} before '
+                    '${_flat ? 'the lower one' : 'Stop Loss'} within the next '
+                    '${windowBars ?? '?'} $interval bars. 50% is a coin flip; '
+                    'it is not a forecast of how far price moves.',
               ),
             ],
           ],

@@ -208,6 +208,9 @@ class Dashboard {
         windowPUp = _d((j['levels'] as Map)['p_up']),
         tpPct = _d((j['levels'] as Map)['tp_pct']),
         slPct = _d((j['levels'] as Map)['sl_pct']),
+        tpOffsetPct = _d((j['levels'] as Map)['tp_offset_pct']),
+        slOffsetPct = _d((j['levels'] as Map)['sl_offset_pct']),
+        side = (j['levels'] as Map)['side'] as String? ?? '',
         calibrationNote = j['calibration_note'] as String? ?? '';
 
   final String symbol, pair, interval, htf, calibrationNote;
@@ -221,6 +224,23 @@ class Dashboard {
   /// them to a live price without touching the model's claim.
   final double? anchor, tpPct, slPct;
 
+  /// The same two distances, SIGNED, measured off the levels the model
+  /// actually named rather than off the long-oriented barriers.
+  ///
+  /// `tpPct`/`slPct` are magnitudes and say nothing about direction, which is
+  /// how a SELL ended up drawn with its target above the price and its stop
+  /// below — the two levels swapped, on the one call where getting them the
+  /// wrong way round is worst. These carry the sign, so one expression is
+  /// right for both directions. Null against a server too old to send them,
+  /// which is why the magnitudes are still read.
+  final double? tpOffsetPct, slOffsetPct;
+
+  /// LONG, SHORT, or "" when no position is proposed and the levels are just
+  /// the model's barriers.
+  final String side;
+
+  bool get isShort => side == 'SHORT';
+
   /// The window the recommendation and these levels BOTH describe.
   ///
   /// Not always the longer horizon: an entering window wins over a waiting
@@ -231,11 +251,22 @@ class Dashboard {
   final double? windowPUp;
 
   /// Where TP/SL sit for an entry at `live`, rather than at the bar close.
-  double? liveTakeProfit(double? live) =>
-      (live == null || tpPct == null) ? takeProfit : live * (1 + tpPct! / 100);
+  ///
+  /// The signed offsets are preferred and the magnitudes are the fallback,
+  /// flipped by `side` — an older server sends only the magnitudes, and on a
+  /// SHORT those have to be inverted here or the panel contradicts the call
+  /// printed directly above it.
+  double? liveTakeProfit(double? live) {
+    if (live == null) return takeProfit;
+    final off = tpOffsetPct ?? (tpPct == null ? null : (isShort ? -tpPct! : tpPct!));
+    return off == null ? takeProfit : live * (1 + off / 100);
+  }
 
-  double? liveStopLoss(double? live) =>
-      (live == null || slPct == null) ? stopLoss : live * (1 - slPct! / 100);
+  double? liveStopLoss(double? live) {
+    if (live == null) return stopLoss;
+    final off = slOffsetPct ?? (slPct == null ? null : (isShort ? slPct! : -slPct!));
+    return off == null ? stopLoss : live * (1 + off / 100);
+  }
   final BotStatus status;
   final LiveReading? live;
   final List<Indicator> indicators;
@@ -382,6 +413,7 @@ class Alert {
         impact = j['impact'] as String? ?? '',
         url = j['url'] as String? ?? '',
         seq = (j['seq'] as num?)?.toInt() ?? 0,
+        pushed = j['pushed'] as bool? ?? false,
         at = DateTime.parse(j['at'] as String),
         detectedAt = DateTime.parse(j['detected_at'] as String),
         extra = Map<String, String>.from(
@@ -404,6 +436,18 @@ class Alert {
   /// what happened — the server sent every exit and the phone dropped all of
   /// them, silently, because `clearsSensitivity('')` is false.
   bool get isExit => kind == 'signal' && extra['to'] == 'FLAT';
+
+  /// Did the server already push this to the phone another way?
+  ///
+  /// Both delivery paths run at once — the relay in `push.dart` and this
+  /// app's own polling — so one event would otherwise post two
+  /// notifications. The app skips its own when this is true.
+  ///
+  /// A FACT, NOT AN INSTRUCTION. It says what the relay actually managed to
+  /// send. If the relay failed, or was never set up, this is false and the
+  /// app notifies exactly as it did before any of it existed — there is no
+  /// state in which both paths go quiet.
+  final bool pushed;
 
   /// For a news alert: BULL | BEAR | MIXED | NO READING, and
   /// STRONG IMPACT | MEDIUM IMPACT | ALMOST NO IMPACT | NO READING.
@@ -845,6 +889,9 @@ class StockDetail {
         takeProfit = _d((j['levels'] as Map?)?['take_profit']),
         stopLoss = _d((j['levels'] as Map?)?['stop_loss']),
         anchor = _d((j['levels'] as Map?)?['anchor']),
+        side = (j['levels'] as Map?)?['side'] as String? ?? '',
+        windowPUp = _d((j['levels'] as Map?)?['p_up']),
+        windowBars = ((j['levels'] as Map?)?['window_bars'] as num?)?.toInt(),
         indicators = ((j['indicators'] as List?) ?? const [])
             .map((e) => Indicator.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -880,6 +927,12 @@ class StockDetail {
   /// a class of their own — two shapes for the same three numbers is how the
   /// two pages start disagreeing.
   final double? takeProfit, stopLoss, anchor;
+
+  /// LONG, SHORT or "" — the same field the crypto dashboard carries, so the
+  /// levels panel can say which side its take-profit belongs to.
+  final String side;
+  final double? windowPUp;
+  final int? windowBars;
   final List<Indicator> indicators;
 
   /// Why there is no call, and the exact command that would fix it.

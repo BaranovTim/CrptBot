@@ -133,6 +133,19 @@ def _now_iso() -> str:
     return utc_now().isoformat()
 
 
+def _push_default() -> str:
+    """Which push relay the app should register against.
+
+    Overridable so a self-hosted ntfy can replace the public one without
+    shipping a build — the public server sees the topic and the alert text,
+    and someone who would rather it did not should be able to point this
+    elsewhere with an environment variable.
+    """
+    from api.push import DEFAULT_SERVER
+
+    return os.environ.get("PUSH_SERVER") or DEFAULT_SERVER
+
+
 def _stripe_ready() -> bool:
     """Is Stripe actually wired, or is the paywall a shop window?
 
@@ -303,7 +316,7 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/stock/quotes",
                                           "/api/stock/search",
                                           "/api/horizon", "/api/train",
-                                          "/api/train/status"]})
+                                          "/api/train/status", "/api/push"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -331,6 +344,16 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/dashboard":
                 self._send(svc.dashboard(symbol=opt("symbol"),
                                          interval=opt("interval")))
+            elif route == "/api/push":
+                from api.push import get_relay
+
+                operator, user = self._principal()
+                account = "operator" if operator else (
+                    user.identifier if user else "")
+                self._send({
+                    "subscription": get_relay().for_account(account),
+                    "server": _push_default(),
+                })
             elif route == "/api/train/status":
                 from api.trainer import get_trainer
 
@@ -499,7 +522,26 @@ class Handler(BaseHTTPRequestHandler):
                     cursor = None          # fail closed: no cursor, no backlog
                 engine = get_engine(svc)
                 alerts = engine.after(cursor)
-                self._send({"alerts": [a.to_json() for a in alerts],
+                # WHICH OF THESE ALREADY REACHED THE PHONE ANOTHER WAY.
+                #
+                # Both delivery paths run at once — the relay and this poll —
+                # so without saying so, one event would post two
+                # notifications. This is a statement of fact about what was
+                # sent, not an instruction to stay silent: an alert the relay
+                # failed to send comes back false and the app notifies
+                # exactly as it always did.
+                from api.push import get_relay
+
+                operator, user = self._principal()
+                pushed = get_relay().pushed_to(
+                    "operator" if operator else (
+                        user.identifier if user else ""))
+                out = []
+                for a in alerts:
+                    d = a.to_json()
+                    d["pushed"] = a.id in pushed
+                    out.append(d)
+                self._send({"alerts": out,
                             "cursor": engine.cursor(),
                             "server_time": _now_iso()})
             elif route == "/api/calendar":
@@ -597,6 +639,30 @@ class Handler(BaseHTTPRequestHandler):
                     account="operator" if operator else (
                         user.identifier if user else "anon"))
                 self._send(r, status=200 if r.get("ok") else 409)
+                return
+            if route in ("/api/push/subscribe", "/api/push/unsubscribe",
+                         "/api/push/test"):
+                from api.push import get_relay
+
+                operator, user = self._principal()
+                account = "operator" if operator else (
+                    user.identifier if user else "")
+                relay = get_relay()
+                topic = str(body.get("topic") or "")
+                if route == "/api/push/unsubscribe":
+                    r = relay.forget(topic)
+                elif route == "/api/push/test":
+                    r = relay.test(topic)
+                else:
+                    r = relay.register(
+                        topic, account=account,
+                        server=str(body.get("server") or ""
+                                   ) or _push_default(),
+                        sensitivity=str(body.get("sensitivity") or "strong"),
+                        news=str(body.get("news") or "all"),
+                        muted=[str(x) for x in (body.get("muted") or [])
+                               if isinstance(x, str)][:200])
+                self._send(r, status=200 if r.get("ok") else 400)
                 return
             if route == "/api/train/cancel":
                 from api.trainer import get_trainer

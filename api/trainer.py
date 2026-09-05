@@ -66,6 +66,31 @@ DAY = 86400.0
 
 VALID_INTERVALS = ("1m", "5m", "15m", "1h", "4h", "1d")
 
+
+def market_for(symbol: str, requested: str) -> str:
+    """Which fitter this symbol belongs to, decided HERE and not by the caller.
+
+    THE BUG THIS EXISTS TO KILL
+        Binance lists perpetuals on things that are also equities — AVGOUSDT,
+        XAUUSDT — and the crypto screener shows them. Tapping one opened the
+        STOCK page, which hardcoded `market: 'stocks'`, so the request asked
+        `train_stocks.py` to fit "AVGOUSDT". That went to Alpaca, which has
+        never heard of a ticker called AVGOUSDT, seeded nothing, and exited 0.
+        Three minutes of the user's attention to be told "finished without
+        fitting anything", with no hint that the symbol had been routed to the
+        wrong market entirely.
+
+    WHY INFER RATHER THAN REFUSE
+        The symbol is not ambiguous. No US equity ticker ends in USDT, so a
+        symbol that does is a Binance perpetual whatever the caller believes,
+        and the useful thing to do with an unambiguous request is honour it.
+        Refusing would be technically defensible and practically useless — the
+        user would read an error about a distinction they never made.
+    """
+    if (symbol or "").upper().endswith("USDT"):
+        return "crypto"
+    return requested or "crypto"
+
 QUEUED, RUNNING, DONE, FAILED = "queued", "running", "done", "failed"
 
 # Parsed from the training summary table, e.g.
@@ -144,8 +169,12 @@ class Trainer:
             today.append(time.time())
             self._recent[account] = today
 
+            resolved = market_for(symbol, market)
+            if resolved != market:
+                log.info("trainer: %s requested as %s, fitting as %s",
+                         symbol, market, resolved)
             job = Job(id=uuid.uuid4().hex[:10], symbol=symbol,
-                      interval=interval, market=market)
+                      interval=interval, market=resolved)
             self._queue.append(job)
             self._save()
         self._ensure_worker()
@@ -264,8 +293,7 @@ class Trainer:
         # A run that reported no rows did not train anything.
         if not job.results:
             job.state = FAILED
-            job.note = ("finished without fitting anything. Usually the "
-                        "higher-timeframe bars are missing. " + _tail(out))
+            job.note = _no_model_note(job, out)
             return
 
         job.state = DONE
@@ -331,6 +359,28 @@ class Trainer:
 def _tail(out: str, n: int = 240) -> str:
     lines = [l for l in out.strip().splitlines() if l.strip()]
     return " / ".join(lines[-3:])[:n]
+
+
+def _no_model_note(job: "Job", out: str) -> str:
+    """Why a clean exit produced no model, in words that name a cause.
+
+    The old text said "usually the higher-timeframe bars are missing" for
+    every case, which is true often enough to be useless: it is the same
+    sentence whether the data provider has never heard of the symbol or the
+    4h store simply has not been filled yet. Those need different actions, so
+    they get different sentences.
+    """
+    seeded_nothing = "no bars" in out
+    if seeded_nothing and job.market == "stocks":
+        return (f"no daily bars came back for {job.symbol}. Either the data "
+                f"provider does not carry that ticker, or the market has "
+                f"been closed long enough that nothing new arrived. "
+                + _tail(out))
+    if seeded_nothing:
+        return (f"no bars came back for {job.symbol} {job.interval}. Check "
+                f"the pair is still listed. " + _tail(out))
+    return ("finished without fitting anything. Usually the higher-timeframe "
+            "bars are missing. " + _tail(out))
 
 
 _TRAINER: Optional[Trainer] = None

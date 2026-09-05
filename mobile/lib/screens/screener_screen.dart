@@ -38,7 +38,7 @@ import 'stock_screen.dart';
 
 class ScreenerScreen extends StatefulWidget {
   const ScreenerScreen({super.key, required this.client,
-    this.market = 'stocks'});
+    this.market = 'stocks', this.onPick});
 
   final ApiClient client;
 
@@ -46,6 +46,19 @@ class ScreenerScreen extends StatefulWidget {
   /// perpetual has no earnings and a stock has no funding rate — see
   /// `filters.py`. Changing it reloads everything.
   final String market;
+
+  /// Hand a CRYPTO row back to the shell, which points the dashboard at it.
+  ///
+  /// WHY CRYPTO CANNOT JUST OPEN THE STOCK PAGE
+  ///     Every row used to push `StockScreen`, whatever the market. On
+  ///     equities that is right. On crypto it opened the equity page for a
+  ///     Binance perpetual — and because that page hardcodes
+  ///     `market: 'stocks'`, its Train button asked the equity fitter for
+  ///     "AVGOUSDT". Alpaca has no such ticker, so every attempt came back
+  ///     "finished without fitting anything". Binance really does list
+  ///     perpetuals on AVGO, XAU and friends, so these rows are not exotic;
+  ///     they are in the screener's default 178.
+  final void Function(String symbol)? onPick;
 
   @override
   State<ScreenerScreen> createState() => _ScreenerScreenState();
@@ -1329,6 +1342,13 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
   /// out whether a result was worth leaving the app for. The Yahoo link is
   /// still there, at the bottom of that page.
   Future<void> _open(ScreenerRow row) async {
+    // A coin belongs on the coin dashboard. The shell owns the pair and the
+    // websocket, so it does the switching rather than this page pushing a
+    // dashboard it would have to feed a live price service to.
+    if (widget.market == 'crypto' && widget.onPick != null) {
+      widget.onPick!(row.symbol);
+      return;
+    }
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (ctx) => Scaffold(
         backgroundColor: Obsidian.background,

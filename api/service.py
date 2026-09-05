@@ -97,7 +97,13 @@ class TradingService:
         # the restored cache kept serving payloads without them and the new
         # app read null for both. The versioned name is the whole defence
         # against a cache outliving the shape it was written for.
-        self._dash_dir = Path("data_cache") / "dashcache.v2"
+        #
+        # v2 -> v3 on 2026-09-05, when `levels` gained `side` and the signed
+        # `tp_offset_pct`/`sl_offset_pct`. Same failure, caught the same way:
+        # the deploy went out, the payload came back without the new fields,
+        # and the app would have fallen back to drawing a short's levels the
+        # long way round — the exact bug being fixed.
+        self._dash_dir = Path("data_cache") / "dashcache.v3"
         self._refresh_q: "queue.Queue" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self._monitors: Dict[Tuple[str, str], Any] = {}
@@ -708,23 +714,7 @@ class TradingService:
             "indicators": _indicators(snap, interval=interval, htf=htf),
             "analyses": [_analysis(a), _analysis(b)],
             "recommendation": _recommendation(b, a, stale),
-            "levels": {
-                "current": _num(price),
-                # the SAME window the recommendation speaks for
-                "window_bars": chosen.bars_left,
-                "p_up": _num(chosen.p_up),
-                "take_profit": _num(chosen.tp_price),
-                "stop_loss": _num(chosen.sl_price),
-                # the barriers as distances rather than prices. the app
-                # re-anchors them to the websocket price so TP/SL track the
-                # market between bars — the DISTANCE is what the model fixed
-                # at the close, the price it is measured from is not
-                "anchor": _num(chosen.entry),
-                "tp_pct": _num((chosen.upper / chosen.entry - 1.0) * 100.0)
-                if _num(chosen.entry) else None,
-                "sl_pct": _num((1.0 - chosen.lower / chosen.entry) * 100.0)
-                if _num(chosen.entry) else None,
-            },
+            "levels": _levels(chosen, price),
             "calibration_note": (
                 "Probability is the chance a long entered at this bar's close "
                 "reaches +1 ATR before -1 ATR within the window. On the last "
@@ -1315,6 +1305,62 @@ def _num(v) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return f if np.isfinite(f) else None
+
+
+
+def _levels(a, price) -> Dict[str, Any]:
+    """The take-profit and stop-loss the app draws, and the distances it
+    re-anchors them by.
+
+    SEPARATE FROM `dashboard` BECAUSE THE DIRECTION IS EASY TO GET WRONG
+        `tp_pct`/`sl_pct` were magnitudes with no direction in them, and the
+        app moved take-profit UP and stop-loss DOWN from the live price
+        whatever the call said. On a SELL that put the target and the stop on
+        each other's side of the price — with the word SELL printed directly
+        above them. The prices were always right; the distances the app
+        actually draws were not.
+    """
+    return {
+        "current": _num(price),
+        # the SAME window the recommendation speaks for
+        "window_bars": a.bars_left,
+        "p_up": _num(a.p_up),
+        "take_profit": _num(a.tp_price),
+        "stop_loss": _num(a.sl_price),
+        # WHICH WAY THE TRADE GOES, or "" when none is proposed.
+        #
+        # Without this the app could not re-anchor the levels
+        # correctly: it was moving take-profit UP and stop-loss DOWN
+        # from the live price whatever the call was, so a SELL showed
+        # its target above the price and its stop below — both on the
+        # wrong side, and exactly backwards for the trade named right
+        # above them. The prices in `take_profit`/`stop_loss` were
+        # always right; the DISTANCES were not, and the app draws the
+        # distances whenever a websocket price is available, which on
+        # crypto is essentially always.
+        "side": a.side,
+        # the barriers as distances rather than prices. the app
+        # re-anchors them to the websocket price so TP/SL track the
+        # market between bars — the DISTANCE is what the model fixed
+        # at the close, the price it is measured from is not
+        "anchor": _num(a.entry),
+        # MAGNITUDES, kept exactly as they were. An app built before
+        # `side` existed reads these and behaves as it always has,
+        # rather than putting a stop on the wrong side of the price
+        # during the window between deploying the server and
+        # installing the build.
+        "tp_pct": _num((a.upper / a.entry - 1.0) * 100.0)
+        if _num(a.entry) else None,
+        "sl_pct": _num((1.0 - a.lower / a.entry) * 100.0)
+        if _num(a.entry) else None,
+        # SIGNED, and measured off the actual level rather than the
+        # long-oriented barrier — so `price * (1 + pct/100)` is right
+        # for both directions and there is no convention to remember.
+        "tp_offset_pct": _num((a.tp_price / a.entry - 1.0)
+                              * 100.0) if _num(a.entry) else None,
+        "sl_offset_pct": _num((a.sl_price / a.entry - 1.0)
+                              * 100.0) if _num(a.entry) else None,
+    }
 
 
 def _indicators(snap: Dict[str, float], interval: str = "1h",

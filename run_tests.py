@@ -36,6 +36,7 @@ MODULES = [
     "tests.test_timeframes",
     "tests.test_schedule",
     "tests.test_alerts",
+    "tests.test_push",
     "tests.test_equities",
     "tests.test_technicals",
     "tests.test_screener",

@@ -12,11 +12,14 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
 import '../api/muted.dart';
 import '../api/notifications.dart';
+import '../api/push.dart';
 import '../api/settings.dart';
 import '../api/watchlist.dart';
 import '../theme/liquid_obsidian.dart';
@@ -46,13 +49,211 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _muted = 0;
   String _sensitivity = 'strong';
 
+  /// What the SERVER says about this account's relay, not what this device
+  /// hopes. A topic sitting in local storage that the server has forgotten is
+  /// the exact state that looks fine and delivers nothing.
+  Map<String, dynamic>? _push;
+  String? _pushTopic;
+  bool _pushBusy = false;
+
   @override
   void initState() {
     super.initState();
     _probe();
     _countMuted();
+    _loadPush();
     Settings.instance.sensitivity().then(
         (v) => mounted ? setState(() => _sensitivity = v) : null);
+  }
+
+  Future<void> _loadPush() async {
+    final t = await PushDelivery.instance.topic();
+    Map<String, dynamic>? sub;
+    try {
+      final r = await widget.client.pushStatus();
+      sub = r['subscription'] as Map<String, dynamic>?;
+    } catch (_) {
+      sub = null;                     // offline; the tile says so
+    }
+    if (!mounted) return;
+    setState(() {
+      _pushTopic = t;
+      _push = sub;
+    });
+  }
+
+  Future<void> _togglePush() async {
+    setState(() => _pushBusy = true);
+    if (_push != null) {
+      await PushDelivery.instance.disable(widget.client);
+    } else {
+      await PushDelivery.instance.enable(widget.client);
+    }
+    await _loadPush();
+    if (mounted) setState(() => _pushBusy = false);
+  }
+
+  Future<void> _openPushSheet() async {
+    if (_push == null) {
+      await _togglePush();
+      if (!mounted || _push == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            backgroundColor: Obsidian.surfaceHigh,
+            content: Text(
+                'Could not reach the server to set this up. Try again when '
+                'the connection is back.',
+                style: Obsidian.body()),
+          ));
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _pushSheet(ctx),
+    );
+    await _loadPush();
+  }
+
+  Widget _pushSheet(BuildContext ctx) {
+    final topic = _pushTopic ?? '';
+    final server = (_push?['server'] as String?) ?? 'https://ntfy.sh';
+    final url = PushDelivery.instance.subscribeUrl(topic, server);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.all(Obsidian.containerPadding),
+        child: GlassPanel(
+          active: true,
+          padding: const EdgeInsets.all(20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('DELIVERY WITH THE APP CLOSED',
+                    style: Obsidian.labelSm(size: 10.5)),
+                const SizedBox(height: 12),
+                // The honest explanation, in the place someone reads it.
+                Text(
+                    'iOS only runs this app in the background when it feels '
+                    'like it, and not at all once you swipe it away. That is '
+                    "why alerts kept arriving late, in a clump, the moment "
+                    'you reopened the app.\n\n'
+                    'The server now sends them to a free app called ntfy '
+                    'instead, which is allowed to wake your phone. Install '
+                    'ntfy, subscribe to the address below, and alerts arrive '
+                    'about a minute after the server sees them — whatever '
+                    'ThusIldy is doing.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 12.5)),
+                const SizedBox(height: 18),
+                Text('YOUR PRIVATE ADDRESS',
+                    style: Obsidian.labelSm(size: 10.5)),
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(Obsidian.rMd),
+                  ),
+                  child: SelectableText(topic,
+                      style: Obsidian.dataTable(size: 12.5)),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                    'Anyone who knows this can read your alerts, so it is a '
+                    'random string rather than your name. Keep it to yourself.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 11)),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          await Clipboard.setData(ClipboardData(text: topic));
+                          if (ctx.mounted) Navigator.of(ctx).maybePop();
+                        },
+                        icon: const Icon(Icons.copy_rounded, size: 16),
+                        label: Text('Copy', style: Obsidian.body(size: 12.5)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                            backgroundColor: Obsidian.primary,
+                            foregroundColor: Obsidian.onPrimary),
+                        onPressed: () => launchUrl(Uri.parse(url),
+                            mode: LaunchMode.externalApplication),
+                        icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                        label:
+                            Text('Open ntfy', style: Obsidian.body(size: 12.5)),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                TextButton.icon(
+                  onPressed: () async {
+                    final ok =
+                        await PushDelivery.instance.sendTest(widget.client);
+                    if (!ctx.mounted) return;
+                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                      backgroundColor: Obsidian.surfaceHigh,
+                      content: Text(
+                          ok
+                              ? 'Sent. If nothing arrives, ntfy is not '
+                                  'subscribed to that address yet.'
+                              : 'The server could not send it. Check the '
+                                  'connection and try again.',
+                          style: Obsidian.body()),
+                    ));
+                  },
+                  icon: const Icon(Icons.send_rounded,
+                      size: 16, color: Obsidian.primary),
+                  label: Text('Send one test push',
+                      style: Obsidian.body(color: Obsidian.primary, size: 12.5)),
+                ),
+                Divider(
+                    height: 22, color: Colors.white.withValues(alpha: 0.06)),
+                TextButton(
+                  onPressed: () async {
+                    await PushDelivery.instance.disable(widget.client);
+                    if (ctx.mounted) Navigator.of(ctx).maybePop();
+                  },
+                  child: Text('Turn off server delivery',
+                      style:
+                          Obsidian.body(color: Obsidian.redSoft, size: 12.5)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// What the delivery tile says underneath its title.
+  String get _pushDetail {
+    if (_push == null) {
+      return _pushTopic == null
+          ? 'Off. Alerts only arrive while the app is open, which on iOS is '
+              'most of why they arrive late.'
+          : 'Set up on this phone but not registered on the server — tap to '
+              'register it again.';
+    }
+    final err = (_push!['last_error'] as String?) ?? '';
+    final sent = (_push!['sent'] as num?)?.toInt() ?? 0;
+    if (err.isNotEmpty) return 'Last send failed: $err';
+    return sent == 0
+        ? 'On. Nothing relayed yet — the next alert will be the first.'
+        : 'On. $sent alert${sent == 1 ? '' : 's'} relayed so far.';
   }
 
   static const _levels = <String, (String, String)>{
@@ -353,6 +554,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   : const Icon(Icons.chevron_right_rounded,
                       size: 18, color: Obsidian.outline),
               onTap: _sendTests,
+            ),
+            _divider(),
+            _tile(
+              icon: _push != null
+                  ? Icons.cloud_done_rounded
+                  : Icons.cloud_off_rounded,
+              title: 'Delivery with the app closed',
+              subtitle: _pushDetail,
+              trailing: _pushBusy
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Obsidian.primary))
+                  : StatusDot(live: _push != null),
+              onTap: _pushBusy ? null : _openPushSheet,
             ),
             _divider(),
             _tile(

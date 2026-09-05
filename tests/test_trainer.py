@@ -16,6 +16,14 @@ WHAT THESE GUARD
 
   A LOST VERDICT     "At chance" is the most useful thing a fit can report and
         the easiest to drop on the floor. It is parsed out and kept.
+
+  THE WRONG FITTER   Binance lists perpetuals on things that are also
+        equities — AVGOUSDT, XAUUSDT — and they are in the crypto screener's
+        default 178. Opening one used to land on the STOCK page, whose Train
+        button hardcodes `market: "stocks"`, so the request asked Alpaca to
+        fit a ticker called AVGOUSDT. Every attempt came back "finished
+        without fitting anything", with nothing on screen to suggest the
+        symbol had been sent to the wrong market entirely.
 """
 from __future__ import annotations
 
@@ -192,4 +200,36 @@ def test_one_account_cannot_fill_the_day():
     # ...and a different account is unaffected
     t._queue.clear()
     assert t.submit("OTHER", "1h", account="bob")["ok"]
+    return True
+
+
+def test_a_usdt_pair_is_fitted_as_crypto_whatever_the_caller_claims():
+    """The symbol is not ambiguous — no US equity ticker ends in USDT — so an
+    incorrect `market` is corrected rather than obeyed. Obeying it is what
+    produced three failed jobs and no explanation."""
+    assert T.market_for("AVGOUSDT", "stocks") == "crypto"
+    assert T.market_for("XAUUSDT", "stocks") == "crypto"
+    assert T.market_for("avgousdt", "stocks") == "crypto"
+    # and a real equity is left alone
+    assert T.market_for("AVGO", "stocks") == "stocks"
+    assert T.market_for("BTCUSDT", "crypto") == "crypto"
+
+    t = _fresh()
+    r = t.submit("AVGOUSDT", "1h", market="stocks", account="tim")
+    assert r["ok"] is True
+    assert r["job"]["market"] == "crypto", r["job"]
+    return True
+
+
+def test_a_seed_that_found_nothing_says_so_by_name():
+    """"Usually the higher-timeframe bars are missing" was the note for every
+    clean exit, including the ones where the provider had never heard of the
+    symbol. Same sentence, different causes, different fixes."""
+    job = T.Job(id="x", symbol="AVGOUSDT", interval="1h", market="stocks")
+    note = T._no_model_note(job, "equity seed AVGOUSDT 1h: no bars")
+    assert "AVGOUSDT" in note and "provider" in note, note
+
+    other = T.Job(id="y", symbol="BTCUSDT", interval="1w", market="crypto")
+    n2 = T._no_model_note(other, "some other failure entirely")
+    assert "higher-timeframe" in n2, n2
     return True

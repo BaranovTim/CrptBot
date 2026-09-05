@@ -21,6 +21,7 @@ import '../api/settings.dart';
 import '../api/muted.dart';
 import '../api/watchlist.dart';
 import '../api/notifications.dart';
+import '../api/push.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/alert_settings_sheet.dart';
 import '../widgets/frosted_nav.dart';
@@ -130,6 +131,13 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     // because there is no point polling for an account that is not signed in.
     unawaited(startBackgroundAlerts());
 
+    // And keep the server's copy of the filtering settings current, so what
+    // the relay decides to push matches what this screen would have shown.
+    // A no-op unless push is switched on and something actually changed —
+    // see the fingerprint in `push.dart`, which is why this can be called
+    // from the poll below as well without costing a request every 20s.
+    unawaited(PushDelivery.instance.sync(widget.client));
+
     // NO SEPARATE PRIMING CALL ANY MORE.
     //
     // It used to fetch once with no cursor and keep the answer, which reset
@@ -159,6 +167,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       // Muting, sensitivity and the backlog cap all live in `alert_feed`, so
       // the background isolate applies exactly the same rules. Reimplementing
       // them here is how the two would drift.
+      unawaited(PushDelivery.instance.sync(widget.client));
       final batch = await collectAlerts(widget.client);
       for (final a in batch.deliver) {
         // Two channels, because iOS suppresses this app's notifications while
@@ -170,7 +179,13 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         //
         // So: an in-app banner when the user can see the app, and an OS
         // notification for when they cannot.
-        await Notifications.instance.showAlert(a);
+        //
+        // UNLESS THE SERVER ALREADY PUSHED IT. Both delivery paths run at
+        // once, and posting a second notification for an event that already
+        // buzzed the phone through ntfy is its own kind of broken. The
+        // in-app banner still draws either way — that is this app's own UI,
+        // not a duplicate of the lock screen.
+        if (!a.pushed) await Notifications.instance.showAlert(a);
         _banner(a);
       }
     } catch (e) {
@@ -380,8 +395,20 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                         setState(() => _interval = iv);
                       },
                     ),
-                  NavTab.screener =>
-                    ScreenerScreen(client: widget.client, market: 'crypto'),
+                  NavTab.screener => ScreenerScreen(
+                      client: widget.client,
+                      market: 'crypto',
+                      // Tapping a coin points the dashboard at it, exactly as
+                      // tapping one in Market does. It used to open the STOCK
+                      // page for it, which is where every "training always
+                      // errors" report came from: that page trains through
+                      // the equity fitter, and Alpaca does not carry
+                      // AVGOUSDT.
+                      onPick: (s) {
+                        _setSymbol(s);
+                        setState(() => _tab = NavTab.dashboard);
+                      },
+                    ),
                   NavTab.news => NewsScreen(
                       client: widget.client, symbol: _symbol),
                   NavTab.market =>
@@ -601,6 +628,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   }
 
   Future<void> _signOut() async {
+    // BEFORE the token is thrown away — unsubscribing needs to authenticate,
+    // and a relay left registered would keep pushing this account's alerts to
+    // a phone that has signed out of it.
+    await PushDelivery.instance.disable(widget.client);
     await widget.client.logout();
     // the cached account goes with the token, or the next cold start would
     // open straight into a session that no longer exists

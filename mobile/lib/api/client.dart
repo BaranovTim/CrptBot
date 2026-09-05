@@ -299,6 +299,33 @@ class ApiClient {
   Future<Map<String, dynamic>> cancelTraining(String id) =>
       _post('/api/train/cancel', {'id': id});
 
+  // -- push relay ----------------------------------------------------
+  //
+  // Delivery that does not depend on this app being awake. See
+  // `api/push.dart` for why it has to exist at all.
+  Future<Map<String, dynamic>> pushStatus() => _get('/api/push');
+
+  Future<Map<String, dynamic>> pushSubscribe({
+    required String topic,
+    required String server,
+    required String sensitivity,
+    required String news,
+    required List<String> muted,
+  }) =>
+      _post('/api/push/subscribe', {
+        'topic': topic,
+        'server': server,
+        'sensitivity': sensitivity,
+        'news': news,
+        'muted': muted,
+      });
+
+  Future<Map<String, dynamic>> pushUnsubscribe(String topic) =>
+      _post('/api/push/unsubscribe', {'topic': topic});
+
+  Future<Map<String, dynamic>> pushTest(String topic) =>
+      _post('/api/push/test', {'topic': topic});
+
   Future<List<ScreenerSetup>> screenerSetups(
       {String market = 'stocks', int top = 3}) async {
     final j = await _get('/api/screener/setups?market=$market&top=$top',

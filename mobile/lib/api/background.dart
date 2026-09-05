@@ -62,6 +62,7 @@ import 'package:workmanager/workmanager.dart';
 import 'alert_feed.dart';
 import 'client.dart';
 import 'notifications.dart';
+import 'push.dart';
 import 'settings.dart';
 
 const String _taskName = 'thusildy.alerts.poll';
@@ -123,8 +124,16 @@ Future<int> pollOnce() async {
   }
 
   await Notifications.instance.init();
+  // A background wake-up is also a chance to push any settings change the
+  // foreground never got to send — the relay is the path that keeps working
+  // when this one does not, so it must not be left holding stale settings.
+  await PushDelivery.instance.sync(client);
   final batch = await collectAlerts(client);
   for (final a in batch.deliver) {
+    // Already delivered through the relay — see `Alert.pushed`. Posting it
+    // again would mean two notifications for one event, which is the noise
+    // that teaches someone to swipe the whole channel away.
+    if (a.pushed) continue;
     await Notifications.instance.showAlert(a);
   }
   debugPrint('[bg] delivered ${batch.deliver.length} of ${batch.total}');

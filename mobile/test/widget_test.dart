@@ -11,6 +11,7 @@ import 'package:tradingbot_app/api/models.dart';
 import 'dart:convert';
 
 import 'package:tradingbot_app/api/muted.dart';
+import 'package:tradingbot_app/api/push.dart';
 import 'package:tradingbot_app/api/settings.dart';
 import 'package:tradingbot_app/api/watchlist.dart';
 import 'package:tradingbot_app/main.dart';
@@ -92,6 +93,99 @@ void main() {
     expect(d.stopLoss, isNull);
     expect(d.live, isNull);
     expect(d.price, 79000.0);
+  });
+
+  test('a SELL puts take profit below the live price and the stop above', () {
+    // THE BUG THIS PINS
+    //
+    // `tp_pct`/`sl_pct` are magnitudes: they say how far, never which way.
+    // `liveTakeProfit` used to move take profit UP and `liveStopLoss` move
+    // the stop DOWN from the live price, whatever the call was. On a SELL
+    // that drew the target above the price and the stop below — both on the
+    // wrong side, directly under a card reading SELL.
+    //
+    // The server's own `take_profit`/`stop_loss` were always right. These are
+    // what the app draws whenever a websocket price is available, which on
+    // crypto is essentially always, so the wrong ones were the visible ones.
+    Map<String, dynamic> withLevels(Map<String, dynamic> levels) => {
+          'symbol': 'BTCUSDT',
+          'pair': 'BTC / USDT',
+          'interval': '1h',
+          'stale': false,
+          'price': 100.0,
+          'change_pct': null,
+          'status': {
+            'active': true,
+            'label': 'WATCHING',
+            'detail': '',
+            'trades': false,
+          },
+          'live': null,
+          'indicators': [],
+          'analyses': [],
+          'recommendation': {'action': 'SELL', 'tone': 'down', 'detail': 'x'},
+          'levels': levels,
+          'calibration_note': '',
+        };
+
+    final sell = Dashboard.fromJson(withLevels({
+      'current': 100.0,
+      'anchor': 100.0,
+      'side': 'SHORT',
+      'take_profit': 98.0,
+      'stop_loss': 102.0,
+      'tp_pct': 2.0,
+      'sl_pct': 2.0,
+      'tp_offset_pct': -2.0,
+      'sl_offset_pct': 2.0,
+    }));
+    expect(sell.isShort, isTrue);
+    expect(sell.liveTakeProfit(90.0), lessThan(90.0));
+    expect(sell.liveStopLoss(90.0), greaterThan(90.0));
+
+    final buy = Dashboard.fromJson(withLevels({
+      'current': 100.0,
+      'anchor': 100.0,
+      'side': 'LONG',
+      'take_profit': 102.0,
+      'stop_loss': 98.0,
+      'tp_pct': 2.0,
+      'sl_pct': 2.0,
+      'tp_offset_pct': 2.0,
+      'sl_offset_pct': -2.0,
+    }));
+    expect(buy.liveTakeProfit(90.0), greaterThan(90.0));
+    expect(buy.liveStopLoss(90.0), lessThan(90.0));
+
+    // AND WITHOUT THE SIGNED FIELDS. A server that predates them still sends
+    // magnitudes, and `side` is enough to put them the right way round —
+    // otherwise the app would be correct only after both ends are updated.
+    final old = Dashboard.fromJson(withLevels({
+      'current': 100.0,
+      'anchor': 100.0,
+      'side': 'SHORT',
+      'take_profit': 98.0,
+      'stop_loss': 102.0,
+      'tp_pct': 2.0,
+      'sl_pct': 2.0,
+    }));
+    expect(old.liveTakeProfit(90.0), lessThan(90.0));
+    expect(old.liveStopLoss(90.0), greaterThan(90.0));
+  });
+
+  test('a topic is long, random and never repeats', () {
+    // The topic is the ONLY thing protecting the alert stream — ntfy has no
+    // accounts, so anyone who knows it can read it. A short or predictable
+    // one hands over which pairs you watch and what the model said.
+    final seen = <String>{};
+    for (var i = 0; i < 200; i++) {
+      seen.add(PushDelivery.newTopic());
+    }
+    expect(seen.length, 200);
+    for (final t in seen) {
+      expect(t.length, greaterThanOrEqualTo(32));
+      expect(RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(t), isTrue);
+    }
   });
 
   test('the status badge never claims the bot trades', () {

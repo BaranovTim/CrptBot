@@ -429,3 +429,61 @@ if __name__ == "__main__":
         fn()
         print(f"PASS  {fn.__name__}")
     print(f"\nAll {len(tests)} monitor tests passed.")
+
+
+def test_a_short_reports_its_levels_on_the_correct_side_of_the_price():
+    """WHAT THIS CATCHES
+
+    `tp_pct` and `sl_pct` are MAGNITUDES — they say how far, never which way.
+    The app re-anchors the levels to the live websocket price using them, and
+    it did that by moving take-profit UP and stop-loss DOWN whatever the call
+    said. So on a SELL it drew the target above the price and the stop below:
+    both on the wrong side, under a card that reads SELL.
+
+    The prices in `take_profit`/`stop_loss` were never wrong. The distances
+    the app actually draws were, and on crypto there is essentially always a
+    live price, so the wrong ones were what you saw.
+    """
+    from api.service import _levels
+
+    entry = 100.0
+    short = Analysis(name="A", opened_at=None, ends_at=None, bars_left=2,
+                     entry=entry, side="SHORT", p_up=0.4,
+                     tp_price=entry * 0.98, sl_price=entry * 1.02,
+                     upper=entry * 1.02, lower=entry * 0.98)
+    L = _levels(short, entry)
+    assert L["side"] == "SHORT"
+    assert L["take_profit"] < entry < L["stop_loss"], L
+    assert L["tp_offset_pct"] < 0 < L["sl_offset_pct"], L
+
+    # and re-anchoring to a moved price keeps them on their own sides — this
+    # is the arithmetic the app runs
+    live = 90.0
+    assert live * (1 + L["tp_offset_pct"] / 100) < live
+    assert live * (1 + L["sl_offset_pct"] / 100) > live
+
+    long_ = Analysis(name="B", opened_at=None, ends_at=None, bars_left=2,
+                     entry=entry, side="LONG", p_up=0.6,
+                     tp_price=entry * 1.02, sl_price=entry * 0.98,
+                     upper=entry * 1.02, lower=entry * 0.98)
+    M = _levels(long_, entry)
+    assert M["stop_loss"] < entry < M["take_profit"], M
+    assert M["sl_offset_pct"] < 0 < M["tp_offset_pct"], M
+    return True
+
+
+def test_the_old_magnitude_fields_are_unchanged_for_both_sides():
+    """Kept deliberately. The server deploys before the build is installed,
+    and during that window an older app reads these — it must behave exactly
+    as it did rather than acquire a new way to be wrong."""
+    from api.service import _levels
+
+    entry = 100.0
+    for side, tp, sl in (("LONG", 102.0, 98.0), ("SHORT", 98.0, 102.0)):
+        a = Analysis(name="x", opened_at=None, ends_at=None, bars_left=2,
+                     entry=entry, side=side, tp_price=tp, sl_price=sl,
+                     upper=102.0, lower=98.0)
+        L = _levels(a, entry)
+        assert abs(L["tp_pct"] - 2.0) < 1e-9, L
+        assert abs(L["sl_pct"] - 2.0) < 1e-9, L
+    return True

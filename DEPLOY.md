@@ -243,6 +243,47 @@ natively here, and `libgomp1` is included because the frozen judges are
 LightGBM models that will not import without it — but expect to debug the
 first `docker compose build` rather than assuming it is clean.
 
+## Notifications that reach a closed phone
+
+The app's own background polling cannot be relied on for this, and that is not
+a bug anyone can fix in the app. On iOS a `BGAppRefreshTask` runs when iOS
+decides — a few times a day at best, and never once the app is swiped out of
+the switcher or the phone is in Low Power Mode. The only thing that wakes an
+iOS app on someone else's schedule is APNs, whose entitlement needs a paid
+Apple Developer account.
+
+So the server relays instead. `api/push.py` hands each new alert to
+[ntfy](https://ntfy.sh) — free, no account — whose own iOS and Android apps
+hold real push entitlements. Set-up is entirely in the app: **Profile →
+Delivery with the app closed**, which generates a random topic, registers it,
+and offers a link that subscribes the ntfy app to it.
+
+Things worth knowing:
+
+* **The topic is the password.** ntfy has no accounts, so anyone who knows a
+  topic can read it and post to it. Topics are 128 bits from a cryptographic
+  generator and are stored `0600` in `data_cache/push.v1.json`. What a leaked
+  topic exposes is the alert text — which pairs are watched and what the model
+  said. Not the account, not the token, not a position.
+* **The filtering settings live on the phone and are shipped up.** Sensitivity,
+  news level and the mute list are re-registered whenever they change, so the
+  lock screen and the dashboard cannot disagree. See the fingerprint in
+  `mobile/lib/api/push.dart`.
+* **Both paths still run.** The relay does not replace the app's polling. The
+  server records which alert ids it managed to push and reports that back on
+  `/api/alerts`, so the app skips a notification that already arrived — and a
+  push that FAILED reports false, so the app notifies as it always did. There
+  is no state in which both go quiet.
+* **`PUSH_SERVER`** in `.env` points the relay at a self-hosted ntfy instead of
+  the public one. The public server sees the topic and the alert text.
+
+```bash
+# is anything registered, and has it been failing?
+docker compose exec api python3 -c \
+  "from api.push import get_relay; print(get_relay().count())"
+docker compose logs --tail=50 api | grep -i push
+```
+
 ## Keeping it fed
 
 ```bash

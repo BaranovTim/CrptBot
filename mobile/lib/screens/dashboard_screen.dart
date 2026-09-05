@@ -1300,6 +1300,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       pUp: d.windowPUp,
       windowBars: d.windowBars,
       interval: d.interval,
+      side: d.side,
     );
   }
 

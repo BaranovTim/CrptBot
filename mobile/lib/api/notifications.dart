@@ -2,8 +2,8 @@
 ///
 /// WHAT IS RELIABLE HERE, AND WHAT IS NOT
 /// --------------------------------------
-/// These are LOCAL notifications. There is no push server, no Firebase and no
-/// APNs certificate, so the honest split is:
+/// These are LOCAL notifications. This app holds no APNs certificate and no
+/// Firebase project, so the honest split is:
 ///
 ///   SCHEDULED events (FOMC and anything in calendar.json) are fully
 ///   reliable. The OS is handed the fire time in advance and delivers it
@@ -15,11 +15,16 @@
 ///   Backgrounded: whenever iOS grants a refresh window, which can be hours.
 ///   Killed: not at all.
 ///
-/// Making the second category as reliable as the first needs real push, which
-/// needs an Apple Developer account and a server holding APNs/FCM credentials.
-/// The alert payloads are already shaped for it — `/api/alerts` would become
-/// the thing that pushes rather than the thing that is polled — but nothing
-/// here pretends to be that today.
+/// That second line is not fixable from inside this file. Waking an iOS app
+/// on someone else's schedule needs a push through APNs, and the entitlement
+/// for it is tied to an App ID under a paid developer account.
+///
+/// SO THE SECOND CATEGORY HAS A SECOND PATH NOW. See `push.dart`: the server
+/// relays each alert to a notification app that DOES hold that entitlement,
+/// which reaches the phone whatever this app is doing. Everything below still
+/// runs and is still what draws the notification when the app is awake — the
+/// relay is a parallel route, not a replacement, and either one arriving is
+/// better than the old answer of neither.
 ///
 /// EVERY NOTIFICATION SAYS WHEN THE THING HAPPENED
 /// -----------------------------------------------

@@ -273,6 +273,16 @@ class AlertEngine:
                     if new:
                         log.info("alerts: %d new (%s)", len(new),
                                  ", ".join(sorted({a.kind for a in new})))
+                        # RELAYED HERE, not from the phone.
+                        #
+                        # This is the moment the alert exists, and it is the
+                        # only moment at which anything in this system knows
+                        # about it while the phone is asleep. iOS will not run
+                        # our background task on any schedule worth relying
+                        # on — see `api/push.py` — so a channel that does not
+                        # depend on our app being alive has to be fed from
+                        # the server's own loop.
+                        self._relay(new)
                 except Exception as e:
                     # the loop outlives any single bad refresh; a feed that
                     # is down for an hour must not end alerting for the day
@@ -283,6 +293,27 @@ class AlertEngine:
                                         name="alerts")
         self._thread.start()
         log.info("alert engine started, refreshing every %.0fs", interval)
+
+    @staticmethod
+    def _relay(new: List["Alert"]) -> None:
+        """Hand the batch to the push relay. Never raises.
+
+        Detection and delivery are separate concerns and separate failure
+        modes: a push service being unreachable must leave the log, the
+        cursor and `/api/alerts` working exactly as they do today. The phone
+        polling remains the primary path — this is a second one that survives
+        the app being closed.
+        """
+        try:
+            from api.push import get_relay
+
+            relay = get_relay()
+            if relay.count():
+                sent = relay.deliver(new)
+                if sent:
+                    log.info("alerts: relayed %d push message(s)", sent)
+        except Exception as e:
+            log.warning("alerts: push relay failed: %s", e)
 
     def stop(self) -> None:
         self._stop.set()

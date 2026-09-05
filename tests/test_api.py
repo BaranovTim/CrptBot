@@ -280,8 +280,17 @@ def test_writes_touch_accounts_billing_and_training_and_nothing_else():
         duplicates refused, MAX_QUEUE, and MAX_PER_DAY per account. If those
         are weakened, this paragraph is wrong.
 
-    Anything OUTSIDE these three families appearing in `do_POST` means the
-    argument needs rewriting a third time.
+    PUSH MOVES IT A THIRD TIME, and this one is the mildest of the three.
+    `/api/push/subscribe` stores a notification topic against the account and
+    nothing else. It writes no market data and spends no CPU; the worst a
+    compromised session can do with it is redirect that account's own alerts
+    to a topic the attacker is listening on, or send one test message. Worth
+    saying out loud because it IS a real leak of what the owner watches —
+    which is exactly why the subscription is per account and readable only by
+    the account that made it.
+
+    Anything OUTSIDE these four families appearing in `do_POST` means the
+    argument needs rewriting a fourth time.
     """
     import inspect
 
@@ -292,11 +301,18 @@ def test_writes_touch_accounts_billing_and_training_and_nothing_else():
     assert verbs == ["do_GET", "do_OPTIONS", "do_POST"], verbs
 
     src = inspect.getsource(Handler.do_POST)
-    routes = re.findall(r'route == "(/api/[^"]+)"', src)
+    # EVERY route literal, not just the `route == "..."` ones.
+    #
+    # The narrower pattern was a hole: writing a family as
+    # `route in ("/api/a", "/api/b")` matched nothing, so the test passed
+    # while saying nothing — the worst failure a guard rail can have.
+    routes = re.findall(r'"(/api/[^"]+)"', src)
     assert routes, "no routes found in do_POST"
     for r in routes:
-        assert r.startswith(("/api/auth/", "/api/billing/", "/api/train")), \
-            f"{r} writes something that is not an account, a payment or a fit"
+        assert r.startswith(("/api/auth/", "/api/billing/", "/api/train",
+                             "/api/push/")), \
+            f"{r} writes something that is not an account, a payment, a fit " \
+            f"or a notification topic"
 
     # The limits the paragraph above depends on. If someone raises these to
     # something that no longer bounds the damage, this fails and they read it.
