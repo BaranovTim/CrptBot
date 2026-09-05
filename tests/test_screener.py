@@ -548,3 +548,59 @@ def test_a_negative_denominator_leaves_the_multiple_blank():
     assert m["market_cap"] == 10000.0
     assert m["pb"] is None, m["pb"]
     return True
+
+
+def test_a_profit_turning_into_a_loss_gives_no_rate_not_a_complex_number():
+    """THE BUG THIS PINS, and it cost a whole universe build.
+
+    `(latest / older) ** (1 / span)` with a negative ratio returns a COMPLEX
+    number in Python rather than raising. It travelled to `json.dumps`, which
+    threw at the final save of an eighteen-minute run and discarded all of it.
+
+    There is no meaningful annualised rate between a profit and a loss in
+    either direction — the sign flip is the story, and a percentage cannot
+    carry it.
+    """
+    import datetime as _dt
+
+    from screener.fundamentals import _annualised
+
+    newest = _dt.date.today() - _dt.timedelta(days=40)
+    older = newest.replace(year=newest.year - 3)
+
+    def fy(val, end):
+        return {"val": val,
+                "start": end.replace(year=end.year - 1).isoformat(),
+                "end": end.isoformat(), "filed": end.isoformat(),
+                "fy": end.year, "fp": "FY"}
+
+    facts = {"facts": {"us-gaap": {"EarningsPerShareDiluted": {
+        "units": {"USD": [fy(5.0, older), fy(-2.0, newest)]}}}}}
+    got = _annualised(facts, "eps_diluted", None, years=3)
+    assert got is None, got
+    assert not isinstance(got, complex)
+
+    facts2 = {"facts": {"us-gaap": {"EarningsPerShareDiluted": {
+        "units": {"USD": [fy(-5.0, older), fy(2.0, newest)]}}}}}
+    assert _annualised(facts2, "eps_diluted", None, years=3) is None
+    return True
+
+
+def test_one_unserialisable_cell_cannot_destroy_the_whole_table():
+    """Defence in depth for the same failure. The arithmetic is fixed, but a
+    single bad value must never again cost an eighteen-minute build."""
+    import json
+
+    from screener.universe import _clean
+
+    cleaned = _clean({"a": 1.5, "b": complex(1, 2), "c": "text",
+                      "d": float("nan"), "e": float("inf"), "f": None,
+                      "g": [1.0, complex(0, 1)]})
+    assert cleaned["a"] == 1.5
+    assert cleaned["b"] is None
+    assert cleaned["c"] == "text"
+    assert cleaned["d"] is None and cleaned["e"] is None
+    assert cleaned["g"] == [1.0, None]
+
+    json.dumps(cleaned, allow_nan=False)      # the call that used to throw
+    return True

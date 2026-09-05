@@ -323,4 +323,14 @@ def _clean(obj):
         return [_clean(v) for v in obj]
     if isinstance(obj, float):
         return None if (obj != obj or obj in (float("inf"), float("-inf"))) else obj
-    return obj
+    if isinstance(obj, (str, int, bool)) or obj is None:
+        return obj
+    # ANYTHING ELSE BECOMES None RATHER THAN KILLING THE WRITE.
+    #
+    # A complex number reached this point once — a negative base raised to a
+    # fractional power, which Python returns silently — and `json.dumps` threw
+    # at the very end of an eighteen-minute build, discarding all of it. The
+    # arithmetic that produced it is fixed, but one unserialisable cell must
+    # never again cost the whole table.
+    log.warning("screener: dropped unserialisable %s value", type(obj).__name__)
+    return None

@@ -25,6 +25,8 @@
 ///     stocks failed on the merits.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
@@ -52,6 +54,8 @@ class ScreenerScreen extends StatefulWidget {
 class _ScreenerScreenState extends State<ScreenerScreen> {
   ScreenerCatalogue? _cat;
   ScreenerResult? _result;
+  List<ScreenerSetup> _setups = const [];
+  String? _openSetup;
   String? _error;
   String? _lastFailure;
   DateTime _waitingSince = DateTime.now();
@@ -106,10 +110,26 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
         _error = null;
         _waitingSince = DateTime.now();
       });
+      // Deliberately NOT awaited with the run: the carousel is context, and
+      // a slow setups call must not hold the results back.
+      unawaited(_loadSetups());
       await _run();
     } catch (e) {
       if (!mounted) return;
       _lastFailure = '$e';
+    }
+  }
+
+  Future<void> _loadSetups() async {
+    try {
+      final s = await widget.client.screenerSetups(market: widget.market);
+      if (!mounted) return;
+      setState(() {
+        _setups = s;
+        _openSetup ??= s.isEmpty ? null : s.first.id;
+      });
+    } catch (_) {
+      // no carousel is the correct failure; the screen still works
     }
   }
 
@@ -145,16 +165,6 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
     }
   }
 
-  void _applyPreset(ScreenerPreset p) {
-    setState(() {
-      _filters
-        ..clear()
-        ..addAll(p.instantiate());     // copies, so editing cannot mutate it
-      _fromPreset = p.id;
-    });
-    _run();
-  }
-
   void _edited() => setState(() => _fromPreset = null);
 
   @override
@@ -180,11 +190,14 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
         children: [
           _title(cat),
           const SizedBox(height: 16),
-          _presetBar(cat),
-          ..._droppedNote(cat),
-          const SizedBox(height: 10),
+          // ORDER FROM THE DESIGN: what is being filtered, THEN the
+          // strategies, THEN what matched. The recommendations used to sit
+          // above the criteria, which put a menu before the thing it changes.
           _filterSection(cat),
-          const SizedBox(height: 22),
+          ..._droppedNote(cat),
+          const SizedBox(height: 20),
+          ..._setupSection(cat),
+          const SizedBox(height: 20),
           _resultsHeader(),
           const SizedBox(height: 10),
           ..._results(cat),
@@ -244,42 +257,367 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
     return '${cat.symbols} US stocks · $age';
   }
 
-  // ------------------------------------------------------------- presets
+  // ------------------------------------------------------------- setups
   //
-  // One row, not seven cards. See the library doc.
-  Widget _presetBar(ScreenerCatalogue cat) {
-    final active = _fromPreset == null
-        ? null
-        : cat.presets.where((p) => p.id == _fromPreset).firstOrNull;
+  // From the design: a pulsing header, a row of strategy pills carrying live
+  // match counts, and a horizontal carousel of the leading matches behind the
+  // selected one. Below the criteria, because a strategy is a way of FILLING
+  // the criteria — showing it first put the menu before the thing it changes.
+  List<Widget> _setupSection(ScreenerCatalogue cat) {
+    if (_setups.isEmpty) return const [];
+    final open = _setups.firstWhere((s) => s.id == _openSetup,
+        orElse: () => _setups.first);
+    return [
+      Row(
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: const BoxDecoration(
+                color: Obsidian.green, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Text('RECOMMENDED SETUPS', style: Obsidian.labelSm(size: 10.5)),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Obsidian.green.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+              border:
+                  Border.all(color: Obsidian.green.withValues(alpha: 0.30)),
+            ),
+            child: Text('${_setups.length} AVAILABLE',
+                style: Obsidian.labelSm(size: 8, color: Obsidian.green)),
+          ),
+          const Spacer(),
+          Text(
+              widget.market == 'crypto'
+                  ? 'Rescanned nightly'
+                  : 'Rescanned after the close',
+              style: Obsidian.labelSm(size: 9, color: Obsidian.outline)),
+        ],
+      ),
+      const SizedBox(height: 10),
+      // Strategy pills, with the live count on each.
+      SizedBox(
+        height: 30,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: _setups.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 7),
+          itemBuilder: (_, i) => _setupPill(_setups[i]),
+        ),
+      ),
+      const SizedBox(height: 12),
+      if (open.count == 0)
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Obsidian.surfaceLow,
+            borderRadius: BorderRadius.circular(Obsidian.rLg),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.search_off_rounded,
+                  size: 16, color: Obsidian.outline),
+              const SizedBox(width: 10),
+              Expanded(
+                // "Nothing qualifies today" IS an answer, and a screen that
+                // hid empty strategies would only ever show you the loose
+                // ones.
+                child: Text('Nothing clears ${open.name} right now.',
+                    style:
+                        Obsidian.body(color: Obsidian.outline, size: 12)),
+              ),
+              TextButton(
+                onPressed: () => _applySetup(open),
+                child: Text('Load it anyway',
+                    style: Obsidian.body(
+                        color: Obsidian.primary, size: 11.5)),
+              ),
+            ],
+          ),
+        )
+      else
+        SizedBox(
+          height: 172,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: open.rows.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (_, i) => _setupCard(open, open.rows[i], cat),
+          ),
+        ),
+      const SizedBox(height: 10),
+      // The pill selects; this applies. Separated on purpose — browsing the
+      // strategies should not keep rewriting the filters you are reading.
+      InkWell(
+        onTap: () => _applySetup(open),
+        borderRadius: BorderRadius.circular(Obsidian.rMd),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 11),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Obsidian.primaryContainer.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(Obsidian.rMd),
+            border:
+                Border.all(color: Obsidian.primary.withValues(alpha: 0.40)),
+          ),
+          child: Text(
+              _fromPreset == open.id
+                  ? 'Loaded — every value above is yours to change'
+                  : 'Load "${open.name}" into the criteria',
+              style: Obsidian.body(size: 12.5, color: Obsidian.primary)),
+        ),
+      ),
+    ];
+  }
+
+  Widget _setupPill(ScreenerSetup s) {
+    final on = (_openSetup ?? _setups.first.id) == s.id;
+    final applied = _fromPreset == s.id;
     return InkWell(
-      onTap: () => _pickPreset(cat),
-      borderRadius: BorderRadius.circular(Obsidian.rMd),
+      onTap: () => setState(() => _openSetup = s.id),
+      borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
         decoration: BoxDecoration(
-          color: Obsidian.primaryContainer.withValues(alpha: 0.16),
-          borderRadius: BorderRadius.circular(Obsidian.rMd),
+          color: on
+              ? Obsidian.green.withValues(alpha: 0.15)
+              : Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(
-              color: Obsidian.primary.withValues(alpha: 0.4)),
+              color: on
+                  ? Obsidian.green.withValues(alpha: 0.45)
+                  : Colors.white.withValues(alpha: 0.10)),
         ),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.auto_awesome_rounded,
-                size: 16, color: Obsidian.primary),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(active?.name ?? 'Recommended screens',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Obsidian.body(size: 13, color: Obsidian.primary)
-                      .copyWith(fontWeight: FontWeight.w600)),
+            if (applied) ...[
+              const Icon(Icons.check_rounded,
+                  size: 11, color: Obsidian.green),
+              const SizedBox(width: 4),
+            ],
+            Text(s.name,
+                style: Obsidian.body(
+                    size: 11.5,
+                    color: on ? Obsidian.green : Obsidian.onSurfaceVariant)),
+            const SizedBox(width: 6),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: on
+                    ? Obsidian.green.withValues(alpha: 0.25)
+                    : Colors.white.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text('${s.count}',
+                  style: Obsidian.dataTable(
+                      size: 9,
+                      color: on ? Obsidian.green : Obsidian.outline)),
             ),
-            const Icon(Icons.expand_more_rounded,
-                size: 18, color: Obsidian.primary),
           ],
         ),
       ),
     );
+  }
+
+  /// A carousel card: who matched, and WHY — from the values that passed,
+  /// never a confidence score. There is no model behind a screen, so a
+  /// percentage here would be invented.
+  Widget _setupCard(ScreenerSetup setup, ScreenerRow row,
+      ScreenerCatalogue cat) {
+    final byId = cat.byId;
+    final change = row.metric('change_pct');
+    final up = (change ?? 0) >= 0;
+    final trained = row.trainedIntervals;
+
+    return SizedBox(
+      width: 262,
+      child: Container(
+        padding: const EdgeInsets.all(13),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Obsidian.surfaceContainer, Obsidian.surfaceLowest],
+          ),
+          borderRadius: BorderRadius.circular(Obsidian.rLg),
+          border:
+              Border.all(color: Obsidian.green.withValues(alpha: 0.30)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.10)),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                      row.short.length > 4
+                          ? row.short.substring(0, 4)
+                          : row.short,
+                      style: Obsidian.labelSm(size: 8.5)),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                          row.name.isNotEmpty ? row.name : row.short,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Obsidian.body(size: 13)
+                              .copyWith(fontWeight: FontWeight.w600)),
+                      Text(
+                          widget.market == 'crypto'
+                              ? '${row.short} / USDT'
+                              : row.symbol,
+                          style: Obsidian.dataTable(
+                              size: 9.5, color: Obsidian.outline)),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(byId['price']?.format(row.metric('price')) ?? '—',
+                        style: Obsidian.dataTable(size: 11.5)),
+                    if (change != null)
+                      Text(
+                          '${up ? '+' : ''}'
+                          '${change.toStringAsFixed(1)}%',
+                          style: Obsidian.dataTable(
+                              size: 9.5,
+                              color:
+                                  up ? Obsidian.green : Obsidian.red)),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.28),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.05)),
+                ),
+                child: RichText(
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  text: TextSpan(children: [
+                    TextSpan(
+                        text: '${setup.name}: ',
+                        style: Obsidian.body(size: 10.5,
+                                color: Obsidian.green)
+                            .copyWith(fontWeight: FontWeight.w600)),
+                    TextSpan(
+                        text: _why(row, setup, byId),
+                        style: Obsidian.body(
+                            size: 10.5,
+                            color: Obsidian.onSurfaceVariant)),
+                  ]),
+                ),
+              ),
+            ),
+            const SizedBox(height: 9),
+            Divider(
+                height: 1, color: Colors.white.withValues(alpha: 0.08)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                      color: trained.isEmpty
+                          ? Obsidian.outlineVariant
+                          : Obsidian.green,
+                      shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 6),
+                // NOT a confidence percentage. A screen has no model behind
+                // it, so a "94% Conf" here would be a number I made up.
+                Text(
+                    trained.isEmpty
+                        ? '${row.passed.length}/${setup.filters.length} '
+                            'criteria'
+                        : '${row.passed.length}/${setup.filters.length} · '
+                            'bot trained',
+                    style: Obsidian.labelSm(
+                        size: 8.5,
+                        color: trained.isEmpty
+                            ? Obsidian.outline
+                            : Obsidian.green)),
+                const Spacer(),
+                InkWell(
+                  onTap: () => _open(row),
+                  child: Row(
+                    children: [
+                      Text('Open',
+                          style: Obsidian.labelSm(
+                              size: 9, color: Obsidian.primary)),
+                      const Icon(Icons.arrow_forward_rounded,
+                          size: 11, color: Obsidian.primary),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The reason, built from the values that actually passed.
+  static String _why(ScreenerRow row, ScreenerSetup setup,
+      Map<String, ScreenerField> byId) {
+    final bits = <String>[];
+    for (final f in setup.filters) {
+      if (!row.passed.contains(f.field)) continue;
+      final field = byId[f.field];
+      final v = row.metric(f.field);
+      if (field == null) continue;
+      if (field.kind == 'bool') {
+        bits.add(f.op == 'is_false'
+            ? 'below ${field.label.replaceAll('Price vs ', '')}'
+            : field.label.replaceAll('Price vs ', 'above '));
+      } else if (v != null) {
+        bits.add('${field.label} ${field.format(v)}');
+      }
+      if (bits.length >= 3) break;
+    }
+    return bits.isEmpty ? setup.note : bits.join(' · ');
+  }
+
+  void _applySetup(ScreenerSetup s) {
+    setState(() {
+      _filters
+        ..clear()
+        ..addAll(s.instantiate());   // copies, so editing cannot mutate it
+      _fromPreset = s.id;
+      _openSetup = s.id;
+    });
+    _run();
   }
 
   /// What the active preset had to leave out, and why.
@@ -374,16 +712,6 @@ class _ScreenerScreenState extends State<ScreenerScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _pickPreset(ScreenerCatalogue cat) async {
-    final picked = await showModalBottomSheet<ScreenerPreset>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => _PresetSheet(presets: cat.presets, current: _fromPreset),
-    );
-    if (picked != null) _applyPreset(picked);
   }
 
   /// A visible break between the controls and what they returned.
@@ -1104,90 +1432,6 @@ class _FieldPicker extends StatelessWidget {
                   ],
                 ],
               ),
-            ),
-          ),
-        ),
-      );
-}
-
-
-/// The recommendations, as bare names.
-///
-/// No descriptions and no criterion chips: you already know what "oversold
-/// bounce" means, and the seven explanations were what made this a screenful
-/// rather than a menu. The criteria are all visible the moment you pick one —
-/// they become the filter rows.
-class _PresetSheet extends StatelessWidget {
-  const _PresetSheet({required this.presets, this.current});
-
-  final List<ScreenerPreset> presets;
-  final String? current;
-
-  @override
-  Widget build(BuildContext context) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.all(Obsidian.containerPadding),
-          child: GlassPanel(
-            active: true,
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('RECOMMENDED SCREENS',
-                    style: Obsidian.labelSm(size: 11)),
-                const SizedBox(height: 12),
-                for (final p in presets)
-                  InkWell(
-                    onTap: () => Navigator.of(context).pop(p),
-                    borderRadius: BorderRadius.circular(Obsidian.rMd),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 11),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(p.name,
-                                style: Obsidian.body(
-                                    size: 13.5,
-                                    color: p.id == current
-                                        ? Obsidian.primary
-                                        : null)),
-                          ),
-                          // The one thing worth saying about a preset before
-                          // you pick it: whether we can actually judge it.
-                          if (p.dropped.isNotEmpty)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: Obsidian.amber
-                                      .withValues(alpha: 0.14),
-                                  borderRadius: BorderRadius.circular(5)),
-                              child: Text(
-                                  '−${p.dropped.length} criteria',
-                                  style: Obsidian.labelSm(
-                                      size: 8.5, color: Obsidian.amber)),
-                            ),
-                          if (p.id == current)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 8),
-                              child: Icon(Icons.check_rounded,
-                                  size: 16, color: Obsidian.primary),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 6),
-                Center(
-                  child: TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text('Cancel',
-                        style: Obsidian.body(color: Obsidian.outline)),
-                  ),
-                ),
-              ],
             ),
           ),
         ),

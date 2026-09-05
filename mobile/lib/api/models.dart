@@ -1062,3 +1062,39 @@ class TrainStatus {
     return null;
   }
 }
+
+/// One recommended setup: a preset, how many match it right now, and the
+/// leading few.
+///
+/// Fetched for every preset in ONE request — the carousel needs a count on
+/// every pill, and asking per preset would be seven round trips to draw one
+/// row of chips.
+class ScreenerSetup {
+  ScreenerSetup.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        name = j['name'] as String,
+        note = j['note'] as String? ?? '',
+        count = (j['count'] as num?)?.toInt() ?? 0,
+        filters = ((j['filters'] as List?) ?? const [])
+            .map((e) => ScreenerFilter.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        dropped = ((j['dropped'] as List?) ?? const [])
+            .map((e) => ScreenerFilter.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        rows = ((j['rows'] as List?) ?? const [])
+            .map((e) => ScreenerRow.fromJson(e as Map<String, dynamic>))
+            .toList();
+
+  final String id, name, note;
+
+  /// How many match today. Shown on the pill — a strategy finding nothing is
+  /// still listed, because "nothing qualifies right now" is an answer.
+  final int count;
+  final List<ScreenerFilter> filters, dropped;
+
+  /// The leading matches, for the carousel cards.
+  final List<ScreenerRow> rows;
+
+  List<ScreenerFilter> instantiate() =>
+      filters.map((f) => f.copy()).toList();
+}

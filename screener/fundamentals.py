@@ -510,7 +510,19 @@ def _annualised(facts: dict, concept: str, as_of,
         return None
 
     latest, older = by_end[ends[-1]], by_end[best]
-    if older <= 0:
+    # BOTH ends must be positive, not just the older one.
+    #
+    # A company that went from profit to loss gives a negative ratio, and a
+    # negative number raised to a fractional power is COMPLEX in Python —
+    # (-0.4) ** 0.33 returns a complex number rather than raising. It then
+    # travelled all the way to `json.dumps`, which killed an eighteen-minute
+    # universe build at the final save with "Object of type complex is not
+    # JSON serializable", losing the whole run.
+    #
+    # There is no meaningful annualised growth RATE between a profit and a
+    # loss in either direction: the sign flip is the story, and a percentage
+    # cannot carry it.
+    if older <= 0 or latest <= 0:
         return None
     # The actual span, not the requested one — a 3.2 year gap annualised as
     # 3 years overstates the rate.

@@ -299,6 +299,15 @@ class ApiClient {
   Future<Map<String, dynamic>> cancelTraining(String id) =>
       _post('/api/train/cancel', {'id': id});
 
+  Future<List<ScreenerSetup>> screenerSetups(
+      {String market = 'stocks', int top = 3}) async {
+    final j = await _get('/api/screener/setups?market=$market&top=$top',
+        timeout: const Duration(seconds: 45));
+    return ((j['setups'] as List?) ?? const [])
+        .map((e) => ScreenerSetup.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<Map<String, dynamic>> health() async => _get('/api/health');
 
   Future<Map<String, dynamic>> plans() async => _get('/api/billing/plans');

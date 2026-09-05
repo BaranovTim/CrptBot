@@ -297,7 +297,9 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/indicator",
                                           "/api/track",
                                           "/api/screener/catalogue",
-                                          "/api/screener", "/api/stock",
+                                          "/api/screener",
+                                          "/api/screener/setups",
+                                          "/api/stock",
                                           "/api/stock/quotes",
                                           "/api/stock/search",
                                           "/api/horizon", "/api/train",
@@ -378,6 +380,41 @@ class Handler(BaseHTTPRequestHandler):
                             # than presenting an overnight snapshot as live
                             "built_at": table.get("built_at"),
                             "symbols": table.get("symbols", 0)})
+            elif route == "/api/screener/setups":
+                from screener.engine import run as _run
+                from screener.filters import (UNAVAILABLE as _UNAV,
+                                              presets_for)
+
+                market = opt("market") or "stocks"
+                table = _screener_table(market)
+                rows = table.get("rows") or {}
+                top = arg("top", 3)
+
+                # ONE request for every preset, not one per preset.
+                #
+                # The setup carousel needs a count for each strategy pill and
+                # the leading matches behind it. Asking separately would be
+                # seven round trips to draw one row of chips, on a phone, over
+                # mobile data.
+                out = []
+                for p in presets_for(market).values():
+                    fs = [f for f in p.filters if f.field not in _UNAV]
+                    r = _run(rows, fs, limit=top, sort_by="quote_volume"
+                             if market == "crypto" else "market_cap")
+                    out.append({
+                        "id": p.id, "name": p.name, "note": p.note,
+                        "count": r["matched"],
+                        "filters": [f.to_json() for f in fs],
+                        "dropped": [f.to_json() for f in p.filters
+                                    if f.field in _UNAV],
+                        "rows": r["rows"],
+                    })
+                # Most matches first: a strategy finding nothing today is
+                # still listed, but it should not lead.
+                out.sort(key=lambda x: -x["count"])
+                self._send({"setups": out, "market": market,
+                            "built_at": table.get("built_at"),
+                            "scanned": len(rows)})
             elif route == "/api/screener":
                 from screener.engine import run as _run
                 from screener.filters import (UNAVAILABLE as _UNAVAILABLE,
