@@ -1,0 +1,59 @@
+
+======================================================================
+XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 1m   htf 15m
+======================================================================
+  seeding XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 1m from 2026-05-01 (store holds 0)...
+  seed failed (URL can't contain control characters. '/data/futures/um/monthly/klines/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT/1m/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT-1m-2026-05.zip' (found at least ' ')); using what is stored
+  no bars; skipping
+
+======================================================================
+XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 5m   htf 1h
+======================================================================
+  seeding XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 5m from 2025-08-01 (store holds 0)...
+  seed failed (URL can't contain control characters. '/data/futures/um/monthly/klines/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT/5m/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT-5m-2025-08.zip' (found at least ' ')); using what is stored
+  no bars; skipping
+
+======================================================================
+XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 15m   htf 4h
+======================================================================
+  seeding XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 15m from 2024-08-01 (store holds 0)...
+  seed failed (URL can't contain control characters. '/data/futures/um/monthly/klines/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT/15m/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT-15m-2024-08.zip' (found at least ' ')); using what is stored
+  no bars; skipping
+
+======================================================================
+XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 1h   htf 4h
+======================================================================
+  seeding XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 1h from 2023-01-01 (store holds 0)...
+  seed failed (URL can't contain control characters. '/data/futures/um/monthly/klines/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT/1h/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT-1h-2023-01.zip' (found at least ' ')); using what is stored
+  no bars; skipping
+
+======================================================================
+XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 4h   htf 1d
+======================================================================
+  seeding XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 4h from 2021-01-01 (store holds 0)...
+  seed failed (URL can't contain control characters. '/data/futures/um/monthly/klines/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT/4h/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT-4h-2021-01.zip' (found at least ' ')); using what is stored
+  no bars; skipping
+
+======================================================================
+XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 1d   htf 1w
+======================================================================
+  seeding XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT 1d from 2019-01-01 (store holds 0)...
+  seed failed (URL can't contain control characters. '/data/futures/um/monthly/klines/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT/1d/XRPUSDT ZECUSDT HYPEUSDT DOGEUSDT BNBUSDT ENAUSDT UNIUSDT NEARUSDT SUIUSDT 1000PEPEUSDT-1d-2019-01.zip' (found at least ' ')); using what is stored
+  no bars; skipping
+
+==============================================================================
+ALL TIMEFRAMES
+==============================================================================
+  tf  h      bars   eff-n    AUC  spread  shuffle  overfit  folds
+  1m h1         -       -      -       -        -        -  no bars
+  1m h2         -       -      -       -        -        -  no bars
+  5m h1         -       -      -       -        -        -  no bars
+  5m h2         -       -      -       -        -        -  no bars
+ 15m h1         -       -      -       -        -        -  no bars
+ 15m h2         -       -      -       -        -        -  no bars
+  1h h1         -       -      -       -        -        -  no bars
+  1h h2         -       -      -       -        -        -  no bars
+  4h h1         -       -      -       -        -        -  no bars
+  4h h2         -       -      -       -        -        -  no bars
+  1d h1         -       -      -       -        -        -  no bars
+  1d h2         -       -      -       -        -        -  no bars

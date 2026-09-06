@@ -174,17 +174,40 @@ class JudgeAgent:
 
     # --------------------------------------------------------------- io
     def save(self, path) -> None:
-        """Freeze to disk: model, calibrator, column order, config."""
+        """Freeze to disk: model, calibrator, column order, config.
+
+        THROUGH A TEMP FILE AND A RENAME, like every other write in this
+        project. `joblib.dump` straight to the destination has a window —
+        small, because these files are tens of kilobytes — where a crash, a
+        shutdown or a killed training run leaves a TRUNCATED file sitting at
+        the real name.
+
+        That failure is silent and confusing: `is_trained()` only asks whether
+        the path exists, so the app would offer the timeframe, the server
+        would try to load it, and the error would surface as a broken
+        dashboard rather than as a missing model. A rename is atomic on POSIX,
+        so the file is either the previous one or the complete new one, never
+        half of either.
+        """
         import joblib
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump({
-            "model": self.model,
-            "calibrator": self.calibrator,
-            "columns": self.columns,
-            "config": self.cfg,
-        }, path)
+        tmp = path.with_suffix(path.suffix + ".part")
+        try:
+            joblib.dump({
+                "model": self.model,
+                "calibrator": self.calibrator,
+                "columns": self.columns,
+                "config": self.cfg,
+            }, tmp)
+            tmp.replace(path)
+        except BaseException:
+            # BaseException, not Exception: the case this exists for includes
+            # KeyboardInterrupt and SystemExit, which is precisely how a
+            # training run gets stopped by hand.
+            tmp.unlink(missing_ok=True)
+            raise
 
     @classmethod
     def load(cls, path) -> "JudgeAgent":
