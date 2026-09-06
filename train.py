@@ -107,7 +107,8 @@ def ensure_bars(symbol: str, interval: str, seed: bool) -> "object":
     return store
 
 
-def compute_frames(bars, htf: str, symbol: str, interval: str):
+def compute_frames(bars, htf: str, symbol: str, interval: str,
+                   no_tape: bool = False):
     """Detector features for these bars. Computed ONCE per timeframe.
 
     Agent 1 is ~370 microseconds a bar, so 175,000 one-minute bars is a
@@ -135,7 +136,24 @@ def compute_frames(bars, htf: str, symbol: str, interval: str):
     # optional.
     from marketdata.flow_inputs import describe, flow_inputs
 
-    extra = flow_inputs(symbol, interval, bars, backfill=True)
+    if no_tape:
+        # THE ABLATION.
+        #
+        # Backfilling the trade tape is ~99% of a training run: measured at
+        # 3.2 seconds per day of history, against fits that take 15. So the
+        # question "do the tape features earn that" is worth a switch rather
+        # than an opinion. Open interest and liquidations are kept — they are
+        # cheap now that the metrics fetch runs in parallel, and they are not
+        # what is being asked about.
+        #
+        # FlowAgent still runs and still emits its columns; with no tape they
+        # are the zero/coverage shape it already produces when a serving host
+        # has no tape on disk. So this measures exactly the model we would
+        # ship if the tape were dropped, not a hypothetical one.
+        extra = flow_inputs(symbol, interval, bars, backfill=False)
+        extra["tape"] = None
+    else:
+        extra = flow_inputs(symbol, interval, bars, backfill=True)
     print(f"  flow inputs: {describe(extra)}")
 
     frames, warm = {}, []
@@ -213,7 +231,12 @@ def main(argv=None) -> int:
                    help="do not download history; use the live store as-is")
     p.add_argument("--dry-run", action="store_true",
                    help="fit and report, but write no model files")
+    p.add_argument("--no-tape", action="store_true",
+                   help="fit WITHOUT the trade-tape flow features. Backfilling "
+                        "the tape is ~99%% of a training run, so this is the "
+                        "ablation that says whether it is worth paying for")
     a = p.parse_args(argv)
+    no_tape = a.no_tape
 
     intervals = [s.strip() for s in a.intervals.split(",") if s.strip()]
     results: List[Outcome] = []
@@ -234,7 +257,8 @@ def main(argv=None) -> int:
               f"{bars.index[-1]:%Y-%m-%d}", flush=True)
 
         t0 = time.time()
-        frames, warm, why = compute_frames(bars, htf, a.symbol, interval)
+        frames, warm, why = compute_frames(bars, htf, a.symbol, interval,
+                                          no_tape=no_tape)
         if frames is None:
             print(f"  SKIPPED - {why}", flush=True)
             for h in (1, 2):
