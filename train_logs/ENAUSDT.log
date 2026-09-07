@@ -1,0 +1,41 @@
+
+======================================================================
+ENAUSDT 1m   htf 15m
+======================================================================
+  seeding ENAUSDT 1m from 2026-05-01 (store holds 0)...
+  seeded 185,760 new bars
+  185,760 bars  2026-05-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=185,760  liquidations=none
+  features computed in 125s (81 detector columns)
+  barriers +/-11 ATR   holds 120/240 bars
+  h1 (120 bars): AUC 0.493  folds [0.466 0.512 0.523 0.512 0.492]  spread 0.020  shuffle 0.499  eff-n 1,843  (60s)
+  h2 (240 bars): AUC 0.479  folds [0.509 0.475 0.483 0.502 0.527]  spread 0.019  shuffle 0.499  eff-n 1,193  (53s)
+
+======================================================================
+ENAUSDT 5m   htf 1h
+======================================================================
+  seeding ENAUSDT 5m from 2025-08-01 (store holds 0)...
+  seeded 115,776 new bars
+  115,776 bars  2025-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=115,776  liquidations=none
+  features computed in 95s (81 detector columns)
+  barriers +/-4 ATR   holds 16/32 bars
+  h1 (16 bars): AUC 0.487  folds [0.494 0.508 0.517 0.505 0.497]  spread 0.008  shuffle 0.495  eff-n 7,594  (34s)
+  h2 (32 bars): AUC 0.497  folds [0.500 0.514 0.522 0.491 0.503]  spread 0.011  shuffle 0.497  eff-n 4,806  (37s)
+
+======================================================================
+ENAUSDT 15m   htf 4h
+======================================================================
+  seeding ENAUSDT 15m from 2024-08-01 (store holds 0)...
+  seeded 73,632 new bars
+  73,632 bars  2024-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=73,632  liquidations=none
+  features computed in 86s (81 detector columns)
+  barriers +/-2 ATR   holds 4/8 bars
+  h1 (4 bars): AUC 0.502  folds [0.517 0.499 0.504 0.511 0.509]  spread 0.006  shuffle 0.495  eff-n 15,611  (25s)
+  h2 (8 bars): AUC 0.499  folds [0.504 0.502 0.503 0.494 0.505]  spread 0.004  shuffle 0.496  eff-n 10,269  (25s)
+
+======================================================================
+ENAUSDT 1h   htf 4h
+======================================================================
+  seeding ENAUSDT 1h from 2023-01-01 (store holds 0)...

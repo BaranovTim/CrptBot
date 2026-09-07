@@ -38,7 +38,13 @@ for S in $COINS; do
     continue
   fi
   echo "=== $S starting $(date -u +%H:%M:%S)  (${(j:,:)todo})"
-  python3 train.py --symbol $S --intervals ${(j:,:)todo} >> $LOGDIR/$S.log 2>&1
+  # --no-tape by default. The trade-tape backfill is ~99% of a training run
+  # and an eight-fit ablation put its contribution at -0.002 AUC, smaller
+  # than the fold spread of every single fit it was measured against. Set
+  # WITH_TAPE=1 to pay for it anyway.
+  TAPE_ARG=--no-tape
+  [ -n "$WITH_TAPE" ] && TAPE_ARG=
+  python3 train.py --symbol $S --intervals ${(j:,:)todo} $TAPE_ARG >> $LOGDIR/$S.log 2>&1
   echo "=== $S done rc=$? $(date -u +%H:%M:%S)"
   grep -E "h[12] \(" $LOGDIR/$S.log | tail -12
 done

@@ -1,0 +1,100 @@
+
+======================================================================
+BNBUSDT 1m   htf 15m
+======================================================================
+  seeding BNBUSDT 1m from 2026-05-01 (store holds 0)...
+  seeded 185,760 new bars
+  185,760 bars  2026-05-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=185,760  liquidations=none
+  features computed in 127s (81 detector columns)
+  barriers +/-11 ATR   holds 120/240 bars
+  h1 (120 bars): AUC 0.477  folds [0.466 0.462 0.474 0.506 0.479]  spread 0.016  shuffle 0.497  eff-n 2,064  (62s)
+  h2 (240 bars): AUC 0.472  folds [0.467 0.469 0.483 0.491 0.445]  spread 0.016  shuffle 0.498  eff-n 1,432  (56s)
+
+======================================================================
+BNBUSDT 5m   htf 1h
+======================================================================
+  seeding BNBUSDT 5m from 2025-08-01 (store holds 0)...
+  seeded 115,776 new bars
+  115,776 bars  2025-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=115,776  liquidations=none
+  features computed in 95s (81 detector columns)
+  barriers +/-4 ATR   holds 16/32 bars
+  h1 (16 bars): AUC 0.491  folds [0.515 0.517 0.498 0.505 0.497]  spread 0.008  shuffle 0.495  eff-n 7,877  (33s)
+  h2 (32 bars): AUC 0.494  folds [0.519 0.505 0.509 0.510 0.519]  spread 0.006  shuffle 0.498  eff-n 5,175  (32s)
+
+======================================================================
+BNBUSDT 15m   htf 4h
+======================================================================
+  seeding BNBUSDT 15m from 2024-08-01 (store holds 0)...
+  seeded 73,632 new bars
+  73,632 bars  2024-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=73,632  liquidations=none
+  features computed in 81s (81 detector columns)
+  barriers +/-2 ATR   holds 4/8 bars
+  h1 (4 bars): AUC 0.501  folds [0.510 0.517 0.505 0.505 0.501]  spread 0.005  shuffle 0.498  eff-n 15,752  (30s)
+  h2 (8 bars): AUC 0.494  folds [0.494 0.513 0.512 0.510 0.489]  spread 0.010  shuffle 0.496  eff-n 10,492  (24s)
+
+======================================================================
+BNBUSDT 1h   htf 4h
+======================================================================
+  seeding BNBUSDT 1h from 2023-01-01 (store holds 0)...
+  seeded 32,280 new bars
+  32,280 bars  2023-01-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=32,280  liquidations=none
+  features computed in 91s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.525  folds [0.538 0.543 0.526 0.523 0.517]  spread 0.010  shuffle 0.500  eff-n 15,962  (18s)
+  h2 (2 bars): AUC 0.501  folds [0.520 0.509 0.521 0.512 0.511]  spread 0.005  shuffle 0.497  eff-n 11,575  (16s)
+
+======================================================================
+BNBUSDT 4h   htf 1d
+======================================================================
+  seeding BNBUSDT 4h from 2021-01-01 (store holds 0)...
+  seeded 12,450 new bars
+  12,450 bars  2021-01-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=12,450  liquidations=none
+  features computed in 542s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.512  folds [0.512 0.527 0.519 0.514 0.497]  spread 0.010  shuffle 0.490  eff-n 6,047  (8s)
+  h2 (2 bars): AUC 0.506  folds [0.507 0.532 0.502 0.506 0.515]  spread 0.011  shuffle 0.500  eff-n 4,387  (8s)
+
+======================================================================
+BNBUSDT 1d   htf 1w
+======================================================================
+  seeding BNBUSDT 1d from 2019-01-01 (store holds 0)...
+  seeded 2,401 new bars
+  2,401 bars  2020-02-10 -> 2026-09-06
+  flow inputs: tape=none  open_interest=2,401  liquidations=none
+  features computed in 909s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.489  folds [0.503 0.499 0.524 0.516 0.472]  spread 0.018  shuffle 0.508  eff-n 1,022  (2s)
+  h2 (2 bars): AUC 0.485  folds [0.506 0.435 0.540 0.473 0.543]  spread 0.041  shuffle 0.483  eff-n 746  (1s)
+
+==============================================================================
+ALL TIMEFRAMES
+==============================================================================
+  tf  h      bars   eff-n    AUC  spread  shuffle  overfit  folds
+  1m h1   185,760   2,064  0.477   0.016    0.497   +0.138  [0.466 0.462 0.474 0.506 0.479]
+  1m h2   185,760   1,432  0.472   0.016    0.498   +0.203  [0.467 0.469 0.483 0.491 0.445]
+  5m h1   115,776   7,877  0.491   0.008    0.495   +0.080  [0.515 0.517 0.498 0.505 0.497]
+  5m h2   115,776   5,175  0.494   0.006    0.498   +0.095  [0.519 0.505 0.509 0.510 0.519]
+ 15m h1    73,632  15,752  0.501   0.005    0.498   +0.072  [0.510 0.517 0.505 0.505 0.501]
+ 15m h2    73,632  10,492  0.494   0.010    0.496   +0.056  [0.494 0.513 0.512 0.510 0.489]
+  1h h1    32,280  15,962  0.525   0.010    0.500   +0.084  [0.538 0.543 0.526 0.523 0.517]
+  1h h2    32,280  11,575  0.501   0.005    0.497   +0.063  [0.520 0.509 0.521 0.512 0.511]
+  4h h1    12,450   6,047  0.512   0.010    0.490   +0.079  [0.512 0.527 0.519 0.514 0.497]
+  4h h2    12,450   4,387  0.506   0.011    0.500   +0.086  [0.507 0.532 0.502 0.506 0.515]
+  1d h1     2,401   1,022  0.489   0.018    0.508   +0.042  [0.503 0.499 0.524 0.516 0.472]
+  1d h2     2,401     746  0.485   0.041    0.483   +0.044  [0.506 0.435 0.540 0.473 0.543]
+
+HOW TO READ THIS, AND HOW NOT TO
+  Do NOT pick the highest AUC. Twelve fits means the best one is
+  above 0.50 by construction even when nothing predicts anything —
+  that is the multiple-testing trap, and it is why this table is
+  printed whole rather than sorted.
+  A timeframe earns trust from STABLE FOLDS and a CLEAN SHUFFLE
+  (~0.50), not from its mean. A spread wider than the distance
+  from 0.50 means the mean is noise.
+
+  at chance once fold spread is accounted for: 15m, 1d, 1h, 4h

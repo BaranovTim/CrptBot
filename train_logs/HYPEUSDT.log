@@ -1,0 +1,102 @@
+
+======================================================================
+HYPEUSDT 1m   htf 15m
+======================================================================
+  seeding HYPEUSDT 1m from 2026-05-01 (store holds 0)...
+  seeded 185,760 new bars
+  185,760 bars  2026-05-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=185,760  liquidations=none
+  features computed in 117s (81 detector columns)
+  barriers +/-11 ATR   holds 120/240 bars
+  h1 (120 bars): AUC 0.503  folds [0.511 0.517 0.485 0.525 0.509]  spread 0.013  shuffle 0.502  eff-n 1,822  (63s)
+  h2 (240 bars): AUC 0.497  folds [0.567 0.536 0.509 0.532 0.516]  spread 0.020  shuffle 0.499  eff-n 1,166  (60s)
+
+======================================================================
+HYPEUSDT 5m   htf 1h
+======================================================================
+  seeding HYPEUSDT 5m from 2025-08-01 (store holds 0)...
+  seeded 115,776 new bars
+  115,776 bars  2025-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=115,776  liquidations=none
+  features computed in 91s (81 detector columns)
+  barriers +/-4 ATR   holds 16/32 bars
+  h1 (16 bars): AUC 0.496  folds [0.521 0.505 0.518 0.512 0.506]  spread 0.006  shuffle 0.498  eff-n 7,596  (32s)
+  h2 (32 bars): AUC 0.499  folds [0.530 0.510 0.515 0.524 0.499]  spread 0.011  shuffle 0.497  eff-n 4,846  (29s)
+
+======================================================================
+HYPEUSDT 15m   htf 4h
+======================================================================
+  seeding HYPEUSDT 15m from 2024-08-01 (store holds 0)...
+  seeded 44,598 new bars
+  44,598 bars  2025-05-30 -> 2026-09-06
+  flow inputs: tape=none  open_interest=44,598  liquidations=none
+  features computed in 37s (81 detector columns)
+  barriers +/-2 ATR   holds 4/8 bars
+  h1 (4 bars): AUC 0.506  folds [0.513 0.499 0.513 0.510 0.507]  spread 0.005  shuffle 0.497  eff-n 9,394  (18s)
+  h2 (8 bars): AUC 0.489  folds [0.497 0.516 0.502 0.492 0.488]  spread 0.010  shuffle 0.498  eff-n 6,177  (16s)
+
+======================================================================
+HYPEUSDT 1h   htf 4h
+======================================================================
+  seeding HYPEUSDT 1h from 2023-01-01 (store holds 0)...
+  seeded 11,150 new bars
+  11,150 bars  2025-05-30 -> 2026-09-06
+  flow inputs: tape=none  open_interest=11,150  liquidations=none
+  features computed in 19s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.503  folds [0.505 0.521 0.511 0.512 0.519]  spread 0.006  shuffle 0.481  eff-n 5,397  (7s)
+  h2 (2 bars): AUC 0.484  folds [0.495 0.518 0.503 0.509 0.484]  spread 0.012  shuffle 0.499  eff-n 3,909  (6s)
+
+======================================================================
+HYPEUSDT 4h   htf 1d
+======================================================================
+  seeding HYPEUSDT 4h from 2021-01-01 (store holds 0)...
+  seeded 2,788 new bars
+  2,788 bars  2025-05-30 -> 2026-09-06
+  flow inputs: tape=none  open_interest=2,788  liquidations=none
+  features computed in 18s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.496  folds [0.504 0.541 0.506 0.508 0.491]  spread 0.016  shuffle 0.504  eff-n 1,216  (2s)
+  h2 (2 bars): AUC 0.484  folds [0.503 0.484 0.543 0.462 0.513]  spread 0.027  shuffle 0.479  eff-n 880  (2s)
+
+======================================================================
+HYPEUSDT 1d   htf 1w
+======================================================================
+  seeding HYPEUSDT 1d from 2019-01-01 (store holds 0)...
+  seeded 465 new bars
+  465 bars  2025-05-30 -> 2026-09-06
+  flow inputs: tape=none  open_interest=465  liquidations=none
+  features computed in 18s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.419  folds [0.500 0.500 0.500 0.500 0.500]  spread 0.000  shuffle 0.429  eff-n 54  (1s)
+  h2 (2 bars): AUC 0.396  folds [0.500 0.500 0.500 0.500 0.500]  spread 0.000  shuffle 0.324  eff-n 40  (0s)
+
+==============================================================================
+ALL TIMEFRAMES
+==============================================================================
+  tf  h      bars   eff-n    AUC  spread  shuffle  overfit  folds
+  1m h1   185,760   1,822  0.503   0.013    0.502   +0.160  [0.511 0.517 0.485 0.525 0.509]
+  1m h2   185,760   1,166  0.497   0.020    0.499   +0.119  [0.567 0.536 0.509 0.532 0.516]
+  5m h1   115,776   7,596  0.496   0.006    0.498   +0.063  [0.521 0.505 0.518 0.512 0.506]
+  5m h2   115,776   4,846  0.499   0.011    0.497   +0.103  [0.530 0.510 0.515 0.524 0.499]
+ 15m h1    44,598   9,394  0.506   0.005    0.497   +0.099  [0.513 0.499 0.513 0.510 0.507]
+ 15m h2    44,598   6,177  0.489   0.010    0.498   +0.084  [0.497 0.516 0.502 0.492 0.488]
+  1h h1    11,150   5,397  0.503   0.006    0.481   +0.065  [0.505 0.521 0.511 0.512 0.519]
+  1h h2    11,150   3,909  0.484   0.012    0.499   +0.075  [0.495 0.518 0.503 0.509 0.484]
+  4h h1     2,788   1,216  0.496   0.016    0.504   +0.044  [0.504 0.541 0.506 0.508 0.491]
+  4h h2     2,788     880  0.484   0.027    0.479   +0.045  [0.503 0.484 0.543 0.462 0.513]
+  1d h1       465      54  0.419   0.000    0.429   +0.000  [0.500 0.500 0.500 0.500 0.500]
+  1d h2       465      40  0.396   0.000    0.324   +0.000  [0.500 0.500 0.500 0.500 0.500]
+
+HOW TO READ THIS, AND HOW NOT TO
+  Do NOT pick the highest AUC. Twelve fits means the best one is
+  above 0.50 by construction even when nothing predicts anything —
+  that is the multiple-testing trap, and it is why this table is
+  printed whole rather than sorted.
+  A timeframe earns trust from STABLE FOLDS and a CLEAN SHUFFLE
+  (~0.50), not from its mean. A spread wider than the distance
+  from 0.50 means the mean is noise.
+
+  at chance once fold spread is accounted for: 1h, 1m, 4h, 5m
+
+  SHUFFLE TEST DIRTY (possible leakage): 1d h1, 1d h2

@@ -1,0 +1,96 @@
+
+======================================================================
+XRPUSDT 1m   htf 15m
+======================================================================
+  already seeded from 2026-05-01 (182,880 bars); skipping download
+  182,880 bars  2026-05-01 -> 2026-09-04
+  flow inputs: tape=none  open_interest=182,880  liquidations=none
+  features computed in 102s (81 detector columns)
+  barriers +/-11 ATR   holds 120/240 bars
+  h1 (120 bars): AUC 0.521  folds [0.495 0.516 0.535 0.556 0.525]  spread 0.020  shuffle 0.498  eff-n 1,864  (63s)
+  h2 (240 bars): AUC 0.525  folds [0.490 0.536 0.548 0.540 0.555]  spread 0.023  shuffle 0.498  eff-n 1,222  (61s)
+
+======================================================================
+XRPUSDT 5m   htf 1h
+======================================================================
+  already seeded from 2025-08-01 (115,200 bars); skipping download
+  115,200 bars  2025-08-01 -> 2026-09-04
+  flow inputs: tape=none  open_interest=115,200  liquidations=none
+  features computed in 76s (81 detector columns)
+  barriers +/-4 ATR   holds 16/32 bars
+  h1 (16 bars): AUC 0.510  folds [0.518 0.495 0.514 0.520 0.520]  spread 0.010  shuffle 0.500  eff-n 7,697  (40s)
+  h2 (32 bars): AUC 0.505  folds [0.488 0.533 0.493 0.495 0.515]  spread 0.017  shuffle 0.498  eff-n 4,958  (35s)
+
+======================================================================
+XRPUSDT 15m   htf 4h
+======================================================================
+  already seeded from 2024-08-01 (73,440 bars); skipping download
+  73,440 bars  2024-08-01 -> 2026-09-04
+  flow inputs: tape=none  open_interest=73,440  liquidations=none
+  features computed in 54s (81 detector columns)
+  barriers +/-2 ATR   holds 4/8 bars
+  h1 (4 bars): AUC 0.515  folds [0.525 0.533 0.512 0.510 0.525]  spread 0.009  shuffle 0.496  eff-n 15,633  (22s)
+  h2 (8 bars): AUC 0.500  folds [0.516 0.520 0.496 0.507 0.518]  spread 0.009  shuffle 0.495  eff-n 10,298  (22s)
+
+======================================================================
+XRPUSDT 1h   htf 4h
+======================================================================
+  already seeded from 2023-01-01 (32,232 bars); skipping download
+  32,232 bars  2023-01-01 -> 2026-09-04
+  flow inputs: tape=none  open_interest=32,232  liquidations=none
+  features computed in 84s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.534  folds [0.552 0.547 0.541 0.529 0.517]  spread 0.013  shuffle 0.496  eff-n 15,938  (15s)
+  h2 (2 bars): AUC 0.522  folds [0.522 0.556 0.524 0.519 0.511]  spread 0.015  shuffle 0.497  eff-n 11,539  (14s)
+
+======================================================================
+XRPUSDT 4h   htf 1d
+======================================================================
+  seeding XRPUSDT 4h from 2021-01-01 (store holds 0)...
+  seeded 12,414 new bars
+  12,414 bars  2021-01-01 -> 2026-09-05
+  flow inputs: tape=none  open_interest=12,414  liquidations=none
+  features computed in 274s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.508  folds [0.509 0.530 0.534 0.517 0.488]  spread 0.017  shuffle 0.505  eff-n 6,029  (8s)
+  h2 (2 bars): AUC 0.496  folds [0.504 0.525 0.532 0.488 0.500]  spread 0.016  shuffle 0.502  eff-n 4,362  (8s)
+
+======================================================================
+XRPUSDT 1d   htf 1w
+======================================================================
+  seeding XRPUSDT 1d from 2019-01-01 (store holds 0)...
+  seeded 2,430 new bars
+  2,430 bars  2020-01-06 -> 2026-09-05
+  flow inputs: tape=none  open_interest=2,430  liquidations=none
+  features computed in 478s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.480  folds [0.548 0.575 0.471 0.493 0.473]  spread 0.042  shuffle 0.490  eff-n 1,037  (1s)
+  h2 (2 bars): AUC 0.491  folds [0.487 0.478 0.511 0.492 0.515]  spread 0.014  shuffle 0.464  eff-n 749  (1s)
+
+==============================================================================
+ALL TIMEFRAMES
+==============================================================================
+  tf  h      bars   eff-n    AUC  spread  shuffle  overfit  folds
+  1m h1   182,880   1,864  0.521   0.020    0.498   +0.177  [0.495 0.516 0.535 0.556 0.525]
+  1m h2   182,880   1,222  0.525   0.023    0.498   +0.168  [0.490 0.536 0.548 0.540 0.555]
+  5m h1   115,200   7,697  0.510   0.010    0.500   +0.140  [0.518 0.495 0.514 0.520 0.520]
+  5m h2   115,200   4,958  0.505   0.017    0.498   +0.107  [0.488 0.533 0.493 0.495 0.515]
+ 15m h1    73,440  15,633  0.515   0.009    0.496   +0.079  [0.525 0.533 0.512 0.510 0.525]
+ 15m h2    73,440  10,298  0.500   0.009    0.495   +0.073  [0.516 0.520 0.496 0.507 0.518]
+  1h h1    32,232  15,938  0.534   0.013    0.496   +0.061  [0.552 0.547 0.541 0.529 0.517]
+  1h h2    32,232  11,539  0.522   0.015    0.497   +0.069  [0.522 0.556 0.524 0.519 0.511]
+  4h h1    12,414   6,029  0.508   0.017    0.505   +0.070  [0.509 0.530 0.534 0.517 0.488]
+  4h h2    12,414   4,362  0.496   0.016    0.502   +0.087  [0.504 0.525 0.532 0.488 0.500]
+  1d h1     2,430   1,037  0.480   0.042    0.490   +0.027  [0.548 0.575 0.471 0.493 0.473]
+  1d h2     2,430     749  0.491   0.014    0.464   +0.061  [0.487 0.478 0.511 0.492 0.515]
+
+HOW TO READ THIS, AND HOW NOT TO
+  Do NOT pick the highest AUC. Twelve fits means the best one is
+  above 0.50 by construction even when nothing predicts anything —
+  that is the multiple-testing trap, and it is why this table is
+  printed whole rather than sorted.
+  A timeframe earns trust from STABLE FOLDS and a CLEAN SHUFFLE
+  (~0.50), not from its mean. A spread wider than the distance
+  from 0.50 means the mean is noise.
+
+  at chance once fold spread is accounted for: 15m, 1d, 4h, 5m
