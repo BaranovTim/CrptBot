@@ -371,8 +371,23 @@ class ApiClient {
         .toList();
   }
 
+  /// THREE MINUTES, not the twenty seconds everything else gets.
+  ///
+  /// A pair the server has never built takes about ninety seconds to compute
+  /// the first time — measured on the droplet for a coin outside the warm
+  /// set. With a 20s timeout that request can never succeed: it is abandoned
+  /// while the server is still working, the screen retries ten seconds later
+  /// and abandons that one too, and the coin only appears once a retry
+  /// happens to land after the build finished. From the outside that is a
+  /// pair that "loads forever and then errors", which is exactly what it
+  /// looked like.
+  ///
+  /// The server caches the result, so this long wait happens once per pair
+  /// and timeframe. `patient_loader.dart` is what keeps the screen honest
+  /// during it, and `_inFlight` on the dashboard stops the retries stacking.
   Future<Dashboard> dashboard({String? symbol, String? interval}) async =>
-      Dashboard.fromJson(await _get('/api/dashboard${_q(symbol, interval)}'));
+      Dashboard.fromJson(await _get('/api/dashboard${_q(symbol, interval)}',
+          timeout: const Duration(seconds: 180)));
 
   Future<Consensus> consensus({String? symbol}) async =>
       Consensus.fromJson(await _get('/api/consensus${_q(symbol, null)}'));

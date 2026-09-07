@@ -243,8 +243,14 @@ class AlertEngine:
             return list(self._pairs)
         try:
             ivs = getattr(self.svc, "RECORD_INTERVALS", ("1h",))
-            return [(sym, iv) for iv in ivs
-                    for sym in self.svc.trained_symbols()]
+            # The RECORDER's set, not every trained symbol. Watching a pair
+            # nothing keeps warm means building it cold on the alert loop's
+            # own thread — 160s and ~750MB a time, every 30 seconds, which is
+            # how the API met the OOM killer.
+            syms = (self.svc.record_symbols()
+                    if hasattr(self.svc, "record_symbols")
+                    else self.svc.trained_symbols())
+            return [(sym, iv) for iv in ivs for sym in syms]
         except Exception:
             return [(self.svc.symbol, self.svc.interval)]
 

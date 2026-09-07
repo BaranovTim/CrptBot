@@ -18,6 +18,17 @@ services:
     environment:
       # Required. The API refuses to bind to anything but loopback without it.
       TRADINGBOT_TOKEN: ${TRADINGBOT_TOKEN:?set TRADINGBOT_TOKEN in .env}
+      # WHICH PAIRS THIS BOX KEEPS WARM AND WATCHES FOR ALERTS.
+      #
+      # Measured, not chosen for tidiness: one cold dashboard build peaks
+      # near 750MB and this droplet has 967MB. Letting the recorder walk
+      # every trained symbol (14 x 4 intervals = 56 builds) put it into the
+      # OOM killer three times in an hour, taking the API down each time.
+      #
+      # Everything NOT listed here is still served — built on demand and
+      # cached — it simply is not pre-warmed or watched for signal changes.
+      # Raise this list when the box has the RAM to carry it.
+      RECORD_SYMBOLS: ${RECORD_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,ADAUSDT,XRPUSDT,ZECUSDT}
       # OPTIONAL, deliberately — note `:-` and not `:?`.
       #
       # Without these the equity screener has no data and says so; with `:?`
@@ -54,6 +65,13 @@ services:
     #
     # Adding a coin in the app does NOT make the server collect it. The
     # watchlist is a device preference; this list is what the server records.
+    #
+    # NOR DOES TRAINING ONE. Models fitted on a laptop and rsynced here make
+    # the server *offer* a pair — `trained_symbols()` reads `output/` — while
+    # nothing fills its bar store. The symptom is the app loading forever and
+    # then timing out, because the dashboard build has no bars and tries to
+    # seed a full history inside the request. Ship the bars with the models,
+    # and add the pair here in the same change.
     environment:
       ALPACA_KEY_ID: ${ALPACA_KEY_ID:-}
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
@@ -61,6 +79,11 @@ services:
       python3 collect.py
       --symbol BTCUSDT --symbol ETHUSDT
       --symbol SOLUSDT --symbol ADAUSDT
+      --symbol XRPUSDT --symbol ZECUSDT
+      --symbol HYPEUSDT --symbol DOGEUSDT
+      --symbol BNBUSDT --symbol ENAUSDT
+      --symbol UNIUSDT --symbol NEARUSDT
+      --symbol SUIUSDT --symbol 1000PEPEUSDT
       --interval 1m --interval 5m --interval 15m
       --interval 1h --interval 4h --interval 1d
     healthcheck:

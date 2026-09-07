@@ -1,0 +1,100 @@
+
+======================================================================
+NEARUSDT 1m   htf 15m
+======================================================================
+  seeding NEARUSDT 1m from 2026-05-01 (store holds 0)...
+  seeded 185,760 new bars
+  185,760 bars  2026-05-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=185,760  liquidations=none
+  features computed in 123s (81 detector columns)
+  barriers +/-11 ATR   holds 120/240 bars
+  h1 (120 bars): AUC 0.471  folds [0.482 0.508 0.515 0.496 0.473]  spread 0.016  shuffle 0.496  eff-n 1,712  (60s)
+  h2 (240 bars): AUC 0.456  folds [0.477 0.480 0.514 0.457 0.461]  spread 0.020  shuffle 0.498  eff-n 1,038  (54s)
+
+======================================================================
+NEARUSDT 5m   htf 1h
+======================================================================
+  seeding NEARUSDT 5m from 2025-08-01 (store holds 0)...
+  seeded 115,776 new bars
+  115,776 bars  2025-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=115,776  liquidations=none
+  features computed in 98s (81 detector columns)
+  barriers +/-4 ATR   holds 16/32 bars
+  h1 (16 bars): AUC 0.497  folds [0.511 0.493 0.495 0.500 0.518]  spread 0.010  shuffle 0.495  eff-n 7,483  (35s)
+  h2 (32 bars): AUC 0.490  folds [0.519 0.513 0.503 0.496 0.498]  spread 0.009  shuffle 0.500  eff-n 4,658  (31s)
+
+======================================================================
+NEARUSDT 15m   htf 4h
+======================================================================
+  seeding NEARUSDT 15m from 2024-08-01 (store holds 0)...
+  seeded 73,632 new bars
+  73,632 bars  2024-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=73,632  liquidations=none
+  features computed in 84s (81 detector columns)
+  barriers +/-2 ATR   holds 4/8 bars
+  h1 (4 bars): AUC 0.514  folds [0.503 0.513 0.508 0.525 0.522]  spread 0.008  shuffle 0.502  eff-n 15,538  (33s)
+  h2 (8 bars): AUC 0.499  folds [0.497 0.496 0.509 0.509 0.502]  spread 0.006  shuffle 0.502  eff-n 10,171  (29s)
+
+======================================================================
+NEARUSDT 1h   htf 4h
+======================================================================
+  seeding NEARUSDT 1h from 2023-01-01 (store holds 0)...
+  seeded 32,280 new bars
+  32,280 bars  2023-01-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=32,280  liquidations=none
+  features computed in 87s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.520  folds [0.542 0.517 0.517 0.514 0.517]  spread 0.010  shuffle 0.498  eff-n 15,962  (16s)
+  h2 (2 bars): AUC 0.505  folds [0.515 0.516 0.517 0.512 0.515]  spread 0.001  shuffle 0.499  eff-n 11,548  (13s)
+
+======================================================================
+NEARUSDT 4h   htf 1d
+======================================================================
+  seeding NEARUSDT 4h from 2021-01-01 (store holds 0)...
+  seeded 12,420 new bars
+  12,420 bars  2021-01-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=12,420  liquidations=none
+  features computed in 309s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.508  folds [0.516 0.509 0.522 0.512 0.498]  spread 0.008  shuffle 0.497  eff-n 6,032  (9s)
+  h2 (2 bars): AUC 0.498  folds [0.504 0.471 0.528 0.490 0.496]  spread 0.018  shuffle 0.496  eff-n 4,366  (8s)
+
+======================================================================
+NEARUSDT 1d   htf 1w
+======================================================================
+  seeding NEARUSDT 1d from 2019-01-01 (store holds 0)...
+  seeded 2,148 new bars
+  2,148 bars  2020-10-15 -> 2026-09-06
+  flow inputs: tape=none  open_interest=2,148  liquidations=none
+  features computed in 330s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.473  folds [0.484 0.513 0.498 0.542 0.442]  spread 0.033  shuffle 0.490  eff-n 896  (1s)
+  h2 (2 bars): AUC 0.481  folds [0.488 0.518 0.511 0.559 0.512]  spread 0.023  shuffle 0.477  eff-n 643  (1s)
+
+==============================================================================
+ALL TIMEFRAMES
+==============================================================================
+  tf  h      bars   eff-n    AUC  spread  shuffle  overfit  folds
+  1m h1   185,760   1,712  0.471   0.016    0.496   +0.120  [0.482 0.508 0.515 0.496 0.473]
+  1m h2   185,760   1,038  0.456   0.020    0.498   +0.130  [0.477 0.480 0.514 0.457 0.461]
+  5m h1   115,776   7,483  0.497   0.010    0.495   +0.077  [0.511 0.493 0.495 0.500 0.518]
+  5m h2   115,776   4,658  0.490   0.009    0.500   +0.073  [0.519 0.513 0.503 0.496 0.498]
+ 15m h1    73,632  15,538  0.514   0.008    0.502   +0.127  [0.503 0.513 0.508 0.525 0.522]
+ 15m h2    73,632  10,171  0.499   0.006    0.502   +0.126  [0.497 0.496 0.509 0.509 0.502]
+  1h h1    32,280  15,962  0.520   0.010    0.498   +0.070  [0.542 0.517 0.517 0.514 0.517]
+  1h h2    32,280  11,548  0.505   0.001    0.499   +0.053  [0.515 0.516 0.517 0.512 0.515]
+  4h h1    12,420   6,032  0.508   0.008    0.497   +0.096  [0.516 0.509 0.522 0.512 0.498]
+  4h h2    12,420   4,366  0.498   0.018    0.496   +0.123  [0.504 0.471 0.528 0.490 0.496]
+  1d h1     2,148     896  0.473   0.033    0.490   +0.056  [0.484 0.513 0.498 0.542 0.442]
+  1d h2     2,148     643  0.481   0.023    0.477   +0.055  [0.488 0.518 0.511 0.559 0.512]
+
+HOW TO READ THIS, AND HOW NOT TO
+  Do NOT pick the highest AUC. Twelve fits means the best one is
+  above 0.50 by construction even when nothing predicts anything —
+  that is the multiple-testing trap, and it is why this table is
+  printed whole rather than sorted.
+  A timeframe earns trust from STABLE FOLDS and a CLEAN SHUFFLE
+  (~0.50), not from its mean. A spread wider than the distance
+  from 0.50 means the mean is noise.
+
+  at chance once fold spread is accounted for: 15m, 1d, 4h, 5m

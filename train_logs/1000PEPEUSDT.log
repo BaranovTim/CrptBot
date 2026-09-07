@@ -1,0 +1,100 @@
+
+======================================================================
+1000PEPEUSDT 1m   htf 15m
+======================================================================
+  seeding 1000PEPEUSDT 1m from 2026-05-01 (store holds 0)...
+  seeded 185,760 new bars
+  185,760 bars  2026-05-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=185,760  liquidations=none
+  features computed in 112s (81 detector columns)
+  barriers +/-11 ATR   holds 120/240 bars
+  h1 (120 bars): AUC 0.499  folds [0.493 0.546 0.555 0.524 0.477]  spread 0.030  shuffle 0.499  eff-n 1,885  (58s)
+  h2 (240 bars): AUC 0.483  folds [0.416 0.488 0.563 0.498 0.504]  spread 0.047  shuffle 0.497  eff-n 1,227  (55s)
+
+======================================================================
+1000PEPEUSDT 5m   htf 1h
+======================================================================
+  seeding 1000PEPEUSDT 5m from 2025-08-01 (store holds 0)...
+  seeded 115,776 new bars
+  115,776 bars  2025-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=115,776  liquidations=none
+  features computed in 97s (81 detector columns)
+  barriers +/-4 ATR   holds 16/32 bars
+  h1 (16 bars): AUC 0.505  folds [0.512 0.526 0.508 0.506 0.497]  spread 0.009  shuffle 0.499  eff-n 7,726  (37s)
+  h2 (32 bars): AUC 0.493  folds [0.497 0.501 0.520 0.502 0.489]  spread 0.010  shuffle 0.499  eff-n 4,954  (33s)
+
+======================================================================
+1000PEPEUSDT 15m   htf 4h
+======================================================================
+  seeding 1000PEPEUSDT 15m from 2024-08-01 (store holds 0)...
+  seeded 73,632 new bars
+  73,632 bars  2024-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=73,632  liquidations=none
+  features computed in 83s (81 detector columns)
+  barriers +/-2 ATR   holds 4/8 bars
+  h1 (4 bars): AUC 0.510  folds [0.513 0.511 0.520 0.508 0.513]  spread 0.004  shuffle 0.496  eff-n 15,653  (24s)
+  h2 (8 bars): AUC 0.490  folds [0.493 0.495 0.505 0.503 0.490]  spread 0.006  shuffle 0.492  eff-n 10,299  (22s)
+
+======================================================================
+1000PEPEUSDT 1h   htf 4h
+======================================================================
+  seeding 1000PEPEUSDT 1h from 2023-01-01 (store holds 0)...
+  seeded 29,288 new bars
+  29,288 bars  2023-05-05 -> 2026-09-06
+  flow inputs: tape=none  open_interest=29,288  liquidations=none
+  features computed in 70s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.533  folds [0.550 0.538 0.525 0.533 0.530]  spread 0.009  shuffle 0.502  eff-n 14,466  (18s)
+  h2 (2 bars): AUC 0.504  folds [0.522 0.513 0.512 0.511 0.492]  spread 0.010  shuffle 0.496  eff-n 10,487  (15s)
+
+======================================================================
+1000PEPEUSDT 4h   htf 1d
+======================================================================
+  seeding 1000PEPEUSDT 4h from 2021-01-01 (store holds 0)...
+  seeded 7,322 new bars
+  7,322 bars  2023-05-05 -> 2026-09-06
+  flow inputs: tape=none  open_interest=7,322  liquidations=none
+  features computed in 24s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.499  folds [0.508 0.506 0.491 0.508 0.486]  spread 0.009  shuffle 0.491  eff-n 3,483  (5s)
+  h2 (2 bars): AUC 0.487  folds [0.482 0.507 0.513 0.494 0.503]  spread 0.011  shuffle 0.511  eff-n 2,529  (5s)
+
+======================================================================
+1000PEPEUSDT 1d   htf 1w
+======================================================================
+  seeding 1000PEPEUSDT 1d from 2019-01-01 (store holds 0)...
+  seeded 1,221 new bars
+  1,221 bars  2023-05-05 -> 2026-09-06
+  flow inputs: tape=none  open_interest=1,221  liquidations=none
+  features computed in 19s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.470  folds [0.500 0.500 0.500 0.500 0.500]  spread 0.000  shuffle 0.465  eff-n 432  (1s)
+  h2 (2 bars): AUC 0.461  folds [0.500 0.500 0.500 0.500 0.500]  spread 0.000  shuffle 0.496  eff-n 311  (1s)
+
+==============================================================================
+ALL TIMEFRAMES
+==============================================================================
+  tf  h      bars   eff-n    AUC  spread  shuffle  overfit  folds
+  1m h1   185,760   1,885  0.499   0.030    0.499   +0.111  [0.493 0.546 0.555 0.524 0.477]
+  1m h2   185,760   1,227  0.483   0.047    0.497   +0.183  [0.416 0.488 0.563 0.498 0.504]
+  5m h1   115,776   7,726  0.505   0.009    0.499   +0.117  [0.512 0.526 0.508 0.506 0.497]
+  5m h2   115,776   4,954  0.493   0.010    0.499   +0.124  [0.497 0.501 0.520 0.502 0.489]
+ 15m h1    73,632  15,653  0.510   0.004    0.496   +0.083  [0.513 0.511 0.520 0.508 0.513]
+ 15m h2    73,632  10,299  0.490   0.006    0.492   +0.099  [0.493 0.495 0.505 0.503 0.490]
+  1h h1    29,288  14,466  0.533   0.009    0.502   +0.081  [0.550 0.538 0.525 0.533 0.530]
+  1h h2    29,288  10,487  0.504   0.010    0.496   +0.085  [0.522 0.513 0.512 0.511 0.492]
+  4h h1     7,322   3,483  0.499   0.009    0.491   +0.097  [0.508 0.506 0.491 0.508 0.486]
+  4h h2     7,322   2,529  0.487   0.011    0.511   +0.087  [0.482 0.507 0.513 0.494 0.503]
+  1d h1     1,221     432  0.470   0.000    0.465   +0.000  [0.500 0.500 0.500 0.500 0.500]
+  1d h2     1,221     311  0.461   0.000    0.496   +0.000  [0.500 0.500 0.500 0.500 0.500]
+
+HOW TO READ THIS, AND HOW NOT TO
+  Do NOT pick the highest AUC. Twelve fits means the best one is
+  above 0.50 by construction even when nothing predicts anything —
+  that is the multiple-testing trap, and it is why this table is
+  printed whole rather than sorted.
+  A timeframe earns trust from STABLE FOLDS and a CLEAN SHUFFLE
+  (~0.50), not from its mean. A spread wider than the distance
+  from 0.50 means the mean is noise.
+
+  at chance once fold spread is accounted for: 1h, 1m, 4h, 5m

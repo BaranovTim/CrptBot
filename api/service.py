@@ -136,7 +136,27 @@ class TradingService:
                     f"train it:  python3 train.py --intervals {key[1]}")
             self._monitors[key] = Monitor(key[0], key[1], h1, h2,
                                           asset=self.asset)
+            self._evict_monitors()
         return self._monitors[key]
+
+    # Each Monitor holds two fitted LightGBM models. Unbounded, this grew one
+    # entry per pair AND timeframe — 14 symbols across six timeframes is 84
+    # of them, all resident, on a box with 967MB.
+    MAX_MONITORS = int(os.environ.get("MAX_MONITORS", "24"))
+
+    def _evict_monitors(self) -> None:
+        """Keep the most recently asked-for monitors, drop the rest.
+
+        Rebuilding one is a `joblib.load` of two small files, so losing a
+        cold pair costs milliseconds the next time it is asked for — far
+        cheaper than the alternative, which was the whole process dying.
+        """
+        if len(self._monitors) <= self.MAX_MONITORS:
+            return
+        order = sorted(self._monitors,
+                       key=lambda k: self._last_seen.get(k, 0.0))
+        for k in order[:len(self._monitors) - self.MAX_MONITORS]:
+            self._monitors.pop(k, None)
 
     def _bars(self, symbol: Optional[str] = None,
               interval: Optional[str] = None) -> pd.DataFrame:
@@ -179,11 +199,47 @@ class TradingService:
         bars = store.load()
         if sig is not None:
             with self._lock:
-                # one frame per pair; 24 pairs of bars is the working set the
-                # dashboards already hold references to, so this adds no
-                # meaningful memory beyond what warm-up keeps alive anyway
                 self._bars_cache[(sym, iv)] = (sig, bars)
+                self._evict_bars()
         return bars
+
+    # How much memory the bar cache may hold, in megabytes.
+    #
+    # MEASURED, and the reason this exists at all. The comment that used to
+    # sit here said one frame per pair "adds no meaningful memory". That was
+    # true of four pairs and false of fourteen: a single 1m frame is 36MB
+    # (185,760 rows), so 14 symbols on 1m alone is over 500MB before the
+    # other five timeframes. The cache was unbounded, the droplet has 967MB,
+    # and the API met the OOM killer at 724-802MB five times.
+    #
+    # A build itself peaks around 300MB, so the builds were never the
+    # problem — what accumulated between them was.
+    BARS_BUDGET_MB = float(os.environ.get("BARS_BUDGET_MB", "180"))
+
+    def _evict_bars(self) -> None:
+        """Drop least-recently-asked-for bar frames until under budget.
+
+        Caller holds `_lock`. Recency comes from `_last_seen`, which
+        `dashboard()` already stamps — a pair nobody has opened is the right
+        thing to lose, and reloading it is a disk read rather than a rebuild.
+        """
+        def mb(frame) -> float:
+            try:
+                return float(frame.memory_usage(deep=True).sum()) / 1e6
+            except Exception:
+                return 0.0
+
+        total = sum(mb(v[1]) for v in self._bars_cache.values())
+        if total <= self.BARS_BUDGET_MB:
+            return
+        # oldest attention first; never evict what we just inserted
+        order = sorted(self._bars_cache,
+                       key=lambda k: self._last_seen.get(k, 0.0))
+        for k in order:
+            if total <= self.BARS_BUDGET_MB or len(self._bars_cache) <= 1:
+                break
+            total -= mb(self._bars_cache[k][1])
+            self._bars_cache.pop(k, None)
 
     # ---------------------------------------------------- the universe
     def symbols(self, q: Optional[str] = None,
@@ -887,10 +943,33 @@ class TradingService:
     # up. These four cost about 14% of the core.
     RECORD_INTERVALS = ("15m", "1h", "4h", "1d")
 
+    def record_symbols(self) -> List[str]:
+        """Which pairs the recorder and the alert engine keep warm.
+
+        NOT "everything with a model", which is what it used to be and what
+        killed this box. `trained_symbols()` reads `output/`, so rsyncing ten
+        new coins' models onto the server silently took the warm set from 6
+        symbols to 14 — 56 dashboards on one core. A single cold build peaks
+        near 750MB against 967MB of RAM, so the recorder walked into the OOM
+        killer three times in an hour and took the API down with it each time.
+
+        Bounded here, by name, through the environment. Pairs left out are
+        still fully served — they are built when someone asks for them, and
+        cached afterwards. What they lose is being pre-warmed and being
+        watched for alerts, which is a real cost and the reason this is a
+        setting rather than a hardcoded four.
+        """
+        raw = os.environ.get("RECORD_SYMBOLS", "").strip()
+        if raw:
+            want = [s.strip().upper() for s in raw.split(",") if s.strip()]
+            have = set(self.trained_symbols())
+            return [s for s in want if s in have]
+        return self.trained_symbols()
+
     def start_recorder(self, intervals: Optional[Tuple[str, ...]] = None,
                        symbols: Optional[List[str]] = None) -> None:
         ivs = tuple(intervals or self.RECORD_INTERVALS)
-        syms = symbols or self.trained_symbols()
+        syms = symbols or self.record_symbols()
 
         # The last bar we actually recorded, per pair.
         #
