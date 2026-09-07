@@ -1,0 +1,65 @@
+
+======================================================================
+UNIUSDT 1m   htf 15m
+======================================================================
+  seeding UNIUSDT 1m from 2026-05-01 (store holds 0)...
+  seeded 185,760 new bars
+  185,760 bars  2026-05-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=185,760  liquidations=none
+  features computed in 132s (81 detector columns)
+  barriers +/-11 ATR   holds 120/240 bars
+  h1 (120 bars): AUC 0.482  folds [0.488 0.464 0.476 0.503 0.518]  spread 0.019  shuffle 0.501  eff-n 1,836  (55s)
+  h2 (240 bars): AUC 0.505  folds [0.510 0.463 0.485 0.541 0.552]  spread 0.034  shuffle 0.499  eff-n 1,182  (91s)
+
+======================================================================
+UNIUSDT 5m   htf 1h
+======================================================================
+  seeding UNIUSDT 5m from 2025-08-01 (store holds 0)...
+  seeded 115,776 new bars
+  115,776 bars  2025-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=115,776  liquidations=none
+  features computed in 89s (81 detector columns)
+  barriers +/-4 ATR   holds 16/32 bars
+  h1 (16 bars): AUC 0.504  folds [0.503 0.505 0.497 0.500 0.524]  spread 0.010  shuffle 0.499  eff-n 7,685  (38s)
+  h2 (32 bars): AUC 0.513  folds [0.522 0.517 0.504 0.507 0.539]  spread 0.013  shuffle 0.499  eff-n 4,905  (38s)
+
+======================================================================
+UNIUSDT 15m   htf 4h
+======================================================================
+  seeding UNIUSDT 15m from 2024-08-01 (store holds 0)...
+  seeded 73,632 new bars
+  73,632 bars  2024-08-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=73,632  liquidations=none
+  features computed in 78s (81 detector columns)
+  barriers +/-2 ATR   holds 4/8 bars
+  h1 (4 bars): AUC 0.509  folds [0.506 0.527 0.503 0.509 0.512]  spread 0.008  shuffle 0.499  eff-n 15,631  (25s)
+  h2 (8 bars): AUC 0.491  folds [0.491 0.500 0.491 0.495 0.488]  spread 0.004  shuffle 0.494  eff-n 10,266  (19s)
+
+======================================================================
+UNIUSDT 1h   htf 4h
+======================================================================
+  seeding UNIUSDT 1h from 2023-01-01 (store holds 0)...
+  seeded 32,280 new bars
+  32,280 bars  2023-01-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=32,280  liquidations=none
+  features computed in 91s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.520  folds [0.537 0.525 0.518 0.511 0.517]  spread 0.009  shuffle 0.495  eff-n 15,962  (16s)
+  h2 (2 bars): AUC 0.509  folds [0.518 0.527 0.513 0.515 0.495]  spread 0.011  shuffle 0.493  eff-n 11,556  (13s)
+
+======================================================================
+UNIUSDT 4h   htf 1d
+======================================================================
+  seeding UNIUSDT 4h from 2021-01-01 (store holds 0)...
+  seeded 12,450 new bars
+  12,450 bars  2021-01-01 -> 2026-09-06
+  flow inputs: tape=none  open_interest=12,450  liquidations=none
+  features computed in 351s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.510  folds [0.518 0.519 0.514 0.514 0.521]  spread 0.003  shuffle 0.493  eff-n 6,047  (7s)
+  h2 (2 bars): AUC 0.499  folds [0.515 0.526 0.498 0.505 0.488]  spread 0.013  shuffle 0.495  eff-n 4,370  (7s)
+
+======================================================================
+UNIUSDT 1d   htf 1w
+======================================================================
+  seeding UNIUSDT 1d from 2019-01-01 (store holds 0)...

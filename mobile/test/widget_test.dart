@@ -12,6 +12,7 @@ import 'dart:convert';
 
 import 'package:tradingbot_app/api/background.dart';
 import 'package:tradingbot_app/api/muted.dart';
+import 'package:tradingbot_app/api/trades.dart';
 import 'package:tradingbot_app/api/push.dart';
 import 'package:tradingbot_app/api/settings.dart';
 import 'package:tradingbot_app/api/watchlist.dart';
@@ -208,6 +209,102 @@ void main() {
     expect(runs, 1);
     expect(last, isNotNull);
     expect(DateTime.now().difference(last!).inMinutes, lessThan(1));
+  });
+
+  test('a short that falls is a WIN, not a loss', () {
+    // THE BUG THIS PINS
+    //
+    // Profit has to be read in the direction of the trade. A short entered
+    // at 100 and marked at 90 has made 10%, and printing that as -10% in red
+    // is the single most confusing thing a position card can do — it tells
+    // you a winning trade is losing, on the screen you check when deciding
+    // whether to get out.
+    final short = TradeEntry.create(
+        symbol: 'BTCUSDT', side: 'SHORT', size: 2, entryPrice: 100);
+    expect(short.pnlPct(90), closeTo(10, 1e-9));
+    expect(short.pnl(90), closeTo(20, 1e-9));      // 2 units x 10 move
+    expect(short.pnlPct(110), closeTo(-10, 1e-9));
+
+    final long = TradeEntry.create(
+        symbol: 'BTCUSDT', side: 'LONG', size: 2, entryPrice: 100);
+    expect(long.pnlPct(90), closeTo(-10, 1e-9));
+    expect(long.pnl(110), closeTo(20, 1e-9));
+  });
+
+  test('an unknown price gives null profit, never zero', () {
+    // "+\$0.00" reads as flat, which is a claim about the market. "—" reads
+    // as "not known", which is the truth before the first websocket tick.
+    final t = TradeEntry.create(
+        symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100);
+    expect(t.pnl(null), isNull);
+    expect(t.pnlPct(null), isNull);
+    expect(t.towardTarget(null), isNull);
+  });
+
+  test('a closed trade marks against its exit, not against the live price',
+      () {
+    // Otherwise last week's closed trade would keep moving with the market,
+    // and the realised total in Profile would change every time you opened
+    // the app.
+    final t = TradeEntry.create(
+            symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100)
+        .closedAtPrice(120);
+    expect(t.isOpen, isFalse);
+    expect(t.pnlPct(500), closeTo(20, 1e-9));
+    expect(t.markPrice(500), 120);
+  });
+
+  test('progress toward the target is direction-aware and clamped', () {
+    final long = TradeEntry(
+        id: 'a', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 120);
+    expect(long.towardTarget(110), closeTo(0.5, 1e-9));
+    expect(long.towardTarget(200), 1.0);            // clamped, never over 1
+    expect(long.towardTarget(90), 0.0);             // and never negative
+
+    final short = TradeEntry(
+        id: 'b', symbol: 'BTCUSDT', side: 'SHORT', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 80);
+    expect(short.towardTarget(90), closeTo(0.5, 1e-9));
+  });
+
+  test('a logged trade survives being written and read back', () {
+    final t = TradeEntry.create(
+        symbol: 'ethusdt', side: 'SHORT', size: 0.5, entryPrice: 3000,
+        takeProfit: 2800, stopLoss: 3100);
+    final back = TradeEntry.fromJson(t.toJson());
+    expect(back.symbol, 'ETHUSDT');            // normalised on the way in
+    expect(back.side, 'SHORT');
+    expect(back.size, 0.5);
+    expect(back.entryPrice, 3000);
+    expect(back.takeProfit, 2800);
+    expect(back.stopLoss, 3100);
+    expect(back.isOpen, isTrue);
+    expect(back.id, t.id);
+  });
+
+  test('the store keeps trades per symbol and closes them in place', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = Trades.instance;
+    await store.add(TradeEntry.create(
+        symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100));
+    await store.add(TradeEntry.create(
+        symbol: 'ETHUSDT', side: 'SHORT', size: 2, entryPrice: 50));
+
+    expect((await store.forSymbol('BTCUSDT')).length, 1);
+    expect((await store.forSymbol('ETHUSDT')).length, 1);
+    expect((await store.forSymbol('SOLUSDT')).length, 0);
+
+    final btc = (await store.forSymbol('BTCUSDT')).single;
+    await store.close(btc.id, 130);
+    // gone from the OPEN list for that pair...
+    expect((await store.forSymbol('BTCUSDT')).length, 0);
+    // ...but still in the full log, with its exit recorded
+    final all = await store.load();
+    final done = all.firstWhere((t) => t.id == btc.id);
+    expect(done.isOpen, isFalse);
+    expect(done.closePrice, 130);
+    expect(done.pnlPct(null), closeTo(30, 1e-9));
   });
 
   test('the status badge never claims the bot trades', () {

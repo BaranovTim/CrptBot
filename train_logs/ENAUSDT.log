@@ -39,3 +39,64 @@ ENAUSDT 15m   htf 4h
 ENAUSDT 1h   htf 4h
 ======================================================================
   seeding ENAUSDT 1h from 2023-01-01 (store holds 0)...
+  seeded 21,300 new bars
+  21,300 bars  2024-04-02 -> 2026-09-06
+  flow inputs: tape=none  open_interest=21,300  liquidations=none
+  features computed in 36s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.516  folds [0.516 0.513 0.526 0.521 0.509]  spread 0.006  shuffle 0.503  eff-n 10,472  (9s)
+  h2 (2 bars): AUC 0.491  folds [0.477 0.517 0.499 0.493 0.500]  spread 0.013  shuffle 0.501  eff-n 7,591  (8s)
+
+======================================================================
+ENAUSDT 4h   htf 1d
+======================================================================
+  seeding ENAUSDT 4h from 2021-01-01 (store holds 0)...
+  seeded 5,325 new bars
+  5,325 bars  2024-04-02 -> 2026-09-06
+  flow inputs: tape=none  open_interest=5,325  liquidations=none
+  features computed in 19s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.505  folds [0.518 0.518 0.495 0.498 0.503]  spread 0.010  shuffle 0.483  eff-n 2,484  (4s)
+  h2 (2 bars): AUC 0.498  folds [0.503 0.527 0.493 0.489 0.515]  spread 0.014  shuffle 0.507  eff-n 1,803  (4s)
+
+======================================================================
+ENAUSDT 1d   htf 1w
+======================================================================
+  seeding ENAUSDT 1d from 2019-01-01 (store holds 0)...
+  seeded 888 new bars
+  888 bars  2024-04-02 -> 2026-09-06
+  flow inputs: tape=none  open_interest=888  liquidations=none
+  features computed in 23s (81 detector columns)
+  barriers +/-1 ATR   holds 1/2 bars
+  h1 (1 bars): AUC 0.437  folds [0.500 0.500 0.500 0.500 0.500]  spread 0.000  shuffle 0.490  eff-n 266  (1s)
+  h2 (2 bars): AUC 0.437  folds [0.500 0.500 0.500 0.500 0.500]  spread 0.000  shuffle 0.435  eff-n 191  (0s)
+
+==============================================================================
+ALL TIMEFRAMES
+==============================================================================
+  tf  h      bars   eff-n    AUC  spread  shuffle  overfit  folds
+  1m h1   185,760   1,843  0.493   0.020    0.499   +0.127  [0.466 0.512 0.523 0.512 0.492]
+  1m h2   185,760   1,193  0.479   0.019    0.499   +0.121  [0.509 0.475 0.483 0.502 0.527]
+  5m h1   115,776   7,594  0.487   0.008    0.495   +0.071  [0.494 0.508 0.517 0.505 0.497]
+  5m h2   115,776   4,806  0.497   0.011    0.497   +0.139  [0.500 0.514 0.522 0.491 0.503]
+ 15m h1    73,632  15,611  0.502   0.006    0.495   +0.081  [0.517 0.499 0.504 0.511 0.509]
+ 15m h2    73,632  10,269  0.499   0.004    0.496   +0.091  [0.504 0.502 0.503 0.494 0.505]
+  1h h1    21,300  10,472  0.516   0.006    0.503   +0.099  [0.516 0.513 0.526 0.521 0.509]
+  1h h2    21,300   7,591  0.491   0.013    0.501   +0.096  [0.477 0.517 0.499 0.493 0.500]
+  4h h1     5,325   2,484  0.505   0.010    0.483   +0.072  [0.518 0.518 0.495 0.498 0.503]
+  4h h2     5,325   1,803  0.498   0.014    0.507   +0.088  [0.503 0.527 0.493 0.489 0.515]
+  1d h1       888     266  0.437   0.000    0.490   +0.000  [0.500 0.500 0.500 0.500 0.500]
+  1d h2       888     191  0.437   0.000    0.435   +0.000  [0.500 0.500 0.500 0.500 0.500]
+
+HOW TO READ THIS, AND HOW NOT TO
+  Do NOT pick the highest AUC. Twelve fits means the best one is
+  above 0.50 by construction even when nothing predicts anything —
+  that is the multiple-testing trap, and it is why this table is
+  printed whole rather than sorted.
+  A timeframe earns trust from STABLE FOLDS and a CLEAN SHUFFLE
+  (~0.50), not from its mean. A spread wider than the distance
+  from 0.50 means the mean is noise.
+
+  at chance once fold spread is accounted for: 15m, 1h, 1m, 4h, 5m
+
+  SHUFFLE TEST DIRTY (possible leakage): 1d h2

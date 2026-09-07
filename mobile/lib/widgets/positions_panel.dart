@@ -1,0 +1,307 @@
+/// What you are holding, marked against the live price.
+///
+/// WHY PROFIT IS NULL AND NOT ZERO WHEN THE PRICE IS UNKNOWN
+///     A position card showing "+$0.00" reads as "flat", which is a claim.
+///     "—" reads as "not known", which is the truth when the websocket has
+///     not delivered a tick yet. Same argument `LevelsPanel.money` makes
+///     about a stop loss of "$0.00", and the same reason it is made again
+///     here rather than assumed.
+///
+/// THE DIRECTION IS APPLIED ONCE, IN `TradeEntry.pnlPct`
+///     A short that falls 2% is +2%. Painting a winning short red is the
+///     single most confusing thing this panel could do, so the sign lives in
+///     the model where both this panel and the profile list read it, rather
+///     than being re-derived in each.
+library;
+
+import 'package:flutter/material.dart';
+
+import '../api/trades.dart';
+import '../theme/liquid_obsidian.dart';
+import 'glass.dart';
+
+String money(double? v, {int? dp}) {
+  if (v == null) return '—';
+  final d = dp ?? (v.abs() >= 100 ? 2 : 4);
+  final s = v.abs().toStringAsFixed(d);
+  final parts = s.split('.');
+  final whole = parts[0]
+      .replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
+  return '${v < 0 ? '-' : ''}\$$whole.${parts[1]}';
+}
+
+String signedPct(double? v) =>
+    v == null ? '—' : '${v >= 0 ? '+' : ''}${v.toStringAsFixed(2)}%';
+
+/// One card per open trade in this pair, above the news on the dashboard.
+class PositionsPanel extends StatelessWidget {
+  const PositionsPanel({
+    super.key,
+    required this.entries,
+    required this.short,
+    this.livePrice,
+    this.onClose,
+  });
+
+  final List<TradeEntry> entries;
+  final String short;
+  final double? livePrice;
+  final void Function(TradeEntry)? onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    if (entries.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text('YOUR POSITIONS', style: Obsidian.labelSm(size: 10.5)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Obsidian.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text('${entries.length}',
+                  style: Obsidian.dataTable(
+                      size: 10.5, color: Obsidian.primary, w: FontWeight.w700)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        for (final t in entries) ...[
+          PositionCard(
+              entry: t,
+              livePrice: livePrice,
+              short: short,
+              onClose: onClose == null ? null : () => onClose!(t)),
+          const SizedBox(height: Obsidian.panelGap),
+        ],
+      ],
+    );
+  }
+}
+
+class PositionCard extends StatelessWidget {
+  const PositionCard({
+    super.key,
+    required this.entry,
+    required this.short,
+    this.livePrice,
+    this.onClose,
+    this.showSymbol = false,
+  });
+
+  final TradeEntry entry;
+  final String short;
+  final double? livePrice;
+  final VoidCallback? onClose;
+  final bool showSymbol;
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = entry.pnlPct(livePrice);
+    final abs = entry.pnl(livePrice);
+    final up = (pct ?? 0) >= 0;
+    final tone = pct == null
+        ? Obsidian.outline
+        : (up ? Obsidian.green : Obsidian.red);
+    final sideTone = entry.isShort ? Obsidian.red : Obsidian.green;
+    final mark = entry.markPrice(livePrice);
+
+    return GlassPanel(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: sideTone.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(entry.isShort ? 'SHORT' : 'LONG',
+                    style: Obsidian.labelSm(color: sideTone, size: 10)),
+              ),
+              const SizedBox(width: 9),
+              Text(
+                  showSymbol
+                      ? '${entry.size} ${_short(entry.symbol)}'
+                      : '${entry.size} $short',
+                  style: Obsidian.dataTable(size: 13.5, w: FontWeight.w600)),
+              const Spacer(),
+              if (!entry.isOpen)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text('CLOSED',
+                      style:
+                          Obsidian.labelSm(color: Obsidian.outline, size: 9.5)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(signedPct(pct),
+                      style: Obsidian.dataTable(
+                          size: 26, color: tone, w: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(
+                      abs == null
+                          ? 'waiting for a price'
+                          : '${abs >= 0 ? '+' : ''}${money(abs, dp: 2)}',
+                      style: Obsidian.dataTable(size: 13, color: tone)),
+                ],
+              ),
+              const Spacer(),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _kv('Entry', money(entry.entryPrice)),
+                  const SizedBox(height: 3),
+                  _kv(entry.isOpen ? 'Now' : 'Exit', money(mark)),
+                ],
+              ),
+            ],
+          ),
+          if (entry.takeProfit != null || entry.stopLoss != null) ...[
+            const SizedBox(height: 14),
+            _targetBar(),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _level('Take profit', entry.takeProfit,
+                      Obsidian.green, entry),
+                ),
+                Expanded(
+                  child: _level('Stop loss', entry.stopLoss, Obsidian.red,
+                      entry, right: true),
+                ),
+              ],
+            ),
+          ],
+          if (onClose != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(Obsidian.rMd)),
+                ),
+                onPressed: onClose,
+                child: Text('Close this position',
+                    style: Obsidian.body(size: 12.5)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static String _short(String symbol) =>
+      symbol.endsWith('USDT') ? symbol.substring(0, symbol.length - 4) : symbol;
+
+  Widget _kv(String k, String v) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('$k ',
+              style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+          Text(v, style: Obsidian.dataTable(size: 13)),
+        ],
+      );
+
+  /// How far price has run toward the target. Empty when no target was
+  /// recorded — a bar at 0% would imply a target of zero.
+  Widget _targetBar() {
+    final p = entry.towardTarget(livePrice);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(3),
+      child: LinearProgressIndicator(
+        value: p ?? 0,
+        minHeight: 5,
+        backgroundColor: Colors.white.withValues(alpha: 0.06),
+        valueColor: AlwaysStoppedAnimation(
+            p == null ? Obsidian.outline : Obsidian.green),
+      ),
+    );
+  }
+
+  static Widget _level(String label, double? v, Color tone, TradeEntry e,
+          {bool right = false}) =>
+      Column(
+        crossAxisAlignment:
+            right ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Obsidian.body(color: Obsidian.outline, size: 10.5)),
+          const SizedBox(height: 2),
+          Text(money(v), style: Obsidian.dataTable(size: 12.5, color: tone)),
+        ],
+      );
+}
+
+/// Ask for the exit price, then close.
+///
+/// The price is ASKED FOR rather than taken from the live feed: you closed
+/// the trade on an exchange, at a fill this app never saw, and recording the
+/// current mid instead would put a number in your journal that never
+/// happened. The live price is offered as the default because it is usually
+/// close, and it is editable because usually is not always.
+Future<double?> askExitPrice(BuildContext context, TradeEntry t,
+    {double? livePrice}) async {
+  final c = TextEditingController(
+      text: livePrice == null
+          ? ''
+          : livePrice.toStringAsFixed(livePrice >= 100 ? 2 : 4));
+  return showDialog<double>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: Obsidian.surfaceContainer,
+      title: Text('Close position', style: Obsidian.headlineMd()),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+              'What price did you actually get out at? ThusIldy never saw the '
+              'fill, so this is the one number it cannot work out for you.',
+              style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: c,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: Obsidian.dataTable(size: 16),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel', style: Obsidian.body())),
+        TextButton(
+            onPressed: () => Navigator.of(ctx)
+                .pop(double.tryParse(c.text.replaceAll(',', ''))),
+            child: Text('Close',
+                style: Obsidian.body(color: Obsidian.primary))),
+      ],
+    ),
+  );
+}

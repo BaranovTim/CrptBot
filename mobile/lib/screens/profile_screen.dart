@@ -23,9 +23,11 @@ import '../api/muted.dart';
 import '../api/notifications.dart';
 import '../api/push.dart';
 import '../api/settings.dart';
+import '../api/trades.dart';
 import '../api/watchlist.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
+import '../widgets/positions_panel.dart';
 import '../widgets/status_dot.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -62,6 +64,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   /// actually got to run. Both are measurements, not settings: without them
   /// "the job is throttled" and "the job is fine, nothing happened" look
   /// identical, and they need opposite responses.
+  /// Every trade logged on this device, open and closed.
+  List<TradeEntry> _trades = const [];
+
   bool _batteryExempt = true;
   DateTime? _bgLastRun;
   int _bgRuns = 0;
@@ -73,8 +78,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _countMuted();
     _loadPush();
     _loadBackgroundHealth();
+    _loadTrades();
     Settings.instance.sensitivity().then(
         (v) => mounted ? setState(() => _sensitivity = v) : null);
+  }
+
+  Future<void> _loadTrades() async {
+    final all = await Trades.instance.load();
+    if (!mounted) return;
+    // Open first, then most recently closed. The ones you can still act on
+    // are the ones worth putting at the top.
+    all.sort((a, b) {
+      if (a.isOpen != b.isOpen) return a.isOpen ? -1 : 1;
+      return b.openedAt.compareTo(a.openedAt);
+    });
+    setState(() => _trades = all);
+  }
+
+  Future<void> _closeTrade(TradeEntry t) async {
+    // NO LIVE PRICE HERE, on purpose. This screen holds no websocket, and
+    // offering the dashboard's last known price for a different pair would
+    // be worse than offering nothing. The field starts empty and you type
+    // the fill you actually got.
+    final price = await askExitPrice(context, t);
+    if (price == null || price <= 0) return;
+    await Trades.instance.close(t.id, price);
+    await _loadTrades();
+  }
+
+  Future<void> _deleteTrade(TradeEntry t) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        title: Text('Delete this entry?', style: Obsidian.headlineMd()),
+        content: Text(
+            'It is removed from your log for good. Closing a trade keeps it '
+            'as a record; deleting it does not.',
+            style: Obsidian.body(color: Obsidian.outline, size: 12.5)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text('Keep', style: Obsidian.body())),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text('Delete',
+                  style: Obsidian.body(color: Obsidian.redSoft))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await Trades.instance.remove(t.id);
+    await _loadTrades();
   }
 
   Future<void> _loadBackgroundHealth() async {
@@ -665,6 +720,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ]),
           const SizedBox(height: Obsidian.gutter),
+          ..._tradesSection(),
           _section('CONNECTION', [
             _tile(
               icon: _checking ? Icons.sync_rounded : Icons.dns_rounded,
@@ -799,6 +855,96 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         ),
       );
+
+  /// Your trade log: everything entered on this device, open first.
+  ///
+  /// LOGGED, NOT PLACED. Nothing in this app has ever sent an order — these
+  /// are trades you made elsewhere and recorded here so they can be marked
+  /// against the same prices the rest of the app uses. The empty state says
+  /// so, because the empty state is where someone forms their idea of what
+  /// the feature is.
+  List<Widget> _tradesSection() {
+    final open = _trades.where((t) => t.isOpen).length;
+    final closed = _trades.length - open;
+    final realised = _trades
+        .where((t) => !t.isOpen)
+        .map((t) => t.pnl(null) ?? 0)
+        .fold<double>(0, (a, b) => a + b);
+
+    return [
+      Row(
+        children: [
+          Text('YOUR TRADES', style: Obsidian.labelSm(size: 10.5)),
+          const Spacer(),
+          if (_trades.isNotEmpty)
+            Text(
+                closed == 0
+                    ? '$open open'
+                    : '$open open · $closed closed · '
+                        '${realised >= 0 ? '+' : ''}${money(realised, dp: 2)}',
+                style: Obsidian.dataTable(
+                    size: 11,
+                    color: closed == 0
+                        ? Obsidian.outline
+                        : (realised >= 0 ? Obsidian.green : Obsidian.red))),
+        ],
+      ),
+      const SizedBox(height: 10),
+      if (_trades.isEmpty)
+        GlassPanel(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Icon(Icons.receipt_long_rounded,
+                    size: 18, color: Obsidian.outline),
+                const SizedBox(width: 10),
+                Text('No trades logged yet',
+                    style: Obsidian.body(size: 13.5)),
+              ]),
+              const SizedBox(height: 8),
+              Text(
+                  'Log Market Entry sits at the bottom of any coin\u2019s '
+                  'dashboard. It records a trade you entered elsewhere — this '
+                  'app holds no exchange key and places no orders.',
+                  style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+            ],
+          ),
+        )
+      else
+        for (final t in _trades) ...[
+          Dismissible(
+            key: ValueKey(t.id),
+            direction: DismissDirection.endToStart,
+            confirmDismiss: (_) async {
+              await _deleteTrade(t);
+              return false;          // the handler reloads; do not animate out
+            },
+            background: Container(
+              alignment: Alignment.centerRight,
+              padding: const EdgeInsets.only(right: 20),
+              child: const Icon(Icons.delete_outline_rounded,
+                  color: Obsidian.redSoft, size: 20),
+            ),
+            child: PositionCard(
+              entry: t,
+              short: t.symbol.endsWith('USDT')
+                  ? t.symbol.substring(0, t.symbol.length - 4)
+                  : t.symbol,
+              showSymbol: true,
+              // No websocket on this screen, so an open trade marks against
+              // its entry until you close it. `pnlPct(null)` returns null
+              // rather than zero, and the card prints a dash.
+              livePrice: null,
+              onClose: t.isOpen ? () => _closeTrade(t) : null,
+            ),
+          ),
+          const SizedBox(height: Obsidian.panelGap),
+        ],
+      const SizedBox(height: Obsidian.gutter - Obsidian.panelGap),
+    ];
+  }
 
   Widget _section(String label, List<Widget> rows) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -28,10 +28,13 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/client.dart';
 import '../api/live_price.dart';
 import '../api/models.dart';
+import '../api/trades.dart';
 import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/article_sheet.dart';
 import '../widgets/analysis_panels.dart';
+import '../widgets/positions_panel.dart';
+import '../widgets/trade_entry.dart';
 import '../widgets/glass.dart';
 import '../widgets/horizon_sheet.dart';
 import '../widgets/indicator_sheet.dart';
@@ -111,6 +114,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<double> _series = const [];
   List<WhaleEvent> _whales = const [];
   List<NewsItem> _news = const [];
+
+  /// Positions you logged for THIS pair. Read from the device, not the
+  /// server — see `trades.dart` on why, and on what that costs.
+  List<TradeEntry> _positions = const [];
   Consensus? _consensus;
   String? _error;
   String? _untrained;
@@ -148,6 +155,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) setState(() => _live = t);
     });
     _load();
+    _loadPositions();
     // the user's chosen signal strength, restored before the first payload
     // lands so a call is never briefly shown then withdrawn
     Settings.instance.sensitivity().then(
@@ -422,6 +430,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _load();
   }
 
+  /// The trades logged for this pair, newest first.
+  ///
+  /// Open ones only. A closed trade is history and belongs in the Profile
+  /// list rather than stacked above the news on the pair you are reading
+  /// about right now.
+  Future<void> _loadPositions() async {
+    final list = await Trades.instance.forSymbol(widget.symbol);
+    if (mounted) setState(() => _positions = list);
+  }
+
+  Future<void> _closePosition(TradeEntry t) async {
+    final price = await askExitPrice(context, t, livePrice: _livePrice);
+    if (price == null || price <= 0) return;
+    await Trades.instance.close(t.id, price);
+    await _loadPositions();
+  }
+
   Future<void> _load({bool quiet = false}) async {
     final iv = widget.interval;
 
@@ -590,6 +615,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: Obsidian.gutter),
           ..._costWarning(d),
+          // ABOVE THE NEWS, deliberately. What you are holding outranks what
+          // happened; a headline you have no position in is context, and a
+          // position you do hold is the reason you opened the app.
+          if (_positions.isNotEmpty) ...[
+            PositionsPanel(
+              entries: _positions,
+              short: d.symbol.endsWith('USDT')
+                  ? d.symbol.substring(0, d.symbol.length - 4)
+                  : d.symbol,
+              livePrice: _livePrice ?? d.price,
+              onClose: _closePosition,
+            ),
+            const SizedBox(height: Obsidian.gutter),
+          ],
           ..._recentActivity(),
           _chartCard(d),
           const SizedBox(height: Obsidian.panelGap),
@@ -601,6 +640,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: Obsidian.gutter),
           ..._consensusPanel(),
           _note(d),
+          const SizedBox(height: Obsidian.gutter),
+          // THE VERY BOTTOM, and that is the right place for it. Everything
+          // above is the app telling you what it sees; this is you telling
+          // the app what you did. Putting it higher would make the page read
+          // as though it were offering to trade for you, which it is not and
+          // cannot be — there is no key on this device.
+          LogEntryCard(
+            symbol: d.symbol,
+            short: d.symbol.endsWith('USDT')
+                ? d.symbol.substring(0, d.symbol.length - 4)
+                : d.symbol,
+            livePrice: _livePrice ?? d.price,
+            // Seeded from the model's own call, so the numbers you are
+            // looking at are the numbers you log. A default, not advice.
+            suggestedSide: d.side.isEmpty
+                ? (d.recommendation.action == 'SELL' ? 'SHORT' : 'LONG')
+                : (d.isShort ? 'SHORT' : 'LONG'),
+            suggestedTp: d.liveTakeProfit(_livePrice),
+            suggestedSl: d.liveStopLoss(_livePrice),
+            onLogged: _loadPositions,
+          ),
         ],
       ),
     ));
