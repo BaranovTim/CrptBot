@@ -11,6 +11,8 @@
 /// app that can be edited into deciding differently.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:url_launcher/url_launcher.dart';
@@ -67,6 +69,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   /// Every trade logged on this device, open and closed.
   List<TradeEntry> _trades = const [];
 
+  /// Current price per traded symbol.
+  ///
+  /// WHY THIS SCREEN FETCHES ITS OWN
+  ///     It holds no websocket — that belongs to the dashboard, and only for
+  ///     the pair on screen. Without prices every open trade printed
+  ///     "waiting for a price" and a dash where its profit should be, which
+  ///     is honest and useless. `/api/coins?symbols=` answers for exactly the
+  ///     symbols asked about and remembers nothing, so one call covers the
+  ///     whole list.
+  Map<String, double> _prices = const {};
+
   bool _batteryExempt = true;
   DateTime? _bgLastRun;
   int _bgRuns = 0;
@@ -86,6 +99,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadTrades() async {
     final all = await Trades.instance.load();
     if (!mounted) return;
+    unawaited(_loadPrices(all));
     // Open first, then most recently closed. The ones you can still act on
     // are the ones worth putting at the top.
     all.sort((a, b) {
@@ -95,12 +109,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _trades = all);
   }
 
+  /// One round trip for every symbol you hold, open positions only.
+  ///
+  /// A closed trade marks against the exit you recorded, so its price is
+  /// already known and asking about it would be a wasted symbol.
+  Future<void> _loadPrices(List<TradeEntry> all) async {
+    final syms = all.where((t) => t.isOpen).map((t) => t.symbol).toSet();
+    if (syms.isEmpty) return;
+    try {
+      final coins = await widget.client.coins(symbols: syms.toList());
+      if (!mounted) return;
+      setState(() => _prices = {
+            for (final c in coins)
+              if (c.price != null) c.symbol: c.price!,
+          });
+    } catch (_) {
+      // Offline. The rows fall back to a dash, which is the truth.
+    }
+  }
+
   Future<void> _closeTrade(TradeEntry t) async {
-    // NO LIVE PRICE HERE, on purpose. This screen holds no websocket, and
-    // offering the dashboard's last known price for a different pair would
-    // be worse than offering nothing. The field starts empty and you type
-    // the fill you actually got.
-    final price = await askExitPrice(context, t);
+    // Prefilled with the CURRENT price, which is a starting point and not a
+    // record of your fill — `askExitPrice` says so, and the field is
+    // editable because usually-close is not always-right.
+    final price = await askExitPrice(context, t,
+        livePrice: _prices[t.symbol]);
     if (price == null || price <= 0) return;
     await Trades.instance.close(t.id, price);
     await _loadTrades();
@@ -866,9 +899,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
   List<Widget> _tradesSection() {
     final open = _trades.where((t) => t.isOpen).length;
     final closed = _trades.length - open;
+    // Closed trades only, and `pnl(null)` is right for them: a closed trade
+    // marks against the exit you recorded, never against today's price.
     final realised = _trades
         .where((t) => !t.isOpen)
         .map((t) => t.pnl(null) ?? 0)
+        .fold<double>(0, (a, b) => a + b);
+    // Open profit is live, so it needs the fetched prices.
+    final unrealised = _trades
+        .where((t) => t.isOpen)
+        .map((t) => t.pnl(_prices[t.symbol]) ?? 0)
         .fold<double>(0, (a, b) => a + b);
 
     return [
@@ -878,15 +918,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const Spacer(),
           if (_trades.isNotEmpty)
             Text(
-                closed == 0
-                    ? '$open open'
-                    : '$open open · $closed closed · '
-                        '${realised >= 0 ? '+' : ''}${money(realised, dp: 2)}',
+                [
+                  if (open > 0)
+                    '$open open ${unrealised >= 0 ? '+' : ''}'
+                        '${money(unrealised, dp: 2)}',
+                  if (closed > 0)
+                    '$closed closed ${realised >= 0 ? '+' : ''}'
+                        '${money(realised, dp: 2)}',
+                ].join('  ·  '),
                 style: Obsidian.dataTable(
                     size: 11,
-                    color: closed == 0
-                        ? Obsidian.outline
-                        : (realised >= 0 ? Obsidian.green : Obsidian.red))),
+                    color: (open > 0 ? unrealised : realised) >= 0
+                        ? Obsidian.green
+                        : Obsidian.red)),
         ],
       ),
       const SizedBox(height: 10),
@@ -927,20 +971,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: const Icon(Icons.delete_outline_rounded,
                   color: Obsidian.redSoft, size: 20),
             ),
-            child: PositionCard(
+            child: TradeRow(
               entry: t,
-              short: t.symbol.endsWith('USDT')
-                  ? t.symbol.substring(0, t.symbol.length - 4)
-                  : t.symbol,
-              showSymbol: true,
-              // No websocket on this screen, so an open trade marks against
-              // its entry until you close it. `pnlPct(null)` returns null
-              // rather than zero, and the card prints a dash.
-              livePrice: null,
+              livePrice: _prices[t.symbol],
               onClose: t.isOpen ? () => _closeTrade(t) : null,
             ),
           ),
-          const SizedBox(height: Obsidian.panelGap),
+          const SizedBox(height: 8),
         ],
       const SizedBox(height: Obsidian.gutter - Obsidian.panelGap),
     ];

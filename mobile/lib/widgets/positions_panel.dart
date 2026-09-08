@@ -305,3 +305,147 @@ Future<double?> askExitPrice(BuildContext context, TradeEntry t,
     ),
   );
 }
+
+
+/// One trade as a LIST ROW, the shape the market screen uses.
+///
+/// WHY THIS EXISTS ALONGSIDE `PositionCard`
+///     The card is right on a dashboard, where one pair is the subject of the
+///     whole screen and there is room to show the barriers and a progress
+///     bar. In a profile list of every trade you have ever logged, that same
+///     card is a screenful each and you cannot see three of them at once.
+///     Same data, same colours, a quarter of the height.
+class TradeRow extends StatelessWidget {
+  const TradeRow({
+    super.key,
+    required this.entry,
+    this.livePrice,
+    this.onClose,
+    this.onTap,
+  });
+
+  final TradeEntry entry;
+  final double? livePrice;
+  final VoidCallback? onClose;
+  final VoidCallback? onTap;
+
+  static String short(String symbol) =>
+      symbol.endsWith('USDT') ? symbol.substring(0, symbol.length - 4) : symbol;
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = entry.pnlPct(livePrice);
+    final abs = entry.pnl(livePrice);
+    final tone = pct == null
+        ? Obsidian.outline
+        : (pct >= 0 ? Obsidian.green : Obsidian.red);
+    final sideTone = entry.isShort ? Obsidian.red : Obsidian.green;
+
+    return GlassPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      onTap: onTap,
+      child: Row(
+        children: [
+          // The medallion doubles as the direction: a short is red, a long
+          // green, so the list reads as positions before it reads as coins.
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: sideTone.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+              border: Border.all(color: sideTone.withValues(alpha: 0.35)),
+            ),
+            alignment: Alignment.center,
+            child: Icon(
+                entry.isShort
+                    ? Icons.trending_down_rounded
+                    : Icons.trending_up_rounded,
+                size: 18,
+                color: sideTone),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(short(entry.symbol),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Obsidian.bodyLg().copyWith(
+                              fontWeight: FontWeight.w600, fontSize: 14.5)),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(entry.isShort ? 'SHORT' : 'LONG',
+                        style: Obsidian.labelSm(color: sideTone, size: 9.5)),
+                    if (!entry.isOpen) ...[
+                      const SizedBox(width: 6),
+                      Text('CLOSED',
+                          style:
+                              Obsidian.labelSm(color: Obsidian.outline, size: 9.5)),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                    '${_trim(entry.size)} @ ${money(entry.entryPrice)}'
+                    '  ->  ${money(entry.markPrice(livePrice))}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        Obsidian.dataTable(size: 11, color: Obsidian.outline)),
+              ],
+            ),
+          ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 96),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(signedPct(pct),
+                      maxLines: 1,
+                      style: Obsidian.dataTable(
+                          size: 15, color: tone, w: FontWeight.w700)),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                    abs == null
+                        ? '—'
+                        : '${abs >= 0 ? '+' : ''}${money(abs, dp: 2)}',
+                    maxLines: 1,
+                    style: Obsidian.dataTable(size: 11.5, color: tone)),
+              ],
+            ),
+          ),
+          if (onClose != null)
+            SizedBox(
+              width: 36,
+              height: 40,
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                onPressed: onClose,
+                tooltip: 'Close this position',
+                icon: const Icon(Icons.check_circle_outline_rounded,
+                    size: 19, color: Obsidian.outline),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 0.50000000 is noise in a list. Trailing zeros go, the number stays exact.
+  static String _trim(double v) {
+    var s = v.toStringAsFixed(8);
+    if (s.contains('.')) {
+      s = s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+    }
+    return s;
+  }
+}

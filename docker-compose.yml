@@ -28,7 +28,7 @@ services:
       # Everything NOT listed here is still served — built on demand and
       # cached — it simply is not pre-warmed or watched for signal changes.
       # Raise this list when the box has the RAM to carry it.
-      RECORD_SYMBOLS: ${RECORD_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,ADAUSDT,XRPUSDT,ZECUSDT}
+      RECORD_SYMBOLS: ${RECORD_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,ADAUSDT,XRPUSDT,ZECUSDT,HYPEUSDT,DOGEUSDT,BNBUSDT,ENAUSDT,UNIUSDT,NEARUSDT,SUIUSDT,1000PEPEUSDT,ARBUSDT}
       # OPTIONAL, deliberately — note `:-` and not `:?`.
       #
       # Without these the equity screener has no data and says so; with `:?`
@@ -84,6 +84,7 @@ services:
       --symbol BNBUSDT --symbol ENAUSDT
       --symbol UNIUSDT --symbol NEARUSDT
       --symbol SUIUSDT --symbol 1000PEPEUSDT
+      --symbol ARBUSDT
       --interval 1m --interval 5m --interval 15m
       --interval 1h --interval 4h --interval 1d
     healthcheck:
