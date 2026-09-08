@@ -389,6 +389,14 @@ class ApiClient {
       Dashboard.fromJson(await _get('/api/dashboard${_q(symbol, interval)}',
           timeout: const Duration(seconds: 180)));
 
+  /// High, low and last close since `since` — what price DID, not what it
+  /// is now. Used to settle a logged trade against its own levels; see
+  /// `Trades.settle`.
+  Future<Map<String, dynamic>> priceRange(String symbol,
+          {required DateTime since, String interval = '1m'}) =>
+      _get('/api/range?symbol=$symbol&interval=$interval'
+          '&since=${Uri.encodeComponent(since.toUtc().toIso8601String())}');
+
   Future<Consensus> consensus({String? symbol}) async =>
       Consensus.fromJson(await _get('/api/consensus${_q(symbol, null)}'));
 

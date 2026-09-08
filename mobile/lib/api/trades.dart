@@ -35,8 +35,11 @@ library;
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart'
+    show debugPrint, visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'client.dart';
 
 /// One logged position.
 class TradeEntry {
@@ -51,6 +54,7 @@ class TradeEntry {
     this.stopLoss,
     this.closedAt,
     this.closePrice,
+    this.closedBy = '',
     this.note = '',
   });
 
@@ -93,10 +97,21 @@ class TradeEntry {
             ? null
             : DateTime.parse(j['closed_at'] as String),
         closePrice: (j['close_price'] as num?)?.toDouble(),
+        closedBy: j['closed_by'] as String? ?? '',
         note: j['note'] as String? ?? '',
       );
 
   final String id, symbol, side, note;
+
+  /// How it ended: '' while open or closed by hand, 'take_profit' or
+  /// 'stop_loss' when the app settled it against a level you set.
+  ///
+  /// Recorded rather than inferred, because the two are NOT the same thing.
+  /// A trade closed at a price that happens to equal your take profit might
+  /// have been closed by you at that price; the journal should not guess.
+  final String closedBy;
+
+  bool get autoClosed => closedBy == 'take_profit' || closedBy == 'stop_loss';
   final double size, entryPrice;
   final DateTime openedAt;
   final double? takeProfit, stopLoss;
@@ -117,6 +132,7 @@ class TradeEntry {
         'stop_loss': stopLoss,
         'closed_at': closedAt?.toIso8601String(),
         'close_price': closePrice,
+        'closed_by': closedBy,
         'note': note,
       };
 
@@ -157,7 +173,7 @@ class TradeEntry {
     return (moved / span).clamp(0.0, 1.0);
   }
 
-  TradeEntry closedAtPrice(double price) => TradeEntry(
+  TradeEntry closedAtPrice(double price, {String by = ''}) => TradeEntry(
         id: id,
         symbol: symbol,
         side: side,
@@ -168,8 +184,33 @@ class TradeEntry {
         stopLoss: stopLoss,
         closedAt: DateTime.now().toUtc(),
         closePrice: price,
+        closedBy: by,
         note: note,
       );
+}
+
+/// What a price range did to a trade's levels. Null when nothing was hit.
+///
+/// PURE, AND SEPARATELY TESTED, because two things here are easy to get
+/// backwards and both corrupt a journal silently:
+///
+///   THE DIRECTION.  A long is stopped out by the LOW and takes profit on
+///   the HIGH. A short is the mirror image. Applying a long's rule to a
+///   short would close winners as losses and losses as winners.
+///
+///   THE TIE.  When one bar's range spans both levels, OHLC cannot say which
+///   came first — the data simply does not contain the answer. `monitor.py`
+///   resolves that ambiguity as a LOSS and says so in as many words, and
+///   this agrees with it deliberately: a journal that resolved ties in your
+///   favour would flatter every statistic built on top of it.
+String? levelHitBy(TradeEntry t, {double? high, double? low}) {
+  if (!t.isOpen || high == null || low == null) return null;
+  final tp = t.takeProfit, sl = t.stopLoss;
+  final hitTp = tp != null && (t.isShort ? low <= tp : high >= tp);
+  final hitSl = sl != null && (t.isShort ? high >= sl : low <= sl);
+  if (hitSl) return 'stop_loss';        // the tie goes here, on purpose
+  if (hitTp) return 'take_profit';
+  return null;
 }
 
 class Trades {
@@ -190,22 +231,70 @@ class Trades {
 
   List<TradeEntry>? _cache;
 
+  /// Set when the last read FAILED, as opposed to finding nothing.
+  ///
+  /// THE DATA-LOSS BUG THIS EXISTS TO KILL
+  ///     `load()` used to swallow any read error and cache an empty list,
+  ///     with a comment saying the next write would rebuild it. The next
+  ///     write did not rebuild it — it PERSISTED it. One transient failure
+  ///     became `[]` in memory, the next `_save` wrote `[]` to disk, and
+  ///     every logged trade was gone for good. `settle()` runs on every
+  ///     dashboard and profile load, so a write was never far away.
+  ///
+  ///     "Read failed" and "you have no trades" look identical in an empty
+  ///     list and must never be treated the same, because one of them is
+  ///     safe to overwrite and the other is not.
+  bool _readFailed = false;
+
+  /// Where the previous contents go before every write.
+  ///
+  /// Cheap insurance: a few hundred bytes against losing a trade journal.
+  static const _backupKey = 'trades.entries.backup.v1';
+
   Future<List<TradeEntry>> load() async {
     if (_cache != null) return _cache!;
     try {
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_key);
-      if (raw == null || raw.isEmpty) return _cache = <TradeEntry>[];
-      final list = (json.decode(raw) as List)
-          .map((e) => TradeEntry.fromJson(e as Map<String, dynamic>))
-          .toList();
+      var raw = prefs.getString(_key);
+      // `[]` counts as empty here, not as "you have no trades". An emptied
+      // live key IS the shape the old data-loss bug left behind, so it is
+      // exactly the case the backup exists to answer.
+      if (raw == null || raw.isEmpty || raw.trim() == '[]') {
+        // Nothing under the live key. Before believing that, check the
+        // backup: if a previous version of this bug emptied the store, the
+        // trades are still sitting there.
+        final backup = prefs.getString(_backupKey);
+        if (backup != null && backup.isNotEmpty && backup != '[]') {
+          debugPrint('[trades] live store empty, recovering from backup');
+          raw = backup;
+        } else {
+          _readFailed = false;
+          return _cache = <TradeEntry>[];
+        }
+      }
+      final decoded = json.decode(raw) as List;
+      final list = <TradeEntry>[];
+      var skipped = 0;
+      for (final e in decoded) {
+        try {
+          list.add(TradeEntry.fromJson(e as Map<String, dynamic>));
+        } catch (_) {
+          // ONE BAD ENTRY IS NOT A BAD STORE. Mapping over the whole list
+          // threw on the first unreadable element and lost every good one
+          // behind it.
+          skipped++;
+        }
+      }
+      if (skipped > 0) debugPrint('[trades] skipped $skipped unreadable entr(y/ies)');
+      _readFailed = false;
       return _cache = list;
     } catch (e) {
-      // A corrupt store must not take the app down, and must not silently
-      // look like "you have no trades" forever — it is logged and the next
-      // write rebuilds it.
+      // Do NOT cache. A failed read leaves the store untouched and lets the
+      // next call try again, and `_save` refuses to write over a store it
+      // could not read.
       debugPrint('[trades] could not read store: $e');
-      return _cache = <TradeEntry>[];
+      _readFailed = true;
+      return <TradeEntry>[];
     }
   }
 
@@ -223,11 +312,48 @@ class Trades {
     await _save(all);
   }
 
-  Future<void> close(String id, double price) async {
+  /// Close any open trade whose take profit or stop loss has been touched.
+  ///
+  /// Returns what it closed, so a caller can tell you rather than changing
+  /// the list under you silently.
+  ///
+  /// THE PRICE RECORDED IS THE LEVEL, NOT A FILL. This app never saw an
+  /// order; it is stating "your stop was reached", which is the honest claim
+  /// the data supports. Real slippage and gaps mean your actual exit
+  /// differed, so the entry is tagged `closedBy` and the UI labels it — and
+  /// the close price stays editable by closing it yourself first.
+  ///
+  /// ASKS THE SERVER FOR THE RANGE SINCE THE ENTRY rather than comparing the
+  /// current price. A stop hit at 3am that retraced by morning still took
+  /// the trade out, and a current-price check would miss every one of those.
+  Future<List<TradeEntry>> settle(ApiClient client) async {
+    final open = (await load()).where((t) => t.isOpen).toList();
+    final settled = <TradeEntry>[];
+    for (final t in open) {
+      if (t.takeProfit == null && t.stopLoss == null) continue;
+      try {
+        final r = await client.priceRange(t.symbol, since: t.openedAt);
+        final hit = levelHitBy(t,
+            high: (r['high'] as num?)?.toDouble(),
+            low: (r['low'] as num?)?.toDouble());
+        if (hit == null) continue;
+        final level = hit == 'take_profit' ? t.takeProfit! : t.stopLoss!;
+        await close(t.id, level, by: hit);
+        settled.add(t);
+      } catch (e) {
+        // Offline, or a pair the server does not carry. Leaving the trade
+        // open is the safe failure: it will be settled on the next pass.
+        debugPrint('[trades] could not settle ${t.symbol}: $e');
+      }
+    }
+    return settled;
+  }
+
+  Future<void> close(String id, double price, {String by = ''}) async {
     final all = List<TradeEntry>.from(await load());
     final i = all.indexWhere((t) => t.id == id);
     if (i < 0) return;
-    all[i] = all[i].closedAtPrice(price);
+    all[i] = all[i].closedAtPrice(price, by: by);
     await _save(all);
   }
 
@@ -238,14 +364,45 @@ class Trades {
   }
 
   Future<void> _save(List<TradeEntry> all) async {
+    if (_readFailed) {
+      // The list handed to us was built on a read that failed, so it is not
+      // a picture of your trades — it is a picture of a storage error.
+      // Writing it would make the error permanent.
+      debugPrint('[trades] refusing to save over a store that would not read');
+      return;
+    }
     _cache = all;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-          _key, json.encode(all.map((t) => t.toJson()).toList()));
+      final encoded = json.encode(all.map((t) => t.toJson()).toList());
+      // Keep what was there before this write. If a bug ever empties the
+      // live key again, `load()` finds the trades here instead of nothing.
+      if (all.isEmpty) {
+        // AN INTENTIONAL EMPTY. `load()` treats an empty live key as a
+        // reason to check the backup, so leaving one behind would resurrect
+        // trades you deliberately deleted. This save only happens after a
+        // successful read, so the emptiness is a decision, not a failure.
+        await prefs.remove(_backupKey);
+      } else {
+        final previous = prefs.getString(_key);
+        if (previous != null && previous.isNotEmpty && previous != '[]') {
+          await prefs.setString(_backupKey, previous);
+        }
+      }
+      await prefs.setString(_key, encoded);
     } catch (e) {
       debugPrint('[trades] could not save: $e');
     }
+  }
+
+  /// Drop the in-memory cache so the next `load()` re-reads storage.
+  ///
+  /// Exists for tests, which need to simulate a relaunch or a background
+  /// isolate reading the same store fresh. Nothing in the app calls it.
+  @visibleForTesting
+  void resetForTest() {
+    _cache = null;
+    _readFailed = false;
   }
 
   Future<double?> balance() async {

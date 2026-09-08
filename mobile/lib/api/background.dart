@@ -83,6 +83,7 @@ import 'client.dart';
 import 'notifications.dart';
 import 'push.dart';
 import 'settings.dart';
+import 'trades.dart';
 
 const String _taskName = 'thusildy.alerts.poll';
 
@@ -195,12 +196,23 @@ Future<int> pollOnce() async {
   // foreground never got to send — the relay is the path that keeps working
   // when this one does not, so it must not be left holding stale settings.
   await PushDelivery.instance.sync(client);
+  // Settle logged trades against their own levels while we are awake anyway.
+  // This is the only path that runs with the app closed, so it is what makes
+  // "closed at your stop" true by morning rather than at next open.
+  try {
+    final settled = await Trades.instance.settle(client);
+    if (settled.isNotEmpty) {
+      debugPrint('[bg] settled ${settled.length} trade(s)');
+    }
+  } catch (e) {
+    debugPrint('[bg] settle failed: $e');
+  }
   final batch = await collectAlerts(client);
   for (final a in batch.deliver) {
-    // Already delivered through the relay — see `Alert.pushed`. Posting it
-    // again would mean two notifications for one event, which is the noise
-    // that teaches someone to swipe the whole channel away.
-    if (a.pushed) continue;
+    // NOT gated on `a.pushed` — see the note in `shell.dart`. The relay
+    // reporting a successful send says ntfy accepted the message, never that
+    // a phone showed it, and treating those as the same thing is how alerts
+    // went silent while the server logged thirty clean deliveries.
     await Notifications.instance.showAlert(a);
   }
   debugPrint('[bg] delivered ${batch.deliver.length} of ${batch.total}');

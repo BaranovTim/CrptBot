@@ -437,16 +437,19 @@ class Alert {
   /// them, silently, because `clearsSensitivity('')` is false.
   bool get isExit => kind == 'signal' && extra['to'] == 'FLAT';
 
-  /// Did the server already push this to the phone another way?
+  /// Did the server hand this to the push relay?
   ///
-  /// Both delivery paths run at once — the relay in `push.dart` and this
-  /// app's own polling — so one event would otherwise post two
-  /// notifications. The app skips its own when this is true.
+  /// KEPT FOR DIAGNOSIS, NOT USED TO SUPPRESS ANYTHING — and the difference
+  /// is why alerts went quiet once already.
   ///
-  /// A FACT, NOT AN INSTRUCTION. It says what the relay actually managed to
-  /// send. If the relay failed, or was never set up, this is false and the
-  /// app notifies exactly as it did before any of it existed — there is no
-  /// state in which both paths go quiet.
+  /// It means ntfy accepted the message. It does NOT mean a phone displayed
+  /// it: the ntfy app can be battery-optimised, unsubscribed, denied
+  /// notification permission, or absent, and the server sees none of that.
+  /// While this gated the app's own notifications, the relay logged thirty
+  /// clean sends and the phone showed nothing.
+  ///
+  /// Both paths now post. Duplicates are a nuisance; silence is a broken
+  /// feature.
   final bool pushed;
 
   /// For a news alert: BULL | BEAR | MIXED | NO READING, and

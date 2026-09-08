@@ -875,6 +875,57 @@ class TradingService:
         return value
 
     # ------------------------------------------------------------ chart
+    def price_range(self, symbol: Optional[str] = None,
+                    interval: str = "1m",
+                    since: Optional[str] = None) -> Dict[str, Any]:
+        """The high and low since `since`, plus the latest close.
+
+        WHY THE EXTREMES AND NOT THE CURRENT PRICE
+            The app closes a logged trade when price touched the take profit
+            or the stop loss it recorded. "Touched" is a fact about the whole
+            interval since the entry, not about the moment somebody happened
+            to open the app: a wick through a stop at 3am that retraced by
+            morning still took the trade out, and comparing the current price
+            would miss it every time.
+
+        1m by default, because resolution is the entire point. A touch that
+        lasted ninety seconds is invisible on a 1h candle.
+        """
+        sym, iv = self._pair(symbol, interval)
+        bars = self._bars(sym, iv)
+        if bars.empty:
+            return {"symbol": sym, "interval": iv, "bars": 0,
+                    "high": None, "low": None, "last": None}
+        window = bars
+        if since:
+            try:
+                cut = pd.Timestamp(since)
+                if cut.tzinfo is None:
+                    cut = cut.tz_localize("UTC")
+                # The bar CONTAINING the entry is excluded: its extremes
+                # include movement from before the trade existed, and using
+                # them would close a position on a wick that predates it.
+                window = bars[bars.index > cut]
+            except (ValueError, TypeError):
+                pass
+        if window.empty:
+            # No bar has closed since the entry yet. Not an error — there is
+            # simply nothing to judge against, and a caller must not read
+            # that as "nothing was touched".
+            return {"symbol": sym, "interval": iv, "bars": 0,
+                    "high": None, "low": None,
+                    "last": _num(bars["close"].iloc[-1])}
+        return {
+            "symbol": sym,
+            "interval": iv,
+            "bars": int(len(window)),
+            "from": window.index[0].isoformat(),
+            "to": window.index[-1].isoformat(),
+            "high": _num(window["high"].max()),
+            "low": _num(window["low"].min()),
+            "last": _num(window["close"].iloc[-1]),
+        }
+
     def chart(self, symbol: Optional[str] = None,
               interval: Optional[str] = None, n: int = 96) -> Dict[str, Any]:
         """The last `n` closes. Cached, because it was the slowest thing here.

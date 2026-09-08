@@ -307,6 +307,183 @@ void main() {
     expect(done.pnlPct(null), closeTo(30, 1e-9));
   });
 
+  test('a long is stopped by the low and a short by the high', () {
+    // THE BUG THIS PINS
+    //
+    // A long takes profit on the HIGH and is stopped on the LOW; a short is
+    // the mirror image. Applying a long's rule to a short closes winners as
+    // losses and losses as winners — and because this rewrites the journal
+    // without asking, it would be wrong silently and permanently.
+    final long = TradeEntry(
+        id: 'l', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 110, stopLoss: 90);
+    expect(levelHitBy(long, high: 111, low: 99), 'take_profit');
+    expect(levelHitBy(long, high: 105, low: 89), 'stop_loss');
+    expect(levelHitBy(long, high: 105, low: 95), isNull);
+
+    final short = TradeEntry(
+        id: 's', symbol: 'BTCUSDT', side: 'SHORT', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 90, stopLoss: 110);
+    // price FELL to 89: a short's target, not its stop
+    expect(levelHitBy(short, high: 101, low: 89), 'take_profit');
+    // price ROSE to 111: a short's stop
+    expect(levelHitBy(short, high: 111, low: 95), 'stop_loss');
+    expect(levelHitBy(short, high: 105, low: 95), isNull);
+  });
+
+  test('a bar spanning both levels resolves as the stop, like the labeller',
+      () {
+    // OHLC cannot say which barrier came first — the data does not contain
+    // the answer. `monitor.py` resolves that tie as a LOSS and says so; this
+    // agrees deliberately. A journal that broke ties in your favour would
+    // flatter every statistic built on top of it.
+    final long = TradeEntry(
+        id: 'l', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 110, stopLoss: 90);
+    expect(levelHitBy(long, high: 115, low: 85), 'stop_loss');
+
+    final short = TradeEntry(
+        id: 's', symbol: 'BTCUSDT', side: 'SHORT', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 90, stopLoss: 110);
+    expect(levelHitBy(short, high: 115, low: 85), 'stop_loss');
+  });
+
+  test('nothing is settled without a range, or on a closed trade', () {
+    final t = TradeEntry(
+        id: 'x', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 110, stopLoss: 90);
+    // no bar has closed since the entry: silence is not "nothing was hit"
+    expect(levelHitBy(t, high: null, low: null), isNull);
+    expect(levelHitBy(t, high: 115, low: null), isNull);
+    // a trade with no levels can never be settled automatically
+    final bare = TradeEntry.create(
+        symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100);
+    expect(levelHitBy(bare, high: 999, low: 1), isNull);
+    // and a closed one is never reopened or re-settled
+    final done = t.closedAtPrice(105);
+    expect(levelHitBy(done, high: 115, low: 85), isNull);
+  });
+
+  test('an auto-closed trade records which level ended it', () {
+    // "Closed at 90" does not say whether you took that price or your stop
+    // did. The journal records which, rather than letting the UI guess.
+    final t = TradeEntry(
+        id: 'l', symbol: 'BTCUSDT', side: 'LONG', size: 2, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 110, stopLoss: 90);
+    final stopped = t.closedAtPrice(90, by: 'stop_loss');
+    expect(stopped.closedBy, 'stop_loss');
+    expect(stopped.autoClosed, isTrue);
+    expect(stopped.pnl(null), closeTo(-20, 1e-9));   // 2 units x -10
+    expect(TradeEntry.fromJson(stopped.toJson()).closedBy, 'stop_loss');
+
+    final byHand = t.closedAtPrice(105);
+    expect(byHand.autoClosed, isFalse);
+    expect(byHand.closedBy, '');
+  });
+
+  test('one unreadable entry does not take the whole journal with it', () async {
+    // Mapping over the decoded list threw on the first bad element and lost
+    // every good one behind it.
+    SharedPreferences.setMockInitialValues({
+      'trades.entries.v1': '['
+          '{"id":"a","symbol":"BTCUSDT","side":"LONG","size":1,'
+          '"entry_price":100,"opened_at":"2026-09-01T00:00:00.000Z"},'
+          '{"id":"broken","symbol":"ETHUSDT"},'
+          '{"id":"c","symbol":"SOLUSDT","side":"SHORT","size":2,'
+          '"entry_price":50,"opened_at":"2026-09-02T00:00:00.000Z"}'
+          ']',
+    });
+    final store = Trades.instance;
+    store.resetForTest();
+    final all = await store.load();
+    expect(all.length, 2);
+    expect(all.map((t) => t.id), containsAll(<String>['a', 'c']));
+  });
+
+  test('a store that will not read is never written over', () async {
+    // THE DATA-LOSS BUG THIS PINS
+    //
+    // `load()` used to cache an empty list on ANY read failure, and the next
+    // write persisted it. One transient error became `[]` on disk and every
+    // logged trade was gone for good — and `settle()` runs on each dashboard
+    // and profile load, so a write was never far away.
+    SharedPreferences.setMockInitialValues({
+      'trades.entries.v1': 'this is not json at all',
+    });
+    final store = Trades.instance;
+    store.resetForTest();
+
+    final all = await store.load();
+    expect(all, isEmpty, reason: 'a bad read reports nothing it can show');
+
+    // ...but that emptiness must not be written back
+    await store.add(TradeEntry.create(
+        symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100));
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('trades.entries.v1'), 'this is not json at all',
+        reason: 'the unreadable store was overwritten, destroying it');
+  });
+
+  test('trades survive a write, and the previous version is kept', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = Trades.instance;
+    store.resetForTest();
+
+    await store.add(TradeEntry.create(
+        symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100));
+    await store.add(TradeEntry.create(
+        symbol: 'ETHUSDT', side: 'SHORT', size: 2, entryPrice: 50));
+    expect((await store.load()).length, 2);
+
+    // a fresh read of the same storage, as a new isolate or a relaunch does
+    store.resetForTest();
+    expect((await store.load()).length, 2);
+
+    // and the backup holds the state before the last write
+    final prefs = await SharedPreferences.getInstance();
+    final backup = prefs.getString('trades.entries.backup.v1');
+    expect(backup, isNotNull);
+    expect((json.decode(backup!) as List).length, 1);
+  });
+
+  test('an emptied store recovers from its backup', () async {
+    // Exactly the shape of the bug that lost a real journal: the live key
+    // ends up as `[]` while the backup still holds the trades.
+    SharedPreferences.setMockInitialValues({
+      'trades.entries.v1': '[]',
+      'trades.entries.backup.v1': '['
+          '{"id":"a","symbol":"BTCUSDT","side":"LONG","size":1,'
+          '"entry_price":100,"opened_at":"2026-09-01T00:00:00.000Z"}'
+          ']',
+    });
+    final store = Trades.instance;
+    store.resetForTest();
+    final all = await store.load();
+    expect(all.length, 1);
+    expect(all.single.symbol, 'BTCUSDT');
+  });
+
+  test('deleting every trade stays deleted', () async {
+    // The backup makes an empty store suspicious, which is right after a
+    // failure and wrong after a decision. Emptying it on purpose must not
+    // be undone on the next read.
+    SharedPreferences.setMockInitialValues({});
+    final store = Trades.instance;
+    store.resetForTest();
+    final t = TradeEntry.create(
+        symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100);
+    await store.add(t);
+    await store.add(TradeEntry.create(
+        symbol: 'ETHUSDT', side: 'LONG', size: 1, entryPrice: 50));
+    final all = await store.load();
+    for (final x in all) {
+      await store.remove(x.id);
+    }
+    store.resetForTest();
+    expect(await store.load(), isEmpty,
+        reason: 'deleted trades came back from the backup');
+  });
+
   test('the status badge never claims the bot trades', () {
     final s = BotStatus.fromJson({
       'active': true,

@@ -317,6 +317,11 @@ class PushRelay:
                 created_at=existing.created_at if existing else time.time(),
                 last_ok=existing.last_ok if existing else None,
                 sent=existing.sent if existing else 0,
+                # CARRIED OVER. The app re-registers whenever a setting
+                # changes, so rebuilding this empty threw away the delivery
+                # record every few minutes — `sent: 30` beside
+                # `pushed: 0` was the tell.
+                pushed=list(existing.pushed) if existing else [],
             )
             self._subs[topic] = sub
             self._save()

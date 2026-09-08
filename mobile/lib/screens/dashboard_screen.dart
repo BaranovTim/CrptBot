@@ -436,6 +436,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// list rather than stacked above the news on the pair you are reading
   /// about right now.
   Future<void> _loadPositions() async {
+    // Settle against the levels first: a position whose stop was touched
+    // while the app was closed should not still be sitting above the news
+    // showing a live loss it is no longer taking.
+    try {
+      await Trades.instance.settle(widget.client);
+    } catch (_) {
+      // offline; the list below still draws what is stored
+    }
     final list = await Trades.instance.forSymbol(widget.symbol);
     if (mounted) setState(() => _positions = list);
   }

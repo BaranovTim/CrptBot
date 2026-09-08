@@ -221,6 +221,11 @@ class _LogEntryCardState extends State<LogEntryCard> {
           // NOT a buy button, and it says so before anything else.
           Text('Manual trade entry · Did you enter this trade?',
               style: Obsidian.body(color: Obsidian.outline, size: 12)),
+          const SizedBox(height: 6),
+          Text(
+              'Set a take profit or stop loss and the app closes the entry '
+              'in your log when price reaches it. It still places no orders.',
+              style: Obsidian.body(color: Obsidian.outline, size: 11)),
           const SizedBox(height: 16),
           _sideToggle(),
           const SizedBox(height: 18),

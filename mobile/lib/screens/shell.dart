@@ -180,12 +180,24 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         // So: an in-app banner when the user can see the app, and an OS
         // notification for when they cannot.
         //
-        // UNLESS THE SERVER ALREADY PUSHED IT. Both delivery paths run at
-        // once, and posting a second notification for an event that already
-        // buzzed the phone through ntfy is its own kind of broken. The
-        // in-app banner still draws either way — that is this app's own UI,
-        // not a duplicate of the lock screen.
-        if (!a.pushed) await Notifications.instance.showAlert(a);
+        // NO LONGER SUPPRESSED WHEN THE SERVER SAYS IT PUSHED.
+        //
+        // `a.pushed` means the relay handed the alert to ntfy and ntfy
+        // accepted it. It does NOT mean a phone displayed it — ntfy's own
+        // app can be battery-optimised, unsubscribed, denied notification
+        // permission, or simply not installed, and the server cannot see any
+        // of that.
+        //
+        // Trusting it cost exactly what you would expect: the relay reported
+        // 30 successful sends with no errors while the phone showed nothing,
+        // because this line was suppressing the one notification that would
+        // have got through. That is the "no state in which both go quiet"
+        // promise in `push.dart` being broken by the very flag written to
+        // uphold it.
+        //
+        // So both paths post again. A duplicate is a nuisance; silence is a
+        // broken feature, and only one of those is worth defending against.
+        await Notifications.instance.showAlert(a);
         _banner(a);
       }
     } catch (e) {

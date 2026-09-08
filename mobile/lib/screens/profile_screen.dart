@@ -97,9 +97,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadTrades() async {
+    // Settle first, so a trade that hit its stop overnight is already closed
+    // by the time the list draws rather than appearing open and then moving.
+    final settled = await Trades.instance.settle(widget.client);
     final all = await Trades.instance.load();
     if (!mounted) return;
     unawaited(_loadPrices(all));
+    if (settled.isNotEmpty) {
+      final one = settled.length == 1;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Obsidian.surfaceHigh,
+        content: Text(
+            '${settled.length} trade${one ? '' : 's'} closed — '
+            '${one ? 'its' : 'their'} level was reached.',
+            style: Obsidian.body()),
+      ));
+    }
     // Open first, then most recently closed. The ones you can still act on
     // are the ones worth putting at the top.
     all.sort((a, b) {

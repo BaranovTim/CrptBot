@@ -383,9 +383,22 @@ class TradeRow extends StatelessWidget {
                         style: Obsidian.labelSm(color: sideTone, size: 9.5)),
                     if (!entry.isOpen) ...[
                       const SizedBox(width: 6),
-                      Text('CLOSED',
-                          style:
-                              Obsidian.labelSm(color: Obsidian.outline, size: 9.5)),
+                      // WHICH KIND OF CLOSED. "Closed at 90" does not say
+                      // whether you took that price or your stop did, and
+                      // the difference is the whole point of logging it.
+                      Text(
+                          entry.closedBy == 'take_profit'
+                              ? 'HIT TP'
+                              : entry.closedBy == 'stop_loss'
+                                  ? 'HIT SL'
+                                  : 'CLOSED',
+                          style: Obsidian.labelSm(
+                              color: entry.closedBy == 'take_profit'
+                                  ? Obsidian.greenDim
+                                  : entry.closedBy == 'stop_loss'
+                                      ? Obsidian.redSoft
+                                      : Obsidian.outline,
+                              size: 9.5)),
                     ],
                   ],
                 ),

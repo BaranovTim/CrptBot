@@ -316,7 +316,8 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/stock/quotes",
                                           "/api/stock/search",
                                           "/api/horizon", "/api/train",
-                                          "/api/train/status", "/api/push"]})
+                                          "/api/train/status", "/api/push",
+                                          "/api/range"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -487,6 +488,10 @@ class Handler(BaseHTTPRequestHandler):
                                              n=arg("n", 96)))
                 except KeyError as e:
                     self._send({"error": str(e), "path": route}, status=404)
+            elif route == "/api/range":
+                self._send(svc.price_range(symbol=opt("symbol"),
+                                           interval=opt("interval") or "1m",
+                                           since=opt("since")))
             elif route == "/api/chart":
                 self._send(svc.chart(symbol=opt("symbol"),
                                      interval=opt("interval"),

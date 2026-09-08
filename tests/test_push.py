@@ -332,3 +332,22 @@ def test_the_topic_is_not_echoed_into_the_id_list_response():
     r.deliver([FakeAlert()])
     assert "pushed" not in r.for_account("tim")
     return True
+
+
+def test_the_delivery_record_survives_a_settings_change():
+    """The app re-registers whenever a setting changes. Rebuilding the
+    subscription without carrying this over threw the record away every few
+    minutes, which is how the live server ended up reporting `sent: 30` beside
+    `pushed: 0` — and made it impossible to tell from the outside whether a
+    given alert had ever been handed to the relay."""
+    r, _ = _relay()
+    t = new_topic()
+    r.register(t, account="tim", sensitivity="strong")
+    a = FakeAlert()
+    r.deliver([a])
+    assert r.pushed_to("tim") == {a.id}
+
+    # same phone, different sensitivity — a re-register, not a new subscriber
+    r.register(t, account="tim", sensitivity="small")
+    assert r.pushed_to("tim") == {a.id}, "the delivery record was wiped"
+    return True
