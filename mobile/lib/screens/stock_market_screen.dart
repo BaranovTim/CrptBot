@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../api/trades.dart';
 import '../api/watchlist.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
@@ -43,6 +44,16 @@ class StockMarketScreen extends StatefulWidget {
 class _StockMarketScreenState extends State<StockMarketScreen> {
   List<StockQuote> _quotes = [];
   LiveSignals? _signals;
+
+  /// Symbols with an open trade logged against them, so the calls list can
+  /// say which of them you are already in.
+  Set<String> _held = const {};
+
+  Future<void> _loadHeld() async {
+    final all = await Trades.instance.load();
+    final open = all.where((t) => t.isOpen).map((t) => t.symbol).toSet();
+    if (mounted) setState(() => _held = open);
+  }
 
   /// Equities are POLLED, not streamed.
   ///
@@ -73,6 +84,7 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
     Muted.instance.load().then((_) => mounted ? setState(() {}) : null);
     _load();
     _loadSignals();
+    _loadHeld();
     _poll = Timer.periodic(const Duration(seconds: 20), (_) => _load());
   }
 
@@ -280,6 +292,7 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
           SignalsPanel(
             data: _signals,
             equities: true,
+            held: _held,
             onOpen: (sig) => widget.onOpenSignal?.call(sig),
           ),
         ],

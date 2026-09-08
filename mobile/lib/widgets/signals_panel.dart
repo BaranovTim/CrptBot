@@ -21,6 +21,7 @@ class SignalsPanel extends StatelessWidget {
     required this.data,
     required this.onOpen,
     this.equities = false,
+    this.held = const {},
   });
 
   final LiveSignals? data;
@@ -30,6 +31,14 @@ class SignalsPanel extends StatelessWidget {
 
   /// Show the equity rows instead of the crypto ones.
   final bool equities;
+
+  /// Symbols you currently have an OPEN trade logged against.
+  ///
+  /// A call on a coin you are already in is a different piece of information
+  /// from a call on one you are not: the first is about whether to stay, the
+  /// second about whether to enter. The list should not make you remember
+  /// which is which.
+  final Set<String> held;
 
   @override
   Widget build(BuildContext context) {
@@ -195,6 +204,25 @@ class SignalsPanel extends StatelessWidget {
               ],
             ),
           ),
+          if (held.contains(s.symbol)) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                color: Obsidian.primary.withValues(alpha: 0.13),
+                borderRadius: BorderRadius.circular(5),
+                border:
+                    Border.all(color: Obsidian.primary.withValues(alpha: 0.35)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.bookmark_added_rounded,
+                    size: 11, color: Obsidian.primary),
+                const SizedBox(width: 4),
+                Text('IN TRADE',
+                    style: Obsidian.labelSm(color: Obsidian.primary, size: 8.5)),
+              ]),
+            ),
+          ],
           const SizedBox(width: 6),
           const Icon(Icons.chevron_right_rounded,
               size: 18, color: Obsidian.outline),

@@ -16,6 +16,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
+import '../api/format.dart';
 import '../theme/liquid_obsidian.dart';
 import 'glass.dart';
 
@@ -242,12 +243,10 @@ class LevelsPanel extends StatelessWidget {
 
   /// Nulls render as a dash, never as zero. A stop loss of "$0.00" reads as
   /// a level, and it is the most dangerous number this panel could invent.
-  static String money(double? v) {
-    if (v == null) return '—';
-    final s = v.toStringAsFixed(v.abs() >= 100 ? 2 : 4);
-    final parts = s.split('.');
-    final whole = parts[0]
-        .replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
-    return '\$$whole.${parts[1]}';
-  }
+  /// Nulls render as a dash, never as zero. A stop loss of "$0.00" reads as
+  /// a level, and it is the most dangerous number this panel could invent.
+  ///
+  /// Digits come from `priceText`, which keeps the ones that matter — a
+  /// fixed four decimals wrote 1000PEPE's 0.003624 as 0.0036.
+  static String money(double? v) => priceText(v);
 }

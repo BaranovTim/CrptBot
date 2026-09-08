@@ -28,6 +28,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/client.dart';
 import '../api/live_price.dart';
 import '../api/models.dart';
+import '../api/format.dart';
 import '../api/trades.dart';
 import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
@@ -782,13 +783,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  static String _fmtPrice(double v) {
-    final s = v.toStringAsFixed(v.abs() >= 100 ? 2 : 4);
-    final parts = s.split('.');
-    final whole = parts[0].replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
-    return '\$$whole.${parts[1]}';
-  }
+  static String _fmtPrice(double v) => priceText(v);
 
   // ---------------------------------------------------------------- header
   Widget _header(Dashboard d) {
@@ -1651,12 +1646,5 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  static String _money(double? v) {
-    if (v == null) return '—';
-    final s = v.toStringAsFixed(v.abs() >= 100 ? 2 : 4);
-    final parts = s.split('.');
-    final whole = parts[0].replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
-    return '\$$whole.${parts[1]}';
-  }
+  static String _money(double? v) => priceText(v);
 }

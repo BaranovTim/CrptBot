@@ -16,19 +16,16 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../api/format.dart';
 import '../api/trades.dart';
 import '../theme/liquid_obsidian.dart';
 import 'glass.dart';
 
-String money(double? v, {int? dp}) {
-  if (v == null) return '—';
-  final d = dp ?? (v.abs() >= 100 ? 2 : 4);
-  final s = v.abs().toStringAsFixed(d);
-  final parts = s.split('.');
-  final whole = parts[0]
-      .replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
-  return '${v < 0 ? '-' : ''}\$$whole.${parts[1]}';
-}
+/// `dp` is accepted and ignored: callers used it to ask for two decimals on a
+/// profit figure, and the digit count is now decided by the magnitude of the
+/// number itself. See `priceText` — a fixed four decimals wrote 1000PEPE's
+/// 0.003624 as 0.0036 and lost the digits that coin moves in.
+String money(double? v, {int? dp}) => priceText(v);
 
 String signedPct(double? v) =>
     v == null ? '—' : '${v >= 0 ? '+' : ''}${v.toStringAsFixed(2)}%';

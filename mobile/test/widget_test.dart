@@ -12,6 +12,7 @@ import 'dart:convert';
 
 import 'package:tradingbot_app/api/background.dart';
 import 'package:tradingbot_app/api/muted.dart';
+import 'package:tradingbot_app/api/format.dart';
 import 'package:tradingbot_app/api/journal.dart';
 import 'package:tradingbot_app/api/trades.dart';
 import 'package:tradingbot_app/api/push.dart';
@@ -595,6 +596,26 @@ void main() {
     expect(all.watched, 15);
     expect(all.signals.where((s) => s.isEquity).length, 1);
     expect(all.signals.where((s) => !s.isEquity).single.symbol, 'BTCUSDT');
+  });
+
+  test('a cheap coin keeps the digits it moves in', () {
+    // THE BUG THIS PINS
+    //
+    // Five files each carried `toStringAsFixed(v >= 100 ? 2 : 4)`. Right for
+    // BTC, wrong for anything cheap: 1000PEPEUSDT trades at 0.003624 and
+    // rendered as "0.0036", throwing away the two digits that carry the move.
+    // A half-percent change was invisible.
+    expect(priceText(0.003624), r'$0.003624');
+    expect(priceText(0.0000012), r'$0.0000012');
+    expect(priceText(0.824), r'$0.824');
+
+    // and the expensive end is unchanged
+    expect(priceText(79000.12), r'$79,000.12');
+    expect(priceText(150.0), r'$150.00');
+    expect(priceText(1.3976), r'$1.3976');
+
+    // null is a dash, never zero — "$0.00" reads as a level
+    expect(priceText(null), '—');
   });
 
   test('the status badge never claims the bot trades', () {

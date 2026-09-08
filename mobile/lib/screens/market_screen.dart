@@ -12,8 +12,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/format.dart';
 import '../api/market_ticker.dart';
 import '../api/models.dart';
+import '../api/trades.dart';
 import '../api/muted.dart';
 import '../api/watchlist.dart';
 import 'add_coin_sheet.dart';
@@ -62,6 +64,16 @@ class _MarketScreenState extends State<MarketScreen> {
 
   LiveSignals? _signals;
 
+  /// Symbols with an open trade logged against them, so the calls list can
+  /// say which of them you are already in.
+  Set<String> _held = const {};
+
+  Future<void> _loadHeld() async {
+    final all = await Trades.instance.load();
+    final open = all.where((t) => t.isOpen).map((t) => t.symbol).toSet();
+    if (mounted) setState(() => _held = open);
+  }
+
   /// Live prices, straight from the exchange. One socket for the whole list.
   final MarketTicker _ticker = MarketTicker();
   Map<String, double> _live = const {};
@@ -82,6 +94,7 @@ class _MarketScreenState extends State<MarketScreen> {
     super.initState();
     _load();
     _loadSignals();
+    _loadHeld();
     _ticker.start();
     _liveSub = _ticker.stream.listen(
         (p) => mounted ? setState(() => _live = p) : null);
@@ -225,6 +238,7 @@ class _MarketScreenState extends State<MarketScreen> {
             // question and can name a pair you do not follow at all.
             SignalsPanel(
               data: _signals,
+              held: _held,
               onOpen: (sig) => widget.onOpenSignal?.call(sig),
             ),
           ],
@@ -445,12 +459,5 @@ class _MarketScreenState extends State<MarketScreen> {
     if (ok == true) await _remove(c);
   }
 
-  static String _price(double? v) {
-    if (v == null) return '—';
-    final s = v.toStringAsFixed(v.abs() >= 100 ? 2 : 4);
-    final parts = s.split('.');
-    final whole = parts[0].replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
-    return '\$$whole.${parts[1]}';
-  }
+  static String _price(double? v) => priceText(v);
 }
