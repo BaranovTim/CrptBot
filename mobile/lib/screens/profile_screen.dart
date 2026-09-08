@@ -26,6 +26,7 @@ import '../api/notifications.dart';
 import '../api/push.dart';
 import '../api/applock.dart';
 import '../api/journal.dart';
+import '../api/market_ticker.dart';
 import '../api/settings.dart';
 import '../api/trades.dart';
 import '../api/watchlist.dart';
@@ -106,7 +107,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadPush();
     _loadBackgroundHealth();
     _loadTrades();
-    _priceTimer = Timer.periodic(const Duration(seconds: 30),
+    _ticker.start();
+    _tickerSub = _ticker.stream.listen((live) {
+      if (!mounted || live.isEmpty) return;
+      // Merge rather than replace: the map from the socket has no equities
+      // in it, and dropping their prices would blank those cards every tick.
+      setState(() => _prices = {..._prices, ...live});
+    });
+    _priceTimer = Timer.periodic(const Duration(seconds: 60),
         (_) => _loadPrices(_trades));
     AppLock.instance.available().then(
         (v) => mounted ? setState(() => _lockAvailable = v) : null);
@@ -122,6 +130,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   void dispose() {
+    _tickerSub?.cancel();
+    _ticker.dispose();
     _priceTimer?.cancel();
     super.dispose();
   }
@@ -166,23 +176,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ///
   /// A closed trade marks against the exit you recorded, so its price is
   /// already known and asking about it would be a wasted symbol.
-  /// Keep the marked prices moving while this screen is open.
+  /// Live prices for the open positions, from the exchange directly.
   ///
-  /// The open cards now show a live price, a live profit and a bar filling
-  /// toward the target; all three would be frozen at whatever they were when
-  /// the screen opened without this. `/api/coins` answers in a few
-  /// milliseconds from the server's cache, so thirty seconds is cheap.
+  /// WHY A SOCKET AND NOT A FASTER POLL
+  ///     Polling `/api/coins` every second would put 60 requests a minute on
+  ///     a box whose load average is already in the twenties, to deliver a
+  ///     number Binance is publishing for free on a stream. The socket is
+  ///     both faster AND lighter on the server — the phone talks to the
+  ///     exchange, and the droplet is not in the path at all.
+  ///
+  ///     One connection covers every symbol, so it does not grow with the
+  ///     number of positions.
+  final MarketTicker _ticker = MarketTicker();
+  StreamSubscription<Map<String, double>>? _tickerSub;
+
+  /// The slow fallback, kept for EQUITIES only.
+  ///
+  /// There is no free equity stream here and the data is fifteen minutes
+  /// delayed regardless, so polling it faster would deliver an old number
+  /// more often. Sixty seconds is honest for something quarter-hour stale.
   Timer? _priceTimer;
 
   Future<void> _loadPrices(List<TradeEntry> all) async {
-    final syms = all.where((t) => t.isOpen).map((t) => t.symbol).toSet();
+    // Equities only — the socket already covers every USDT pair, and asking
+    // the server for prices it is streaming for free is the request this
+    // screen used to make sixty times a minute.
+    final syms = all
+        .where((t) => t.isOpen && !t.symbol.endsWith('USDT'))
+        .map((t) => t.symbol)
+        .toSet();
     if (syms.isEmpty) return;
     try {
-      final coins = await widget.client.coins(symbols: syms.toList());
+      final quotes = await widget.client.stockQuotes(syms.toList());
       if (!mounted) return;
       setState(() => _prices = {
-            for (final c in coins)
-              if (c.price != null) c.symbol: c.price!,
+            ..._prices,
+            for (final q in quotes)
+              if (q.price != null) q.symbol: q.price!,
           });
     } catch (_) {
       // Offline. The rows fall back to a dash, which is the truth.
