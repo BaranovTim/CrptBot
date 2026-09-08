@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WHO IS ALLOWED TO TALK IN THE CLEAR.
+
+  The manifest used to carry android:usesCleartextTraffic="true", which
+  permits plaintext HTTP to ANY host. That was true when the server lived on
+  a laptop on the same wifi and was reached over http://192.168.x.x. It is no
+  longer how anyone reaches it — the droplet is HTTPS behind Caddy — and the
+  server address is user-editable, so leaving it open meant an attacker on the
+  same network could point the app at their own host, or strip TLS from a
+  connection that should have had it, and the app would not object.
+
+  So: TLS everywhere, with an exception ONLY for addresses that cannot leave
+  the local network. That keeps a laptop-hosted `serve.py` working for
+  development without leaving a downgrade open on the public internet.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Loopback and the private ranges an on-network dev server lives in. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

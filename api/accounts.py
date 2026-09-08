@@ -51,6 +51,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -90,6 +91,75 @@ SESSION_TTL = 30 * 24 * 3600.0          # 30 days, from LAST USE
 # typed your password".
 _RENEW_AFTER = SESSION_TTL / 2
 MIN_PASSWORD = 8
+
+# WHAT A PASSWORD HAS TO CLEAR, AND WHY IT IS NOT A CHARACTER-CLASS RULE.
+#
+# "One upper, one digit, one symbol" is the familiar rule and it is a bad one:
+# it makes `Password1!` legal and `correct horse battery staple` illegal, when
+# the second is enormously stronger. NIST dropped composition rules in 800-63B
+# for exactly that reason and recommends a length floor plus a check against
+# known-breached and obvious passwords, which is what this does.
+#
+# The list is short on purpose. A real breach corpus is millions of entries and
+# belongs behind an API; this catches the handful that a person actually types
+# when asked to invent something quickly.
+_COMMON_PASSWORDS = frozenset("""
+password password1 password123 12345678 123456789 1234567890 qwerty123
+qwertyuiop letmein00 iloveyou1 admin123 welcome1 welcome123 abc12345
+football1 baseball1 dragon123 sunshine1 princess1 trustno1 monkey123
+passw0rd p@ssword p@ssw0rd changeme letmein123 starwars1 whatever1
+thusildy thusildy1 tradingbot bitcoin1 bitcoin123 crypto123
+""".split())
+
+
+def password_problem(password: str, identifier: str = "") -> Optional[str]:
+    """Why this password is not acceptable, or None if it is.
+
+    Returns a sentence to show a person, not an error code. A rule you cannot
+    read is a rule you cannot satisfy, and the usual result is `Password1!`.
+    """
+    pw = password or ""
+    if len(pw) < MIN_PASSWORD:
+        return f"Use at least {MIN_PASSWORD} characters."
+    if len(pw) > 256:
+        # Not a strength rule — a bound. scrypt over a megabyte of input is a
+        # free way to make the login endpoint expensive to serve.
+        return "That is longer than 256 characters."
+    if pw.lower() in _COMMON_PASSWORDS:
+        return "That is one of the most commonly used passwords. Pick another."
+    if len(set(pw)) <= 2:
+        return "That is only one or two different characters repeated."
+    # Runs like 12345678 or abcdefgh.
+    if len(pw) >= 4:
+        deltas = {ord(b) - ord(a) for a, b in zip(pw, pw[1:])}
+        if deltas <= {1} or deltas <= {-1}:
+            return "That is a straight run of characters. Pick something less predictable."
+    ident = (identifier or "").strip().lower()
+    local = ident.split("@")[0]
+    if local and len(local) >= 3 and local in pw.lower():
+        return "Do not put your email address in your password."
+    return None
+
+
+# WHAT COUNTS AS AN EMAIL HERE.
+#
+# Deliberately permissive. The only address that truly validates is one that
+# receives a message, which is what confirmation is for — a clever regex
+# rejects legitimate addresses (plus-tags, new TLDs, unicode domains) and
+# catches nothing a typo-ing human does. This rejects what cannot be an
+# address at all and leaves the rest to the confirmation email.
+_EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(\.[^@\s.]+)+$")
+
+
+def email_problem(identifier: str) -> Optional[str]:
+    ident = (identifier or "").strip()
+    if not ident:
+        return "Enter your email address."
+    if len(ident) > 254:
+        return "That address is too long."
+    if not _EMAIL_RE.match(ident):
+        return "That does not look like an email address."
+    return None
 
 # What a tier may see. `free` gets the chart and nothing else, which is the
 # gate the app renders its paywall from.
@@ -223,12 +293,19 @@ class Accounts:
     # ----------------------------------------------------------- accounts
     def register(self, identifier: str, password: str,
                  tier: str = "free") -> User:
-        ident = (identifier or "").strip()
-        if len(ident) < 3:
-            raise AuthError("identifier must be at least 3 characters")
-        if len(password or "") < MIN_PASSWORD:
-            raise AuthError(f"password must be at least {MIN_PASSWORD} "
-                            "characters")
+        # EMAIL, NOT A HANDLE.
+        #
+        # Stored lower-cased because addresses are compared that way in
+        # practice, and because the lookup table is already keyed on the
+        # lower-cased form — a `Tim@x.com` that could not sign in as
+        # `tim@x.com` would be a very confusing bug.
+        ident = (identifier or "").strip().lower()
+        bad = email_problem(ident)
+        if bad:
+            raise AuthError(bad)
+        bad = password_problem(password, ident)
+        if bad:
+            raise AuthError(bad)
         if tier not in TIERS:
             raise AuthError(f"unknown tier {tier!r}")
         with self._lock:

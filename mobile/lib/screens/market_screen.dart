@@ -12,6 +12,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/market_ticker.dart';
 import '../api/models.dart';
 import '../api/muted.dart';
 import '../api/watchlist.dart';
@@ -61,6 +62,11 @@ class _MarketScreenState extends State<MarketScreen> {
 
   LiveSignals? _signals;
 
+  /// Live prices, straight from the exchange. One socket for the whole list.
+  final MarketTicker _ticker = MarketTicker();
+  Map<String, double> _live = const {};
+  StreamSubscription<Map<String, double>>? _liveSub;
+
   Future<void> _loadSignals() async {
     try {
       final s = await widget.client.signals();
@@ -76,10 +82,15 @@ class _MarketScreenState extends State<MarketScreen> {
     super.initState();
     _load();
     _loadSignals();
+    _ticker.start();
+    _liveSub = _ticker.stream.listen(
+        (p) => mounted ? setState(() => _live = p) : null);
   }
 
   @override
   void dispose() {
+    _liveSub?.cancel();
+    _ticker.dispose();
     _retry?.cancel();
     super.dispose();
   }
@@ -241,6 +252,10 @@ class _MarketScreenState extends State<MarketScreen> {
 
   Widget _coinCard(Coin c, int index) {
     final up = (c.changePct ?? 0) >= 0;
+    // The socket's price when it has one, the payload's otherwise. The
+    // percentage stays with the payload: it is a 24h figure the exchange
+    // computes, not something to re-derive from a single tick.
+    final price = _live[c.symbol] ?? c.price;
     return GlassPanel(
       padding: const EdgeInsets.all(16),
       onTap: () => widget.onPick(c),
@@ -324,7 +339,7 @@ class _MarketScreenState extends State<MarketScreen> {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerRight,
-                  child: Text(_price(c.price),
+                  child: Text(_price(price),
                       maxLines: 1,
                       style:
                           Obsidian.dataTable(size: 15, w: FontWeight.w700)),

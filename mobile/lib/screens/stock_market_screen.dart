@@ -12,6 +12,8 @@
 ///     the kind of number someone acts on.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
@@ -42,6 +44,15 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
   List<StockQuote> _quotes = [];
   LiveSignals? _signals;
 
+  /// Equities are POLLED, not streamed.
+  ///
+  /// There is no free equity websocket here — Alpaca's needs credentials the
+  /// app does not hold — and the data is fifteen minutes delayed anyway, so a
+  /// socket would push the same number faster without making it fresher.
+  /// Twenty seconds against a server that answers quotes from its own table
+  /// is the honest cadence.
+  Timer? _poll;
+
   Future<void> _loadSignals() async {
     try {
       final s = await widget.client.signals();
@@ -62,6 +73,7 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
     Muted.instance.load().then((_) => mounted ? setState(() {}) : null);
     _load();
     _loadSignals();
+    _poll = Timer.periodic(const Duration(seconds: 20), (_) => _load());
   }
 
   Future<void> _load() async {
@@ -148,6 +160,12 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
           },
         ),
       ));
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
   }
 
   @override

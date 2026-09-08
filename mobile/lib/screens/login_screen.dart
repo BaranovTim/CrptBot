@@ -119,10 +119,22 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _submit() async {
-    final id = _id.text.trim();
+    final id = _id.text.trim().toLowerCase();
     final pw = _key.text;
     if (id.isEmpty || pw.isEmpty) {
       setState(() => _error = 'Both fields are required.');
+      return;
+    }
+    // CHECKED HERE ONLY WHEN CREATING AN ACCOUNT.
+    //
+    // Signing IN must not validate the shape of what you typed: accounts
+    // registered before email was the identifier still exist, and refusing
+    // their handle at the door would lock out the people who have been using
+    // this the longest. The server is the authority on whether an identifier
+    // is known; this is a typo-catcher for the one case that creates a
+    // permanent record.
+    if (_register && !RegExp(r'^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$').hasMatch(id)) {
+      setState(() => _error = 'That does not look like an email address.');
       return;
     }
     setState(() {
@@ -234,11 +246,16 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _label(Icons.person_outline_rounded, 'IDENTIFIER'),
+                        _label(Icons.alternate_email_rounded, 'EMAIL'),
                         const SizedBox(height: 10),
                         GlassField(
                           controller: _id,
-                          hint: 'your handle',
+                          hint: 'you@example.com',
+                          // The right keyboard matters more than it sounds:
+                          // an address typed on a keyboard that capitalises
+                          // and hides the @ is an address typed wrong.
+                          keyboardType: TextInputType.emailAddress,
+                          capitalization: TextCapitalization.none,
                           onChanged: (_) => setState(() => _error = null),
                         ),
                         const SizedBox(height: 20),

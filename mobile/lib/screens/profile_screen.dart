@@ -24,6 +24,7 @@ import '../api/power.dart';
 import '../api/muted.dart';
 import '../api/notifications.dart';
 import '../api/push.dart';
+import '../api/applock.dart';
 import '../api/journal.dart';
 import '../api/settings.dart';
 import '../api/trades.dart';
@@ -92,6 +93,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   double _dailyStopPct = 5.0;
   double? _balance;
+  bool _lockOn = false, _lockAvailable = false;
   bool _batteryExempt = true;
   DateTime? _bgLastRun;
   int _bgRuns = 0;
@@ -106,6 +108,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadTrades();
     _priceTimer = Timer.periodic(const Duration(seconds: 30),
         (_) => _loadPrices(_trades));
+    AppLock.instance.available().then(
+        (v) => mounted ? setState(() => _lockAvailable = v) : null);
+    AppLock.instance.enabled().then(
+        (v) => mounted ? setState(() => _lockOn = v) : null);
     Trades.instance.balance().then(
         (v) => mounted ? setState(() => _balance = v) : null);
     Settings.instance.dailyStopPct().then(
@@ -1280,6 +1286,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ]),
         const SizedBox(height: Obsidian.gutter),
+        _section('SECURITY', [
+          _tile(
+            icon: _lockOn
+                ? Icons.fingerprint_rounded
+                : Icons.no_encryption_gmailerrorred_rounded,
+            title: 'Unlock with fingerprint',
+            subtitle: !_lockAvailable
+                ? 'This phone has no fingerprint or face unlock enrolled'
+                : _lockOn
+                    ? 'Asked for every time the app opens'
+                    : 'Off — anyone holding this phone can read your positions',
+            trailing: Switch(
+              value: _lockOn,
+              activeThumbColor: Obsidian.primary,
+              onChanged: _lockAvailable ? _toggleLock : null,
+            ),
+          ),
+        ]),
+        const SizedBox(height: Obsidian.gutter),
         _section('SIGNALS', [
           _tile(
             icon: Icons.tune_rounded,
@@ -1407,6 +1432,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
       ];
+
+  /// Turning the lock ON prompts first.
+  ///
+  /// Otherwise a prompt that does not work — an unenrolled sensor, a
+  /// manufacturer's broken implementation — is discovered on the next cold
+  /// start, which is the worst possible moment to find out you cannot get
+  /// into your own app.
+  Future<void> _toggleLock(bool on) async {
+    if (!on) {
+      await AppLock.instance.setEnabled(false);
+      if (mounted) setState(() => _lockOn = false);
+      return;
+    }
+    final ok = await AppLock.instance.unlock(
+        reason: 'Confirm it works before turning the lock on');
+    if (!ok) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Obsidian.surfaceHigh,
+        content: Text('Not turned on — that prompt was not satisfied.',
+            style: Obsidian.body()),
+      ));
+      return;
+    }
+    await AppLock.instance.setEnabled(true);
+    if (mounted) setState(() => _lockOn = true);
+  }
 
   /// The daily loss limit, as a percent of the balance you entered.
   Future<void> _pickDailyStop() async {

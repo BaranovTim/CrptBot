@@ -330,7 +330,7 @@ def test_a_password_is_never_stored_in_the_clear():
 
     with tempfile.TemporaryDirectory() as d:
         acc = Accounts(Path(d) / "accounts.json")
-        acc.register("tim", "correct horse battery staple")
+        acc.register("tim@example.com", "correct horse battery staple")
         raw = (Path(d) / "accounts.json").read_text()
         assert "correct horse" not in raw, "password written in the clear"
         assert "battery staple" not in raw
@@ -351,7 +351,7 @@ def test_an_unknown_account_and_a_wrong_password_are_indistinguishable():
 
     with tempfile.TemporaryDirectory() as d:
         acc = Accounts(Path(d) / "accounts.json")
-        acc.register("tim", "a-real-password")
+        acc.register("tim@example.com", "a-real-password")
 
         msgs = []
         for ident, pw in (("tim", "wrong-password"), ("nobody", "anything")):
@@ -379,8 +379,8 @@ def test_an_unsubscribed_account_gets_the_chart_and_not_the_analysis():
 
     with tempfile.TemporaryDirectory() as d:
         acc = Accounts(Path(d) / "accounts.json")
-        free = acc.register("skint", "password-long-enough")
-        paid = acc.register("payer", "password-long-enough", tier="pro")
+        free = acc.register("skint@example.com", "password-long-enough")
+        paid = acc.register("payer@example.com", "password-long-enough", tier="pro")
 
         h = object.__new__(Handler)          # no socket needed for _gate
         old_token = server.TOKEN
@@ -636,15 +636,15 @@ def test_a_grant_from_another_process_reaches_the_running_api():
         path = Path(d) / "accounts.json"
         writer, reader = Accounts(path), Accounts(path)
 
-        writer.register("alice", "password-long-enough")
-        assert reader.get("alice") is not None       # reader picks up creation
-        assert not reader.get("alice").entitled
+        writer.register("alice@example.com", "password-long-enough")
+        assert reader.get("alice@example.com") is not None       # reader picks up creation
+        assert not reader.get("alice@example.com").entitled
 
         time.sleep(0.01)                             # distinct mtime
-        writer.set_tier("alice", "pro", time.time() + 3600)
+        writer.set_tier("alice@example.com", "pro", time.time() + 3600)
 
-        assert writer.get("alice").entitled
-        assert reader.get("alice").entitled, \
+        assert writer.get("alice@example.com").entitled
+        assert reader.get("alice@example.com").entitled, \
             "the running API cannot see a grant made by the CLI"
     return True
 
@@ -730,9 +730,9 @@ def test_a_session_survives_a_restart_and_is_never_stored_in_the_clear():
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "accounts.json"
         acc = Accounts(path)
-        u = acc.register("tim", "password-long-enough")
+        u = acc.register("tim@example.com", "password-long-enough")
         token = acc.start_session(u)
-        assert acc.session_user(token).identifier == "tim"
+        assert acc.session_user(token).identifier == "tim@example.com"
 
         # the raw token must not be recoverable from disk
         raw = acc.sessions_path.read_text()
@@ -742,7 +742,7 @@ def test_a_session_survives_a_restart_and_is_never_stored_in_the_clear():
         restarted = Accounts(path)
         again = restarted.session_user(token)
         assert again is not None, "restart signed the user out"
-        assert again.identifier == "tim"
+        assert again.identifier == "tim@example.com"
 
         # and signing out still revokes, across processes
         restarted.end_session(token)
@@ -761,11 +761,11 @@ def test_changing_a_password_kills_sessions_everywhere():
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "accounts.json"
         acc = Accounts(path)
-        u = acc.register("tim", "password-long-enough")
+        u = acc.register("tim@example.com", "password-long-enough")
         phone = acc.start_session(u)
         tablet = acc.start_session(u)
 
-        acc.set_password("tim", "a-different-password")
+        acc.set_password("tim@example.com", "a-different-password")
 
         assert acc.session_user(phone) is None
         assert acc.session_user(tablet) is None
@@ -786,7 +786,7 @@ def test_an_active_session_never_expires_on_a_schedule():
 
     with tempfile.TemporaryDirectory() as d:
         acc = Accounts(Path(d) / "accounts.json")
-        u = acc.register("tim", "password-long-enough")
+        u = acc.register("tim@example.com", "password-long-enough")
         token = acc.start_session(u)
 
         # wind the clock forward to just past the renewal point
@@ -1357,4 +1357,58 @@ def test_no_sensitivity_level_ever_recommends_a_losing_trade():
         "the loosest level is no longer breakeven — it may recommend losing trades"
     assert "-" not in block.split('("small"')[1][:12], \
         "a negative expected-value level was added"
+    return True
+
+
+def test_an_email_is_required_and_a_weak_password_is_refused():
+    """WHAT THIS PINS
+
+    The identifier is an email now, because confirmation, password reset and
+    every OAuth provider are addressed to a mailbox — a chosen handle cannot
+    receive anything.
+
+    And the password floor is a LENGTH plus a check against the obvious, not
+    a character-class rule. "One upper, one digit, one symbol" makes
+    `Password1!` legal and `correct horse battery staple` illegal, when the
+    second is enormously stronger; NIST 800-63B dropped composition rules for
+    exactly that reason.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from api.accounts import Accounts, AuthError, email_problem, password_problem
+
+    assert email_problem("tim") is not None
+    assert email_problem("tim@example") is not None
+    assert email_problem("") is not None
+    assert email_problem("tim@example.com") is None
+    # plus-tags and multi-level domains are real addresses and must pass
+    assert email_problem("tim+bot@mail.example.co.uk") is None
+
+    assert password_problem("short") is not None
+    assert password_problem("password") is not None       # the commonest
+    assert password_problem("aaaaaaaa") is not None       # one character
+    assert password_problem("abcdefgh") is not None       # a straight run
+    assert password_problem("12345678") is not None
+    assert password_problem("correct horse battery staple") is None
+
+    with tempfile.TemporaryDirectory() as d:
+        acc = Accounts(Path(d) / "accounts.json")
+        for bad in ("tim", "tim@", "not an email"):
+            try:
+                acc.register(bad, "a-good-long-password")
+                raise AssertionError(f"{bad!r} was accepted as an email")
+            except AuthError:
+                pass
+        try:
+            acc.register("tim@example.com", "password")
+            raise AssertionError("a top-100 password was accepted")
+        except AuthError:
+            pass
+
+        u = acc.register("Tim@Example.COM", "a-good-long-password")
+        # STORED LOWER-CASED, or the address someone types tomorrow with
+        # different capitals would not find the account they made today.
+        assert u.identifier == "tim@example.com"
+        assert acc.verify("TIM@example.com", "a-good-long-password") is not None
     return True

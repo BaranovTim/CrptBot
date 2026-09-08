@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 
 import 'api/client.dart';
 import 'api/models.dart';
+import 'api/applock.dart';
 import 'api/settings.dart';
 import 'screens/login_screen.dart';
 import 'screens/shell.dart';
@@ -62,6 +63,20 @@ class _ThusIldyAppState extends State<ThusIldyApp> {
   /// Falling back to a cached account is safe because it is a cache and not an
   /// authority: it decides which tabs are drawn, never what they return. Every
   /// gated endpoint is still checked server-side on each request.
+  /// True while the biometric gate has not been satisfied.
+  ///
+  /// Starts false and is only ever set by `_unlock` below, so a device that
+  /// cannot do biometrics — or a plugin that throws — never leaves anyone
+  /// staring at a locked screen they cannot pass. See `applock.dart`.
+  bool _locked = false;
+
+  Future<void> _unlock() async {
+    if (!await AppLock.instance.enabled()) return;
+    if (mounted) setState(() => _locked = true);
+    final ok = await AppLock.instance.unlock();
+    if (mounted) setState(() => _locked = !ok);
+  }
+
   Future<void> _restore() async {
     await Settings.instance.restore(_client);
     if (_client.token.isNotEmpty) {
@@ -81,6 +96,7 @@ class _ThusIldyAppState extends State<ThusIldyApp> {
       }
     }
     if (mounted) setState(() => _restored = true);
+    await _unlock();
   }
 
   @override
@@ -99,7 +115,9 @@ class _ThusIldyAppState extends State<ThusIldyApp> {
       title: 'ThusIldy',
       debugShowCheckedModeBanner: false,
       theme: Obsidian.theme(),
-      home: _account == null
+      home: _locked
+          ? const _LockedGate()
+          : _account == null
           ? LoginScreen(
               client: _client,
               onEnter: (a) => setState(() => _account = a),
@@ -112,4 +130,40 @@ class _ThusIldyAppState extends State<ThusIldyApp> {
             ),
     );
   }
+}
+
+
+/// What is on screen while the biometric prompt is up, and after it fails.
+///
+/// Deliberately blank of any account detail: the point of the lock is that
+/// somebody holding the phone cannot read the positions behind it, and a
+/// "locked" screen listing your P&L would defeat itself.
+class _LockedGate extends StatelessWidget {
+  const _LockedGate();
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: Obsidian.background,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.fingerprint_rounded,
+                    size: 54, color: Obsidian.primary),
+                const SizedBox(height: 18),
+                Text('ThusIldy is locked',
+                    style: Obsidian.headlineMd()),
+                const SizedBox(height: 8),
+                Text(
+                    'Unlock with your fingerprint, face or device passcode to '
+                    'see your positions.',
+                    textAlign: TextAlign.center,
+                    style: Obsidian.body(color: Obsidian.outline, size: 12.5)),
+              ],
+            ),
+          ),
+        ),
+      );
 }

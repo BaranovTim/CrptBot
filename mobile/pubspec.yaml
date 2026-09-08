@@ -42,6 +42,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   workmanager: ^0.10.9
+  local_auth: ^2.3.0              # fingerprint / face unlock on app open
 
 dev_dependencies:
   flutter_test:

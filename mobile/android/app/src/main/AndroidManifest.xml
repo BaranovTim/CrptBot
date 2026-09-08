@@ -8,8 +8,11 @@
          reachable. (Google Play restricts apps that request this; this one is
          sideloaded, so the policy does not apply.) -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- The fingerprint / face prompt on app open. Optional and off by
+         default; see lib/api/applock.dart. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <application
-        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:label="ThusIldy"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

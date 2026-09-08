@@ -6,7 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
@@ -33,7 +33,13 @@ import io.flutter.plugin.common.MethodChannel
  * own killers on top of Android's that this does not touch. The relay in
  * `api/push.py` is the path that does not depend on any of it.
  */
-class MainActivity : FlutterActivity() {
+// FlutterFragmentActivity, NOT FlutterActivity.
+//
+// `local_auth` shows the biometric prompt through AndroidX BiometricPrompt,
+// which needs a FragmentActivity to attach to. On a plain FlutterActivity the
+// call fails at runtime with `no_fragment_activity` — it compiles, installs
+// and only breaks the first time somebody turns the lock on.
+class MainActivity : FlutterFragmentActivity() {
     private val channel = "thusildy/power"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
