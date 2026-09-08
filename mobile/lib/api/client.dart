@@ -397,6 +397,12 @@ class ApiClient {
       _get('/api/range?symbol=$symbol&interval=$interval'
           '&since=${Uri.encodeComponent(since.toUtc().toIso8601String())}');
 
+  /// Every warm pair whose call is not FLAT. Answered from the server's
+  /// cache, so it is cheap and reports only pairs it has a current reading
+  /// for — see `live_signals` in `service.py`.
+  Future<LiveSignals> signals() async =>
+      LiveSignals.fromJson(await _get('/api/signals'));
+
   Future<Consensus> consensus({String? symbol}) async =>
       Consensus.fromJson(await _get('/api/consensus${_q(symbol, null)}'));
 

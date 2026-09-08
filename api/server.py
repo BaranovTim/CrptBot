@@ -317,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/stock/search",
                                           "/api/horizon", "/api/train",
                                           "/api/train/status", "/api/push",
-                                          "/api/range"]})
+                                          "/api/range", "/api/signals"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -488,6 +488,8 @@ class Handler(BaseHTTPRequestHandler):
                                              n=arg("n", 96)))
                 except KeyError as e:
                     self._send({"error": str(e), "path": route}, status=404)
+            elif route == "/api/signals":
+                self._send(svc.live_signals())
             elif route == "/api/range":
                 self._send(svc.price_range(symbol=opt("symbol"),
                                            interval=opt("interval") or "1m",

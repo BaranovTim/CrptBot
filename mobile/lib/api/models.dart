@@ -1154,3 +1154,73 @@ class ScreenerSetup {
   List<ScreenerFilter> instantiate() =>
       filters.map((f) => f.copy()).toList();
 }
+
+
+/// One live, non-FLAT call: which pair, which timeframe, how strong.
+///
+/// WHY THE TIMEFRAME IS PART OF THE IDENTITY
+///     A call is not a property of a coin, it is a property of a coin AND a
+///     horizon. SUI can be SELL on 1h and FLAT on 1d at the same moment, and
+///     both are correct answers to different questions. So the row carries
+///     its interval, and tapping it opens the dashboard on THAT interval —
+///     landing on whatever timeframe you last looked at would show you a
+///     different call from the one you tapped.
+class LiveSignal {
+  LiveSignal.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] as String,
+        interval = j['interval'] as String,
+        action = j['action'] as String,
+        strength = j['strength'] as String? ?? '',
+        detail = j['detail'] as String? ?? '',
+        side = j['side'] as String? ?? '',
+        ev = _d(j['ev']),
+        price = _d(j['price']),
+        changePct = _d(j['change_pct']),
+        pUp = _d(j['p_up']),
+        takeProfit = _d(j['take_profit']),
+        stopLoss = _d(j['stop_loss']);
+
+  final String symbol, interval, action, strength, detail, side;
+  final double? ev, price, changePct, pUp, takeProfit, stopLoss;
+
+  bool get isSell => action == 'SELL';
+
+  /// True for a symbol the equity side serves. Crypto pairs are quoted in
+  /// USDT; nothing on the US equity list is.
+  bool get isEquity => !symbol.endsWith('USDT');
+
+  String get short => symbol.endsWith('USDT')
+      ? symbol.substring(0, symbol.length - 4)
+      : symbol;
+
+  /// STRONG / MEDIUM / LOW as the app words it.
+  ///
+  /// The server's third level is called `small`, which is accurate inside the
+  /// model — "the smallest margin that still clears costs" — and reads as a
+  /// typo on a list. LOW is the same thing said out loud.
+  String get strengthLabel => switch (strength) {
+        'strong' => 'STRONG',
+        'medium' => 'MEDIUM',
+        'small' => 'LOW',
+        _ => 'UNGRADED',
+      };
+}
+
+class LiveSignals {
+  LiveSignals.fromJson(Map<String, dynamic> j)
+      : signals = ((j['signals'] as List?) ?? const [])
+            .map((e) => LiveSignal.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        watched = (j['watched_symbols'] as num?)?.toInt() ?? 0,
+        intervals = ((j['intervals'] as List?) ?? const [])
+            .map((e) => '$e')
+            .toList();
+
+  final List<LiveSignal> signals;
+
+  /// How many pairs the server actually had a current reading for. Shown so
+  /// an empty list reads as "nothing is calling right now" rather than
+  /// "something is broken".
+  final int watched;
+  final List<String> intervals;
+}

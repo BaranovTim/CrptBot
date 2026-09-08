@@ -92,6 +92,8 @@ class TradingService:
         self._last_seen: Dict[Tuple[str, str], float] = {}
         self._charts: Dict[Tuple[str, str, int, Any], Dict[str, Any]] = {}
         self._bars_cache: Dict[Tuple[str, str], Tuple[Any, Any]] = {}
+        # market -> (file signature, sorted items). See `_news_items`.
+        self._news_cache: Dict[str, Tuple[Any, Any]] = {}
         # BUMP THIS when the dashboard payload gains or renames a field.
         # v1 -> v2 on 2026-08-31, when `strength` and `p_needed` were added:
         # the restored cache kept serving payloads without them and the new
@@ -142,7 +144,7 @@ class TradingService:
     # Each Monitor holds two fitted LightGBM models. Unbounded, this grew one
     # entry per pair AND timeframe — 14 symbols across six timeframes is 84
     # of them, all resident, on a box with 967MB.
-    MAX_MONITORS = int(os.environ.get("MAX_MONITORS", "24"))
+    MAX_MONITORS = int(os.environ.get("MAX_MONITORS", "10"))
 
     def _evict_monitors(self) -> None:
         """Keep the most recently asked-for monitors, drop the rest.
@@ -214,7 +216,12 @@ class TradingService:
     #
     # A build itself peaks around 300MB, so the builds were never the
     # problem — what accumulated between them was.
-    BARS_BUDGET_MB = float(os.environ.get("BARS_BUDGET_MB", "180"))
+    # 180 was too generous and the arithmetic says why: 180MB of bars plus 24
+    # monitors plus a ~250MB baseline leaves nothing for a build that peaks at
+    # ~300MB, on a box with 967MB. It died at 791MB and 797MB, twice, and
+    # swapped hard enough on the way there to put the load average past 20 —
+    # which is what "the app is slow" actually was.
+    BARS_BUDGET_MB = float(os.environ.get("BARS_BUDGET_MB", "60"))
 
     def _evict_bars(self) -> None:
         """Drop least-recently-asked-for bar frames until under budget.
@@ -320,6 +327,53 @@ class TradingService:
                                        "change_pct": float("nan")}
         self._tickers[symbol] = _Cached(time.time(), v)
         return v
+
+    def prime_tickers(self, symbols: List[str], ttl: float = 10.0) -> None:
+        """Fill the ticker cache for many symbols in ONE request.
+
+        MEASURED: `/api/coins` took 1.75s for a watchlist, because `ticker()`
+        makes one HTTPS round trip to Binance per symbol and the loop in
+        `coins()` awaited each in turn. Fifteen coins was fifteen sequential
+        round trips in front of the Market screen.
+
+        Binance's 24h ticker returns EVERY symbol when asked for none, which
+        is one request instead of fifteen and does not grow with the
+        watchlist. Weight is higher for the bulk form (40 against 1) and still
+        far cheaper than the alternative — the 2400/min budget is nowhere near
+        threatened by one call per ten seconds.
+
+        Failures are swallowed: this is a warm-up, and `ticker()` behind it
+        still works one symbol at a time.
+        """
+        want = {s.upper() for s in symbols}
+        now = time.time()
+        missing = [s for s in want
+                   if not (self._tickers.get(s)
+                           and now - self._tickers[s].at < ttl)]
+        if len(missing) < 2:
+            return                      # one symbol is cheaper asked directly
+        try:
+            req = urllib.request.Request(
+                f"{FAPI}/fapi/v1/ticker/24hr",
+                headers={"User-Agent": "TradingBot/api"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                rows = json.loads(r.read())
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError,
+                ValueError) as e:
+            log.warning("bulk ticker failed: %s", e)
+            return
+        at = time.time()
+        for d in rows:
+            sym = d.get("symbol")
+            if sym not in want:
+                continue
+            try:
+                self._tickers[sym] = _Cached(at, {
+                    "price": float(d["lastPrice"]),
+                    "change_pct": float(d["priceChangePercent"]),
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
 
     # ------------------------------------------------------------ coins
     def trained_intervals(self, symbol: Optional[str] = None) -> List[str]:
@@ -436,6 +490,9 @@ class TradingService:
                 wanted.append((sym, base, base))
         else:
             wanted = list(UNIVERSE)
+
+        # ONE request for every price on this screen, not one per coin.
+        self.prime_tickers([w[0] for w in wanted])
 
         out = []
         for sym, name, short in wanted:
@@ -875,6 +932,72 @@ class TradingService:
         return value
 
     # ------------------------------------------------------------ chart
+    def live_signals(self) -> Dict[str, Any]:
+        """Every warm pair whose call is not FLAT, newest reading each.
+
+        CACHED READS ONLY, AND THAT IS THE WHOLE DESIGN.
+            This answers from `self._dash` and never builds. A build is 30-90
+            seconds and ~300MB on this box, so an endpoint that scanned every
+            pair and timeframe by building them would be a way to take the
+            server down from a phone opening a screen.
+
+            The consequence is stated rather than hidden: it reports on the
+            pairs the recorder keeps warm (`RECORD_SYMBOLS` x
+            `RECORD_INTERVALS`), because those are the ones that have a
+            current reading to report. A pair outside that set is not silent,
+            it is unwatched, and the payload says how many were considered so
+            the app can say so too.
+
+        STALE PAYLOADS ARE SKIPPED. A call whose window has already closed is
+        not a live signal, and listing it would be the screen's worst failure:
+        sending somebody into a trade the model stopped standing behind.
+        """
+        rows = []
+        syms = self.record_symbols()
+        for sym in syms:
+            for iv in self.RECORD_INTERVALS:
+                with self._lock:
+                    hit = self._dash.get((sym, iv))
+                if hit is None:
+                    continue
+                d = hit.value or {}
+                if d.get("stale"):
+                    continue
+                rec = d.get("recommendation") or {}
+                action = rec.get("action")
+                if action not in ("BUY", "SELL"):
+                    continue
+                levels = d.get("levels") or {}
+                rows.append({
+                    "symbol": sym,
+                    "interval": iv,
+                    "action": action,
+                    # strong | medium | small — the same grading the
+                    # dashboard card and the notification gate use, so all
+                    # three can never disagree about one call.
+                    "strength": rec.get("strength") or "",
+                    "detail": rec.get("detail") or "",
+                    "ev": _num(rec.get("ev")),
+                    "price": _num(d.get("price")),
+                    "change_pct": _num(d.get("change_pct")),
+                    "p_up": _num(levels.get("p_up")),
+                    "take_profit": _num(levels.get("take_profit")),
+                    "stop_loss": _num(levels.get("stop_loss")),
+                    "side": levels.get("side") or "",
+                    "at": d.get("generated_at"),
+                })
+        order = {"strong": 0, "medium": 1, "small": 2, "": 3}
+        rows.sort(key=lambda r: (order.get(r["strength"], 3), r["symbol"],
+                                 self.RECORD_INTERVALS.index(r["interval"])
+                                 if r["interval"] in self.RECORD_INTERVALS
+                                 else 9))
+        return {
+            "signals": rows,
+            "watched_symbols": len(syms),
+            "intervals": list(self.RECORD_INTERVALS),
+            "generated_at": utc_now().isoformat(),
+        }
+
     def price_range(self, symbol: Optional[str] = None,
                     interval: str = "1m",
                     since: Optional[str] = None) -> Dict[str, Any]:
@@ -1255,33 +1378,85 @@ class TradingService:
                 break
         return out
 
+    def _news_items(self, market: str):
+        """The store's items, loaded and sorted ONCE per change on disk.
+
+        MEASURED AT 0.5-1.8s PER REQUEST before this existed, because every
+        call re-read the whole JSONL store and re-sorted it. The dashboard
+        asks for news alongside the chart and the payload, so that was the
+        slowest thing on the screen and it was pure repetition — the store
+        changes when the collector appends, which is minutes apart, not
+        per request.
+
+        Validated by MTIME AND SIZE, exactly like `_bars`: a stat is
+        microseconds, and the moment the collector writes an item the
+        signature changes and the next read reloads. A time-based TTL would
+        either serve a stale headline or reload for nothing.
+        """
+        from newsfeed.store import JSONLNewsStore
+
+        store = (JSONLNewsStore(Path("data_cache") / "news_equities")
+                 if market == "stocks" else JSONLNewsStore())
+        try:
+            st = store.items_path.stat()
+            sig = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            sig = None
+
+        key = market
+        if sig is not None:
+            with self._lock:
+                hit = self._news_cache.get(key)
+            if hit is not None and hit[0] == sig:
+                return hit[1]
+
+        items = sorted(
+            store.load_items(),
+            key=lambda i: getattr(i, "published_at", None) or utc_now(),
+            reverse=True)
+
+        # SCORED HERE TOO, and for the same reason.
+        #
+        # The lexicon scorer runs over the WHOLE store, and it ran on every
+        # request: measured at 0.7s on the droplet, whose store is five times
+        # the size of the development one. It is deterministic per item, so
+        # re-running it for an unchanged file is pure repetition.
+        #
+        # Cached WITH the items on purpose. The scores are keyed by `id(item)`
+        # downstream, so scores and the objects they describe have to be the
+        # same generation or the mapping silently misses.
+        scored = {}
+        try:
+            from agent3.scorers import LexiconScorer
+
+            for it, sc in zip(items, LexiconScorer().score(items)):
+                scored[id(it)] = sc
+        except Exception as e:
+            log.warning("news scoring unavailable: %s", e)
+
+        if sig is not None:
+            with self._lock:
+                self._news_cache[key] = (sig, (items, scored))
+        return items, scored
+
     def news(self, limit: int = 20,
              symbol: Optional[str] = None,
              market: str = "crypto") -> List[Dict[str, Any]]:
+        # LOADED AND SORTED ONCE PER CHANGE ON DISK, not per request.
+        #
+        # `_news_items` picks the right store — a SEPARATE one for equities,
+        # not a filter over the crypto feed, because that feed's tagger
+        # matches tickers as words and would find "ADA" inside "Canada" across
+        # 13,000 US symbols.
+        #
+        # It also sorts BEFORE anything filters. Slicing the newest 20 first
+        # and filtering after would return "the newest 20 overall that happen
+        # to mention SOL", which is usually nothing at all.
         try:
-            from newsfeed.store import JSONLNewsStore
-
-            if market == "stocks":
-                # A SEPARATE STORE, not a filter over one.
-                #
-                # The crypto feed's asset tagger matches tickers as words —
-                # "ADA" inside "Canada". Pointing it at 13,000 US symbols
-                # would tag half the news wrongly, because two and three
-                # letter equity tickers collide with ordinary English far
-                # worse than crypto's handful do.
-                items = JSONLNewsStore(
-                    Path("data_cache") / "news_equities").load_items()
-            else:
-                items = JSONLNewsStore().load_items()
+            items, scored = self._news_items(market)
         except Exception as e:
             log.warning("news store unreadable: %s", e)
             return []
-        # Sort THEN filter. Slicing the newest 20 first and filtering after
-        # would return "the newest 20 overall that happen to mention SOL",
-        # which is usually nothing at all.
-        items = sorted(items,
-                       key=lambda i: getattr(i, "published_at", None) or utc_now(),
-                       reverse=True)
 
         asset = None
         if symbol:
@@ -1302,15 +1477,6 @@ class TradingService:
         # `ClaudeScorer` in the same module does the job properly and needs
         # an API key. Until then the app labels what it can and admits the
         # rest.
-        scored = {}
-        try:
-            from agent3.scorers import LexiconScorer
-
-            for it, sc in zip(items, LexiconScorer().score(items)):
-                scored[id(it)] = sc
-        except Exception as e:
-            log.warning("news scoring unavailable: %s", e)
-
         out = []
         for it in items:
             assets = tuple(getattr(it, "assets", ()) or ())

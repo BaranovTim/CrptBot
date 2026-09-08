@@ -436,16 +436,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// list rather than stacked above the news on the pair you are reading
   /// about right now.
   Future<void> _loadPositions() async {
-    // Settle against the levels first: a position whose stop was touched
-    // while the app was closed should not still be sitting above the news
-    // showing a live loss it is no longer taking.
+    // DRAW FIRST, SETTLE BEHIND IT.
+    //
+    // Settling is a network round trip per open position, and awaiting it
+    // here put that latency in front of a screen someone is waiting on —
+    // for a panel that is usually about to render unchanged. What is stored
+    // goes up immediately; if settling then closes something, the list is
+    // rebuilt underneath.
+    final stored = await Trades.instance.forSymbol(widget.symbol);
+    if (mounted) setState(() => _positions = stored);
+
     try {
-      await Trades.instance.settle(widget.client);
+      final settled = await Trades.instance.settle(widget.client);
+      if (settled.isEmpty || !mounted) return;
+      final after = await Trades.instance.forSymbol(widget.symbol);
+      if (mounted) setState(() => _positions = after);
     } catch (_) {
-      // offline; the list below still draws what is stored
+      // offline; what is drawn above is still what is stored
     }
-    final list = await Trades.instance.forSymbol(widget.symbol);
-    if (mounted) setState(() => _positions = list);
   }
 
   Future<void> _closePosition(TradeEntry t) async {

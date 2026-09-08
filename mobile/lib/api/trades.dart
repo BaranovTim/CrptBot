@@ -327,24 +327,42 @@ class Trades {
   /// current price. A stop hit at 3am that retraced by morning still took
   /// the trade out, and a current-price check would miss every one of those.
   Future<List<TradeEntry>> settle(ApiClient client) async {
-    final open = (await load()).where((t) => t.isOpen).toList();
+    final open = (await load())
+        .where((t) => t.isOpen && (t.takeProfit != null || t.stopLoss != null))
+        .toList();
+    if (open.isEmpty) return const [];
+
+    // IN PARALLEL, not one after another.
+    //
+    // This was a sequential loop awaiting one round trip per open position,
+    // and the dashboard awaited the whole thing before it could draw a
+    // position. Ten open trades on a slow connection was ten times the
+    // latency of one, in the path of a screen someone is waiting on.
+    // The requests are independent, so they go together.
+    final ranges = await Future.wait(
+      open.map((t) async {
+        try {
+          return MapEntry(t, await client.priceRange(t.symbol,
+              since: t.openedAt));
+        } catch (e) {
+          // Offline, or a pair the server does not carry. Leaving the trade
+          // open is the safe failure: the next pass settles it.
+          debugPrint('[trades] could not settle ${t.symbol}: $e');
+          return MapEntry(t, <String, dynamic>{});
+        }
+      }),
+    );
+
     final settled = <TradeEntry>[];
-    for (final t in open) {
-      if (t.takeProfit == null && t.stopLoss == null) continue;
-      try {
-        final r = await client.priceRange(t.symbol, since: t.openedAt);
-        final hit = levelHitBy(t,
-            high: (r['high'] as num?)?.toDouble(),
-            low: (r['low'] as num?)?.toDouble());
-        if (hit == null) continue;
-        final level = hit == 'take_profit' ? t.takeProfit! : t.stopLoss!;
-        await close(t.id, level, by: hit);
-        settled.add(t);
-      } catch (e) {
-        // Offline, or a pair the server does not carry. Leaving the trade
-        // open is the safe failure: it will be settled on the next pass.
-        debugPrint('[trades] could not settle ${t.symbol}: $e');
-      }
+    for (final e in ranges) {
+      final hit = levelHitBy(e.key,
+          high: (e.value['high'] as num?)?.toDouble(),
+          low: (e.value['low'] as num?)?.toDouble());
+      if (hit == null) continue;
+      final level =
+          hit == 'take_profit' ? e.key.takeProfit! : e.key.stopLoss!;
+      await close(e.key.id, level, by: hit);
+      settled.add(e.key);
     }
     return settled;
   }

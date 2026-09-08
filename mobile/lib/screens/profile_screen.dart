@@ -113,12 +113,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadTrades() async {
-    // Settle first, so a trade that hit its stop overnight is already closed
-    // by the time the list draws rather than appearing open and then moving.
+    // Draw what is stored, then settle behind it. Awaiting a round trip per
+    // open position before the list appears made opening Profile feel slow
+    // for a list that is usually about to render unchanged.
+    final stored = await Trades.instance.load();
+    if (!mounted) return;
+    _sortAndShow(stored);
+    unawaited(_loadPrices(stored));
+
     final settled = await Trades.instance.settle(widget.client);
     final all = await Trades.instance.load();
     if (!mounted) return;
-    unawaited(_loadPrices(all));
     if (settled.isNotEmpty) {
       final one = settled.length == 1;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -129,13 +134,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: Obsidian.body()),
       ));
     }
-    // Open first, then most recently closed. The ones you can still act on
-    // are the ones worth putting at the top.
-    all.sort((a, b) {
-      if (a.isOpen != b.isOpen) return a.isOpen ? -1 : 1;
-      return b.openedAt.compareTo(a.openedAt);
-    });
-    setState(() => _trades = all);
+    _sortAndShow(all);
+  }
+
+  /// Open first, then most recently closed. The ones you can still act on
+  /// are the ones worth putting at the top.
+  void _sortAndShow(List<TradeEntry> all) {
+    final sorted = List<TradeEntry>.from(all)
+      ..sort((a, b) {
+        if (a.isOpen != b.isOpen) return a.isOpen ? -1 : 1;
+        return b.openedAt.compareTo(a.openedAt);
+      });
+    setState(() => _trades = sorted);
   }
 
   /// One round trip for every symbol you hold, open positions only.
@@ -1094,18 +1104,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
               children: [
                 Row(
                   children: [
+                    // The numbered badge, in this step's own colour — the
+                    // design's whole trick for making a column of guides
+                    // readable instead of a wall.
                     Container(
-                      width: 24,
-                      height: 24,
+                      width: 26,
+                      height: 26,
                       decoration: BoxDecoration(
-                        color: Obsidian.primary.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(6),
+                        color: h.tone.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(7),
+                        border:
+                            Border.all(color: h.tone.withValues(alpha: 0.35)),
                       ),
                       alignment: Alignment.center,
                       child: Text(h.n,
                           style: Obsidian.dataTable(
                               size: 10.5,
-                              color: Obsidian.primary,
+                              color: h.tone,
                               w: FontWeight.w700)),
                     ),
                     const SizedBox(width: 10),
@@ -1114,9 +1129,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           style: Obsidian.bodyLg().copyWith(
                               fontSize: 13.5, fontWeight: FontWeight.w600)),
                     ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: h.tone.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(5),
+                        border:
+                            Border.all(color: h.tone.withValues(alpha: 0.25)),
+                      ),
+                      child: Text(h.tag,
+                          style: Obsidian.labelSm(color: h.tone, size: 8.5)),
+                    ),
                   ],
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 9),
                 Text(h.body,
                     style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
               ],
@@ -1139,7 +1167,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(a.icon, size: 17, color: a.tone),
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: a.tone.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: a.tone.withValues(alpha: 0.3)),
+                  ),
+                  child: Icon(a.icon, size: 16, color: a.tone),
+                ),
                 const SizedBox(width: 11),
                 Expanded(
                   child: Column(

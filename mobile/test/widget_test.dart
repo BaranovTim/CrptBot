@@ -550,6 +550,53 @@ void main() {
     expect(s2.unrealised, closeTo(-99, 1e-9));
   });
 
+  test('a call carries its timeframe, and grades read as words', () {
+    // A call is a property of a pair AND a horizon: the same coin can be
+    // SELL on 1h and FLAT on 1d in the same second. Losing the interval on
+    // the way to the dashboard would show a different answer from the one
+    // that was tapped.
+    final s = LiveSignal.fromJson({
+      'symbol': 'SUIUSDT',
+      'interval': '1h',
+      'action': 'SELL',
+      'strength': 'small',
+      'ev': 1.62,
+      'price': 0.82,
+    });
+    expect(s.interval, '1h');
+    expect(s.isSell, isTrue);
+    expect(s.short, 'SUI');
+    expect(s.isEquity, isFalse);
+    // 'small' is accurate inside the model and reads as a typo on a list
+    expect(s.strengthLabel, 'LOW');
+
+    final equity = LiveSignal.fromJson({
+      'symbol': 'NVDA', 'interval': '1d', 'action': 'BUY',
+      'strength': 'strong',
+    });
+    expect(equity.isEquity, isTrue);
+    expect(equity.short, 'NVDA');
+    expect(equity.strengthLabel, 'STRONG');
+    expect(equity.isSell, isFalse);
+  });
+
+  test('the calls list separates crypto from equities', () {
+    final all = LiveSignals.fromJson({
+      'watched_symbols': 15,
+      'intervals': ['15m', '1h', '4h', '1d'],
+      'signals': [
+        {'symbol': 'BTCUSDT', 'interval': '1d', 'action': 'BUY',
+         'strength': 'strong'},
+        {'symbol': 'NVDA', 'interval': '1h', 'action': 'SELL',
+         'strength': 'medium'},
+      ],
+    });
+    expect(all.signals.length, 2);
+    expect(all.watched, 15);
+    expect(all.signals.where((s) => s.isEquity).length, 1);
+    expect(all.signals.where((s) => !s.isEquity).single.symbol, 'BTCUSDT');
+  });
+
   test('the status badge never claims the bot trades', () {
     final s = BotStatus.fromJson({
       'active': true,

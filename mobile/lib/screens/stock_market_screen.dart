@@ -19,16 +19,20 @@ import '../api/models.dart';
 import '../api/watchlist.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
+import '../widgets/signals_panel.dart';
 import '../api/muted.dart';
 import '../widgets/alert_settings_sheet.dart';
 import '../widgets/patient_loader.dart';
 
 class StockMarketScreen extends StatefulWidget {
   const StockMarketScreen({super.key, required this.client,
-    required this.onPick});
+    required this.onPick, this.onOpenSignal});
 
   final ApiClient client;
   final ValueChanged<String> onPick;
+
+  /// Open a live call on the stock AND timeframe it belongs to.
+  final void Function(LiveSignal)? onOpenSignal;
 
   @override
   State<StockMarketScreen> createState() => _StockMarketScreenState();
@@ -36,6 +40,16 @@ class StockMarketScreen extends StatefulWidget {
 
 class _StockMarketScreenState extends State<StockMarketScreen> {
   List<StockQuote> _quotes = [];
+  LiveSignals? _signals;
+
+  Future<void> _loadSignals() async {
+    try {
+      final s = await widget.client.signals();
+      if (mounted) setState(() => _signals = s);
+    } catch (_) {
+      // the panel says so itself rather than taking the page down
+    }
+  }
   List<String> _watch = const [];
   final DateTime _waitingSince = DateTime.now();
   String? _error;
@@ -47,6 +61,7 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
     // prime the mute set so the bells render correctly on first paint
     Muted.instance.load().then((_) => mounted ? setState(() {}) : null);
     _load();
+    _loadSignals();
   }
 
   Future<void> _load() async {
@@ -243,6 +258,12 @@ class _StockMarketScreenState extends State<StockMarketScreen> {
                 'call.',
                 style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
           ],
+          const SizedBox(height: 26),
+          SignalsPanel(
+            data: _signals,
+            equities: true,
+            onOpen: (sig) => widget.onOpenSignal?.call(sig),
+          ),
         ],
       ),
     );

@@ -19,6 +19,7 @@ import 'add_coin_sheet.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/patient_loader.dart';
+import '../widgets/signals_panel.dart';
 import '../widgets/status_dot.dart';
 
 class MarketScreen extends StatefulWidget {
@@ -26,11 +27,17 @@ class MarketScreen extends StatefulWidget {
     super.key,
     required this.client,
     required this.onPick,
+    this.onOpenSignal,
     required this.onOrderChanged,
   });
 
   final ApiClient client;
   final void Function(Coin coin) onPick;
+
+  /// Open a live call on the pair AND timeframe it belongs to. A call is a
+  /// property of both, so landing on the wrong timeframe would show a
+  /// different answer from the one that was tapped.
+  final void Function(LiveSignal)? onOpenSignal;
 
   /// The dashboard swipes through this list, so the shell has to be told
   /// when the order changes — otherwise a drag here would silently disagree
@@ -52,10 +59,23 @@ class _MarketScreenState extends State<MarketScreen> {
   String? _lastFailure;
   Timer? _retry;
 
+  LiveSignals? _signals;
+
+  Future<void> _loadSignals() async {
+    try {
+      final s = await widget.client.signals();
+      if (mounted) setState(() => _signals = s);
+    } catch (_) {
+      // The list above is the screen's job; a missing calls panel says so
+      // itself rather than taking the page down.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _load();
+    _loadSignals();
   }
 
   @override
@@ -174,9 +194,11 @@ class _MarketScreenState extends State<MarketScreen> {
                   onPatienceExhausted: _giveUp),
           ],
         ),
-        footer: _coins.isEmpty
-            ? null
-            : Padding(
+        footer: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_coins.isNotEmpty)
+              Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
                   'Drag ⠿ to reorder — the dashboard swipes through this list '
@@ -186,6 +208,16 @@ class _MarketScreenState extends State<MarketScreen> {
                   style: Obsidian.body(color: Obsidian.outline, size: 11.5),
                 ),
               ),
+            const SizedBox(height: 26),
+            // BELOW THE LIST, deliberately. The list above is what you
+            // follow; this is what is actually calling, which is a different
+            // question and can name a pair you do not follow at all.
+            SignalsPanel(
+              data: _signals,
+              onOpen: (sig) => widget.onOpenSignal?.call(sig),
+            ),
+          ],
+        ),
         children: [
           for (var i = 0; i < _coins.length; i++)
             Padding(

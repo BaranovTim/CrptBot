@@ -432,6 +432,17 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                       client: widget.client,
                       onPick: _pick,
                       onOrderChanged: _loadOrder,
+                      // Symbol AND timeframe. A call belongs to both, so
+                      // opening one on the timeframe you happened to be on
+                      // last would show a different answer.
+                      onOpenSignal: (sig) {
+                        _setSymbol(sig.symbol);
+                        Settings.instance.saveInterval(sig.interval);
+                        setState(() {
+                          _interval = sig.interval;
+                          _tab = NavTab.dashboard;
+                        });
+                      },
                     ),
                   // "the last page to buy the subscription" — for an
                   // unsubscribed account this tab IS the paywall, and it is
@@ -562,6 +573,15 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           onPick: (s) {
             setState(() {
               _stock = s;
+              _tab = NavTab.dashboard;
+            });
+            _loadFollowed();
+          },
+          onOpenSignal: (sig) {
+            Settings.instance.saveInterval(sig.interval);
+            setState(() {
+              _stock = sig.symbol;
+              _interval = sig.interval;
               _tab = NavTab.dashboard;
             });
             _loadFollowed();

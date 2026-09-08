@@ -73,34 +73,70 @@ const List<AckPoint> acknowledgementPoints = [
 
 /// The how-to, shown in the Bot Instructions tab beside the points above.
 class HowToStep {
-  const HowToStep(this.n, this.title, this.body);
-  final String n, title, body;
+  const HowToStep(this.n, this.title, this.body, this.tone, this.tag);
+  final String n, title, body, tag;
+
+  /// The badge colour. Cycled through the palette rather than all one green,
+  /// because a column of identical cards is a column nobody reads — the
+  /// design this came from numbers each guide in its own colour for exactly
+  /// that reason.
+  final Color tone;
 }
 
+/// Cyan and violet exist only here and on the screener's medallions, so a
+/// step badge cannot be mistaken for a live signal — green and red are
+/// reserved for BUY and SELL everywhere else in the app.
+const _cyan = Color(0xFF00D2FF);
+const _violet = Color(0xFFB07CF0);
+
 const List<HowToStep> howToSteps = [
-  HowToStep('01', 'Pick a pair and a timeframe',
+  HowToStep(
+      '01',
+      'Pick a pair and a timeframe',
       'Market lists what the server has models for. The timeframe bar on the '
           'dashboard shows which are trained — an untrained one offers to fit '
-          'it rather than pretending to have an answer.'),
-  HowToStep('02', 'Read the call with its confidence',
+          'it rather than pretending to have an answer.',
+      Obsidian.primary,
+      'START HERE'),
+  HowToStep(
+      '02',
+      'Read the call with its confidence',
       'BUY, SELL or FLAT comes with the probability the model gives it and '
           'the probability this timeframe would NEED to cover costs. When the '
-          'first is below the second, FLAT is the correct call.'),
-  HowToStep('03', 'Check the levels before you act',
+          'first is below the second, FLAT is the correct call.',
+      _cyan,
+      'THE NUMBERS'),
+  HowToStep(
+      '03',
+      'Check the levels before you act',
       'Take profit and stop loss are drawn for the side the call names — on a '
           'SELL the target is below the price and the stop above it. With no '
-          'call they are labelled as barriers, because no entry was proposed.'),
-  HowToStep('04', 'Place the trade yourself, then log it',
+          'call they are labelled as barriers, because no entry was proposed.',
+      _violet,
+      'RISK FIRST'),
+  HowToStep(
+      '04',
+      'Place the trade yourself, then log it',
       'Use your own exchange. Log Market Entry at the bottom of the dashboard '
-          'records what you did, with your fill price and your levels.'),
-  HowToStep('05', 'Let the log settle itself',
+          'records what you did, with your fill price and your levels.',
+      Obsidian.amber,
+      'YOUR MOVE'),
+  HowToStep(
+      '05',
+      'Let the log settle itself',
       'When price reaches a level you set, the app closes that entry in your '
-          'log and marks it HIT TP or HIT SL. It checks the high and low since '
-          'your entry, so an overnight wick counts.'),
-  HowToStep('06', 'Set a daily stop and respect it',
+          'log and marks it HIT TP or HIT SL. It checks the high and low '
+          'since your entry, so an overnight wick counts.',
+      Obsidian.greenDim,
+      'AUTOMATIC'),
+  HowToStep(
+      '06',
+      'Set a daily stop and respect it',
       'Preferences has a daily loss limit. The app cannot stop you trading — '
-          'it has no keys — but it will tell you plainly when the day has gone '
-          'past the line you drew.'),
+          'it has no keys — but it will tell you plainly when the day has '
+          'gone past the line you drew.',
+      Obsidian.redSoft,
+      'DISCIPLINE'),
 ];
 
 /// The first-run dialog. Cannot be dismissed by tapping outside: the one
