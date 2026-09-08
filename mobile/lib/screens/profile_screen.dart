@@ -104,12 +104,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadPush();
     _loadBackgroundHealth();
     _loadTrades();
+    _priceTimer = Timer.periodic(const Duration(seconds: 30),
+        (_) => _loadPrices(_trades));
     Trades.instance.balance().then(
         (v) => mounted ? setState(() => _balance = v) : null);
     Settings.instance.dailyStopPct().then(
         (v) => mounted ? setState(() => _dailyStopPct = v) : null);
     Settings.instance.sensitivity().then(
         (v) => mounted ? setState(() => _sensitivity = v) : null);
+  }
+
+  @override
+  void dispose() {
+    _priceTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadTrades() async {
@@ -152,6 +160,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ///
   /// A closed trade marks against the exit you recorded, so its price is
   /// already known and asking about it would be a wasted symbol.
+  /// Keep the marked prices moving while this screen is open.
+  ///
+  /// The open cards now show a live price, a live profit and a bar filling
+  /// toward the target; all three would be frozen at whatever they were when
+  /// the screen opened without this. `/api/coins` answers in a few
+  /// milliseconds from the server's cache, so thirty seconds is cheap.
+  Timer? _priceTimer;
+
   Future<void> _loadPrices(List<TradeEntry> all) async {
     final syms = all.where((t) => t.isOpen).map((t) => t.symbol).toSet();
     if (syms.isEmpty) return;

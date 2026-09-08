@@ -500,7 +500,13 @@ class JournalCard extends StatelessWidget {
         ? Obsidian.outline
         : (pct >= 0 ? Obsidian.green : Obsidian.red);
 
-    return GlassPanel(
+    // A LIVE TRADE WEARS A GREEN RING.
+    //
+    // The list mixes open positions with a history of closed ones, and the
+    // open ones are the only rows you can still do anything about. Colour
+    // does that at a glance, where reading a small "ACTIVE" chip on every
+    // card does not.
+    final card = GlassPanel(
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -561,7 +567,7 @@ class JournalCard extends StatelessWidget {
                           ? '—'
                           : '${abs >= 0 ? '+' : ''}${money(abs, dp: 2)}',
                       style: Obsidian.dataTable(
-                          size: 10.5, color: Obsidian.outline)),
+                          size: 11.5, color: tone, w: FontWeight.w600)),
                 ],
               ),
             ],
@@ -571,7 +577,14 @@ class JournalCard extends StatelessWidget {
           const SizedBox(height: 9),
           Row(
             children: [
-              Expanded(child: _level('ENTRY PRICE', entry.entryPrice, null)),
+              Expanded(child: _level('ENTRY', entry.entryPrice, null)),
+              // THE PRICE IT IS MARKED AT. Entry, target and stop are all
+              // fixed numbers you chose; without this the card shows four
+              // things you already knew and nothing about where price
+              // actually is.
+              Expanded(
+                  child: _level(entry.isOpen ? 'NOW' : 'EXIT',
+                      entry.markPrice(livePrice), tone)),
               Expanded(
                   child: _level('TAKE PROFIT', entry.takeProfit,
                       Obsidian.green)),
@@ -579,6 +592,33 @@ class JournalCard extends StatelessWidget {
                   child: _level('STOP LOSS', entry.stopLoss, Obsidian.red)),
             ],
           ),
+          // HOW FAR TOWARD THE TARGET, for a live trade that has one.
+          // The same bar the dashboard draws, from the same `towardTarget`.
+          if (entry.isOpen && entry.towardTarget(livePrice) != null) ...[
+            const SizedBox(height: 11),
+            Row(
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(
+                      value: entry.towardTarget(livePrice),
+                      minHeight: 5,
+                      backgroundColor: Colors.white.withValues(alpha: 0.06),
+                      valueColor:
+                          const AlwaysStoppedAnimation(Obsidian.green),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Text(
+                    '${(entry.towardTarget(livePrice)! * 100)
+                        .toStringAsFixed(0)}% to TP',
+                    style: Obsidian.dataTable(
+                        size: 10, color: Obsidian.outline)),
+              ],
+            ),
+          ],
           if (onClose != null || onDelete != null) ...[
             const SizedBox(height: 11),
             Row(
@@ -629,10 +669,20 @@ class JournalCard extends StatelessWidget {
         ],
       ),
     );
+
+    if (!entry.isOpen) return card;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Obsidian.rLg),
+        border: Border.all(
+            color: Obsidian.green.withValues(alpha: 0.45), width: 1.4),
+      ),
+      child: card,
+    );
   }
 
   Widget _statusChip() {
-    if (entry.isOpen) return _chip('ACTIVE', Obsidian.outline);
+    if (entry.isOpen) return _chip('ACTIVE', Obsidian.green, filled: true);
     if (entry.closedBy == 'take_profit') {
       return _chip('CLOSED TP', Obsidian.greenDim);
     }
@@ -655,17 +705,25 @@ class JournalCard extends StatelessWidget {
         child: Text(text, style: Obsidian.labelSm(color: c, size: 9)),
       );
 
+  /// SCALED DOWN, NOT TRUNCATED.
+  ///
+  /// Four price columns on a narrow phone is tight, and a clipped price is
+  /// worse than a small one — "$68,50…" is not a number you can act on.
   static Widget _level(String label, double? v, Color? tone) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label,
+              maxLines: 1,
               style: Obsidian.labelSm(color: Obsidian.outline, size: 8.5)),
           const SizedBox(height: 3),
-          Text(money(v),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Obsidian.dataTable(
-                  size: 11.5, color: tone ?? Obsidian.onSurface)),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(money(v),
+                maxLines: 1,
+                style: Obsidian.dataTable(
+                    size: 11.5, color: tone ?? Obsidian.onSurface)),
+          ),
         ],
       );
 
