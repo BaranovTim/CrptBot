@@ -15,6 +15,7 @@ import '../api/client.dart';
 import '../api/format.dart';
 import '../api/market_ticker.dart';
 import '../api/models.dart';
+import '../api/widgets.dart';
 import '../api/trades.dart';
 import '../api/muted.dart';
 import '../api/watchlist.dart';
@@ -83,6 +84,8 @@ class _MarketScreenState extends State<MarketScreen> {
     try {
       final s = await widget.client.signals();
       if (mounted) setState(() => _signals = s);
+      unawaited(Widgets.instance
+          .pushMarket(_coins, calls: s, live: _ticker.prices));
     } catch (_) {
       // The list above is the screen's job; a missing calls panel says so
       // itself rather than taking the page down.
@@ -96,8 +99,15 @@ class _MarketScreenState extends State<MarketScreen> {
     _loadSignals();
     _loadHeld();
     _ticker.start();
-    _liveSub = _ticker.stream.listen(
-        (p) => mounted ? setState(() => _live = p) : null);
+    _liveSub = _ticker.stream.listen((p) {
+      if (!mounted) return;
+      setState(() => _live = p);
+      // Cheap: writes a small blob and asks the launcher to redraw. Android
+      // coalesces these, and it is the only path that keeps a widget current
+      // while the app is open.
+      unawaited(Widgets.instance
+          .pushMarket(_coins, calls: _signals, live: p));
+    });
   }
 
   @override

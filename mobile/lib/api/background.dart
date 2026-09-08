@@ -84,6 +84,7 @@ import 'notifications.dart';
 import 'push.dart';
 import 'settings.dart';
 import 'trades.dart';
+import 'widgets.dart';
 
 const String _taskName = 'thusildy.alerts.poll';
 
@@ -207,6 +208,17 @@ Future<int> pollOnce() async {
   } catch (e) {
     debugPrint('[bg] settle failed: $e');
   }
+  // Refresh the home-screen widgets while we are awake. This is the only
+  // path that updates them with the app closed, and it is why they print
+  // when they were last updated rather than claiming to be live.
+  try {
+    final all = await Trades.instance.load();
+    await Widgets.instance.pushPositions(all,
+        balance: await Trades.instance.balance());
+  } catch (e) {
+    debugPrint('[bg] widget refresh failed: $e');
+  }
+
   final batch = await collectAlerts(client);
   for (final a in batch.deliver) {
     // NOT gated on `a.pushed` — see the note in `shell.dart`. The relay

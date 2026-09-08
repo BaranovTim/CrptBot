@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The widget palette, matching lib/theme/liquid_obsidian.dart.
+
+  Duplicated rather than shared because a widget is drawn by the LAUNCHER
+  through RemoteViews, in another process, with no access to Flutter or its
+  theme. Two copies of a colour is the price of that; a widget that did not
+  match the app would be worse.
+-->
+<resources>
+    <color name="w_bg">#FF0C0E12</color>
+    <color name="w_card">#12FFFFFF</color>
+    <color name="w_inner">#66000000</color>
+    <color name="w_stroke">#17FFFFFF</color>
+    <color name="w_text">#FFF3F4F6</color>
+    <color name="w_dim">#FF8B90A0</color>
+    <color name="w_green">#FF00E297</color>
+    <color name="w_red">#FFFF4B6B</color>
+    <color name="w_amber">#FFFFC46B</color>
+    <color name="w_cyan">#FF00D2FF</color>
+    <color name="w_violet">#FFB07CF0</color>
+</resources>

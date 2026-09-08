@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MARKET WATCH, 4x2.
+
+  RemoteViews only understands a small set of views, so this is a fixed
+  ladder of five rows that the provider hides when there is nothing to put in
+  them. A ListView would grow to any length and costs a RemoteViewsService,
+  a factory and a second process boundary — for five coins that is a lot of
+  moving parts to maintain for the same picture.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@drawable/w_panel"
+    android:padding="14dp" android:id="@+id/m_root">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical"
+        android:paddingBottom="9dp">
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:orientation="vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textColor="@color/w_text" android:textSize="13sp"
+                android:textStyle="bold" android:text="Market Watch" />
+            <TextView android:id="@+id/m_sub" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:textColor="@color/w_dim"
+                android:textSize="10sp" android:text="Watchlist prices" />
+        </LinearLayout>
+        <TextView android:id="@+id/m_live" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:background="@drawable/w_chip"
+            android:paddingLeft="7dp" android:paddingRight="7dp"
+            android:paddingTop="2dp" android:paddingBottom="2dp"
+            android:textColor="@color/w_green" android:textSize="9sp" android:text="LIVE" />
+    </LinearLayout>
+
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/w_stroke" />
+
+        <LinearLayout android:id="@+id/m_row1" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="horizontal"
+            android:gravity="center_vertical" android:paddingTop="7dp"
+            android:paddingBottom="7dp">
+            <TextView android:id="@+id/m_sym1" android:layout_width="0dp"
+                android:layout_weight="1" android:layout_height="wrap_content"
+                android:textColor="@color/w_text" android:textSize="13sp"
+                android:textStyle="bold" android:maxLines="1" android:text="BTC" />
+            <TextView android:id="@+id/m_tag1" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:background="@drawable/w_chip"
+                android:paddingLeft="5dp" android:paddingRight="5dp"
+                android:paddingTop="1dp" android:paddingBottom="1dp"
+                android:layout_marginEnd="8dp"
+                android:textColor="@color/w_green" android:textSize="8sp"
+                android:maxLines="1" android:text="BUY 1h" />
+            <LinearLayout android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:orientation="vertical"
+                android:gravity="end">
+                <TextView android:id="@+id/m_price1" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_text"
+                    android:textSize="13sp" android:textStyle="bold" android:maxLines="1"
+                    android:text="$0.00" />
+                <TextView android:id="@+id/m_chg1" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_green"
+                    android:textSize="10sp" android:maxLines="1" android:text="+0.00%" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:id="@+id/m_row2" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="horizontal"
+            android:gravity="center_vertical" android:paddingTop="7dp"
+            android:paddingBottom="7dp">
+            <TextView android:id="@+id/m_sym2" android:layout_width="0dp"
+                android:layout_weight="1" android:layout_height="wrap_content"
+                android:textColor="@color/w_text" android:textSize="13sp"
+                android:textStyle="bold" android:maxLines="1" android:text="BTC" />
+            <TextView android:id="@+id/m_tag2" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:background="@drawable/w_chip"
+                android:paddingLeft="5dp" android:paddingRight="5dp"
+                android:paddingTop="1dp" android:paddingBottom="1dp"
+                android:layout_marginEnd="8dp"
+                android:textColor="@color/w_green" android:textSize="8sp"
+                android:maxLines="1" android:text="BUY 1h" />
+            <LinearLayout android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:orientation="vertical"
+                android:gravity="end">
+                <TextView android:id="@+id/m_price2" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_text"
+                    android:textSize="13sp" android:textStyle="bold" android:maxLines="1"
+                    android:text="$0.00" />
+                <TextView android:id="@+id/m_chg2" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_green"
+                    android:textSize="10sp" android:maxLines="1" android:text="+0.00%" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:id="@+id/m_row3" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="horizontal"
+            android:gravity="center_vertical" android:paddingTop="7dp"
+            android:paddingBottom="7dp">
+            <TextView android:id="@+id/m_sym3" android:layout_width="0dp"
+                android:layout_weight="1" android:layout_height="wrap_content"
+                android:textColor="@color/w_text" android:textSize="13sp"
+                android:textStyle="bold" android:maxLines="1" android:text="BTC" />
+            <TextView android:id="@+id/m_tag3" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:background="@drawable/w_chip"
+                android:paddingLeft="5dp" android:paddingRight="5dp"
+                android:paddingTop="1dp" android:paddingBottom="1dp"
+                android:layout_marginEnd="8dp"
+                android:textColor="@color/w_green" android:textSize="8sp"
+                android:maxLines="1" android:text="BUY 1h" />
+            <LinearLayout android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:orientation="vertical"
+                android:gravity="end">
+                <TextView android:id="@+id/m_price3" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_text"
+                    android:textSize="13sp" android:textStyle="bold" android:maxLines="1"
+                    android:text="$0.00" />
+                <TextView android:id="@+id/m_chg3" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_green"
+                    android:textSize="10sp" android:maxLines="1" android:text="+0.00%" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:id="@+id/m_row4" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="horizontal"
+            android:gravity="center_vertical" android:paddingTop="7dp"
+            android:paddingBottom="7dp">
+            <TextView android:id="@+id/m_sym4" android:layout_width="0dp"
+                android:layout_weight="1" android:layout_height="wrap_content"
+                android:textColor="@color/w_text" android:textSize="13sp"
+                android:textStyle="bold" android:maxLines="1" android:text="BTC" />
+            <TextView android:id="@+id/m_tag4" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:background="@drawable/w_chip"
+                android:paddingLeft="5dp" android:paddingRight="5dp"
+                android:paddingTop="1dp" android:paddingBottom="1dp"
+                android:layout_marginEnd="8dp"
+                android:textColor="@color/w_green" android:textSize="8sp"
+                android:maxLines="1" android:text="BUY 1h" />
+            <LinearLayout android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:orientation="vertical"
+                android:gravity="end">
+                <TextView android:id="@+id/m_price4" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_text"
+                    android:textSize="13sp" android:textStyle="bold" android:maxLines="1"
+                    android:text="$0.00" />
+                <TextView android:id="@+id/m_chg4" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_green"
+                    android:textSize="10sp" android:maxLines="1" android:text="+0.00%" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:id="@+id/m_row5" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="horizontal"
+            android:gravity="center_vertical" android:paddingTop="7dp"
+            android:paddingBottom="7dp">
+            <TextView android:id="@+id/m_sym5" android:layout_width="0dp"
+                android:layout_weight="1" android:layout_height="wrap_content"
+                android:textColor="@color/w_text" android:textSize="13sp"
+                android:textStyle="bold" android:maxLines="1" android:text="BTC" />
+            <TextView android:id="@+id/m_tag5" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:background="@drawable/w_chip"
+                android:paddingLeft="5dp" android:paddingRight="5dp"
+                android:paddingTop="1dp" android:paddingBottom="1dp"
+                android:layout_marginEnd="8dp"
+                android:textColor="@color/w_green" android:textSize="8sp"
+                android:maxLines="1" android:text="BUY 1h" />
+            <LinearLayout android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:orientation="vertical"
+                android:gravity="end">
+                <TextView android:id="@+id/m_price5" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_text"
+                    android:textSize="13sp" android:textStyle="bold" android:maxLines="1"
+                    android:text="$0.00" />
+                <TextView android:id="@+id/m_chg5" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textColor="@color/w_green"
+                    android:textSize="10sp" android:maxLines="1" android:text="+0.00%" />
+            </LinearLayout>
+        </LinearLayout>
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/w_stroke" android:layout_marginTop="4dp" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingTop="8dp">
+        <TextView android:id="@+id/m_foot" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="wrap_content"
+            android:textColor="@color/w_dim" android:textSize="10sp"
+            android:maxLines="1" android:text="Open the app to refresh" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:textColor="@color/w_green" android:textSize="10sp"
+            android:textStyle="bold" android:text="Open ›" />
+    </LinearLayout>
+</LinearLayout>

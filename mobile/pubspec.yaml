@@ -43,6 +43,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   workmanager: ^0.10.9
   local_auth: ^2.3.0              # fingerprint / face unlock on app open
+  home_widget: ^0.7.0             # the home-screen widgets
 
 dev_dependencies:
   flutter_test:

@@ -27,6 +27,7 @@ import '../api/push.dart';
 import '../api/applock.dart';
 import '../api/journal.dart';
 import '../api/market_ticker.dart';
+import '../api/widgets.dart';
 import '../api/settings.dart';
 import '../api/trades.dart';
 import '../api/watchlist.dart';
@@ -113,6 +114,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Merge rather than replace: the map from the socket has no equities
       // in it, and dropping their prices would blank those cards every tick.
       setState(() => _prices = {..._prices, ...live});
+      unawaited(Widgets.instance
+          .pushPositions(_trades, prices: _prices, balance: _balance));
     });
     _priceTimer = Timer.periodic(const Duration(seconds: 60),
         (_) => _loadPrices(_trades));
@@ -159,6 +162,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ));
     }
     _sortAndShow(all);
+    unawaited(Widgets.instance
+        .pushPositions(all, prices: _prices, balance: _balance));
   }
 
   /// Open first, then most recently closed. The ones you can still act on

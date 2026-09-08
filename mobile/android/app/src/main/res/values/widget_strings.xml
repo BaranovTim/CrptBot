@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_market_desc">Watchlist prices and any live BUY or SELL call.</string>
+    <string name="widget_positions_desc">Your logged trades and how they are doing.</string>
+</resources>
