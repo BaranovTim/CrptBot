@@ -39,7 +39,11 @@ import 'package:flutter/foundation.dart'
     show debugPrint, visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'dart:async';
+
 import 'client.dart';
+import 'format.dart';
+import 'notifications.dart';
 
 /// One logged position.
 class TradeEntry {
@@ -363,6 +367,22 @@ class Trades {
           hit == 'take_profit' ? e.key.takeProfit! : e.key.stopLoss!;
       await close(e.key.id, level, by: hit);
       settled.add(e.key);
+
+      // TOLD HERE, not by the callers.
+      //
+      // `settle` runs from the dashboard, the profile AND the background
+      // poll. Notifying from each of those would mean up to three buzzes for
+      // one closed trade; notifying here means exactly one, at the moment the
+      // trade actually changes state, whichever path noticed it.
+      final closed = e.key.closedAtPrice(level, by: hit);
+      unawaited(Notifications.instance.showTradeClosed(
+        symbol: e.key.symbol,
+        takeProfit: hit == 'take_profit',
+        level: priceText(level),
+        pnl: '${(closed.pnlPct(null) ?? 0) >= 0 ? '+' : ''}'
+            '${(closed.pnlPct(null) ?? 0).toStringAsFixed(2)}%  '
+            '${priceText(closed.pnl(null))}',
+      ));
     }
     return settled;
   }

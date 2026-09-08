@@ -104,8 +104,14 @@ class Widgets {
         return b.openedAt.compareTo(a.openedAt);
       });
 
+    // ALL OF THEM, not the first three. The list scrolls now — see
+    // PositionsWidgetService.kt — so the limit is what a RemoteViews
+    // collection will carry rather than what fits on screen. Fifty is a
+    // bound, not a design: every row crosses a process boundary as its own
+    // RemoteViews, and a journal of thousands would make the launcher work
+    // for rows nobody scrolls to.
     final trades = <Map<String, dynamic>>[];
-    for (final t in sorted.take(3)) {
+    for (final t in sorted.take(50)) {
       final live = prices[t.symbol];
       final pct = t.pnlPct(live);
       final abs = t.pnl(live);

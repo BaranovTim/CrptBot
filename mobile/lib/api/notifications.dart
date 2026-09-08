@@ -226,6 +226,53 @@ class Notifications {
     await _plugin.show(_idFor(a.id), a.title, body, details, payload: a.id);
   }
 
+  /// A logged trade reached the level you set and was closed in your journal.
+  ///
+  /// WHY THIS IS ITS OWN METHOD RATHER THAN AN `Alert`
+  ///     Every other notification here comes from the server's alert engine
+  ///     and describes the market. This one describes YOUR journal, is
+  ///     decided entirely on the device, and has no id the server has ever
+  ///     seen. Squeezing it into `Alert` would mean inventing server fields
+  ///     to satisfy a constructor.
+  ///
+  ///     It uses the SIGNALS channel deliberately: a stop being hit is the
+  ///     most consequential thing this app can tell you about a position, and
+  ///     it belongs on the channel you are least likely to have silenced.
+  ///
+  ///     The text says "in your log" every time, because the app did not
+  ///     close anything anywhere else — it has no exchange key, and a
+  ///     notification reading "stop loss hit" with no qualifier would imply
+  ///     an order this app cannot place.
+  Future<void> showTradeClosed({
+    required String symbol,
+    required bool takeProfit,
+    required String level,
+    required String pnl,
+  }) async {
+    if (!_ready) await init();
+    final short =
+        symbol.endsWith('USDT') ? symbol.substring(0, symbol.length - 4) : symbol;
+    final title = takeProfit
+        ? '$short hit your take profit'
+        : '$short hit your stop loss';
+    final body = 'Closed in your log at $level · $pnl\n'
+        'ThusIldy places no orders — check your exchange.';
+    final details = _details('signal', takeProfit ? 'medium' : 'high');
+    final id = _idFor('trade:$symbol:$level:${takeProfit ? 'tp' : 'sl'}');
+
+    if (!kIsWeb && Platform.isIOS) {
+      final when = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 1));
+      await _plugin.zonedSchedule(
+        id, title, body, when, details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+      );
+      return;
+    }
+    await _plugin.show(id, title, body, details);
+  }
+
   /// Fire one notification of every kind, so you can see what they look like.
   ///
   /// POSTED IMMEDIATELY, NOT SCHEDULED

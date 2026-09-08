@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One trade in the scrollable list. Inflated once per row by the
+     RemoteViewsFactory; keep it cheap, the launcher builds every one. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical" android:background="@drawable/w_row"
+    android:padding="9dp" android:layout_marginBottom="6dp">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical">
+        <TextView android:id="@+id/i_pair" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:textColor="@color/w_text"
+            android:textSize="12sp" android:textStyle="bold" android:text="BTC / USDT" />
+        <TextView android:id="@+id/i_side" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:background="@drawable/w_chip"
+            android:paddingLeft="5dp" android:paddingRight="5dp"
+            android:layout_marginStart="6dp" android:textColor="@color/w_green"
+            android:textSize="8sp" android:text="BUY / LONG" />
+        <TextView android:id="@+id/i_state" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="wrap_content"
+            android:layout_marginStart="6dp" android:textColor="@color/w_cyan"
+            android:textSize="8sp" android:maxLines="1" android:text="ACTIVE" />
+        <TextView android:id="@+id/i_pnl" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:textColor="@color/w_green"
+            android:textSize="12sp" android:textStyle="bold" android:text="+$0.00" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:background="@drawable/w_inner"
+        android:padding="6dp" android:layout_marginTop="6dp">
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:orientation="vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textColor="@color/w_dim" android:textSize="7sp" android:text="SIZE" />
+            <TextView android:id="@+id/i_size" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:textColor="@color/w_text"
+                android:textSize="10sp" android:maxLines="1" android:text="—" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:orientation="vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textColor="@color/w_dim" android:textSize="7sp" android:text="ENTRY" />
+            <TextView android:id="@+id/i_entry" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:textColor="@color/w_text"
+                android:textSize="10sp" android:maxLines="1" android:text="—" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:orientation="vertical">
+            <TextView android:id="@+id/i_tplabel" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:textColor="@color/w_dim"
+                android:textSize="7sp" android:text="TP TARGET" />
+            <TextView android:id="@+id/i_tp" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:textColor="@color/w_green"
+                android:textSize="10sp" android:maxLines="1" android:text="—" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:orientation="vertical"
+            android:gravity="end">
+            <TextView android:id="@+id/i_sllabel" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:textColor="@color/w_dim"
+                android:textSize="7sp" android:text="STOP LOSS" />
+            <TextView android:id="@+id/i_sl" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:textColor="@color/w_red"
+                android:textSize="10sp" android:maxLines="1" android:text="—" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:layout_marginTop="5dp">
+        <TextView android:id="@+id/i_when" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="wrap_content"
+            android:textColor="@color/w_dim" android:textSize="8sp"
+            android:maxLines="1" android:text="—" />
+        <TextView android:id="@+id/i_note" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:textColor="@color/w_dim"
+            android:textSize="8sp" android:maxLines="1" android:text="" />
+    </LinearLayout>
+</LinearLayout>

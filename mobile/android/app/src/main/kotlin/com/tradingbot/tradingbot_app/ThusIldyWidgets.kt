@@ -109,6 +109,9 @@ class MarketWidgetProvider : AppWidgetProvider() {
             v.setTextViewText(R.id.m_foot, data?.optString("footer") ?: "Open the app to refresh")
             v.setTextViewText(R.id.m_live, data?.optString("badge") ?: "—")
             manager.updateAppWidget(id, v)
+            // Re-ask the factory. Without this the launcher keeps the rows it
+            // already has and the widget silently shows yesterday's trades.
+            manager.notifyAppWidgetViewDataChanged(id, R.id.p_list)
         }
     }
 }
@@ -137,53 +140,21 @@ class PositionsWidgetProvider : AppWidgetProvider() {
             v.setViewVisibility(R.id.p_empty,
                 if (cards.length() == 0) View.VISIBLE else View.GONE)
 
-            val cardIds = listOf(R.id.p_card1, R.id.p_card2, R.id.p_card3)
-            val pairIds = listOf(R.id.p_pair1, R.id.p_pair2, R.id.p_pair3)
-            val sideIds = listOf(R.id.p_side1, R.id.p_side2, R.id.p_side3)
-            val stateIds = listOf(R.id.p_state1, R.id.p_state2, R.id.p_state3)
-            val pnlIds = listOf(R.id.p_pnl1, R.id.p_pnl2, R.id.p_pnl3)
-            val sizeIds = listOf(R.id.p_size1, R.id.p_size2, R.id.p_size3)
-            val entryIds = listOf(R.id.p_entry1, R.id.p_entry2, R.id.p_entry3)
-            val tpLabelIds = listOf(R.id.p_tplabel1, R.id.p_tplabel2, R.id.p_tplabel3)
-            val tpIds = listOf(R.id.p_tp1, R.id.p_tp2, R.id.p_tp3)
-            val slLabelIds = listOf(R.id.p_sllabel1, R.id.p_sllabel2, R.id.p_sllabel3)
-            val slIds = listOf(R.id.p_sl1, R.id.p_sl2, R.id.p_sl3)
-            val whenIds = listOf(R.id.p_when1, R.id.p_when2, R.id.p_when3)
-            val noteIds = listOf(R.id.p_note1, R.id.p_note2, R.id.p_note3)
+            // THE SCROLLABLE LIST.
+            //
+            // `setRemoteAdapter` hands the launcher a service to ask for
+            // rows; the template intent below is what makes a tap on any row
+            // open the app. Both are set before `notifyAppWidgetViewDataChanged`,
+            // which tells the launcher to re-ask the factory.
+            val svc = Intent(context, PositionsWidgetService::class.java)
+            v.setRemoteAdapter(R.id.p_list, svc)
+            v.setPendingIntentTemplate(R.id.p_list, launchIntent(context, "profile"))
+            v.setEmptyView(R.id.p_list, R.id.p_empty)
 
-            for (i in cardIds.indices) {
-                if (i >= cards.length()) {
-                    v.setViewVisibility(cardIds[i], View.GONE)
-                    continue
-                }
-                val t = cards.getJSONObject(i)
-                v.setViewVisibility(cardIds[i], View.VISIBLE)
-                v.setTextViewText(pairIds[i], t.optString("pair"))
-
-                val short = t.optBoolean("short", false)
-                v.setTextViewText(sideIds[i], if (short) "SELL / SHORT" else "BUY / LONG")
-                v.setTextColor(sideIds[i],
-                    if (short) Color.parseColor("#FF4B6B") else Color.parseColor("#00E297"))
-
-                v.setTextViewText(stateIds[i], t.optString("state"))
-                v.setTextColor(stateIds[i], Color.parseColor(
-                    t.optString("stateColor", "#8B90A0")))
-
-                v.setTextViewText(pnlIds[i], t.optString("pnl"))
-                v.setTextColor(pnlIds[i],
-                    if (t.optBoolean("up", true)) Color.parseColor("#00E297")
-                    else Color.parseColor("#FF4B6B"))
-
-                v.setTextViewText(sizeIds[i], t.optString("size"))
-                v.setTextViewText(entryIds[i], t.optString("entry"))
-                v.setTextViewText(tpLabelIds[i], t.optString("tpLabel", "TP TARGET"))
-                v.setTextViewText(tpIds[i], t.optString("tp"))
-                v.setTextViewText(slLabelIds[i], t.optString("slLabel", "STOP LOSS"))
-                v.setTextViewText(slIds[i], t.optString("sl"))
-                v.setTextViewText(whenIds[i], t.optString("when"))
-                v.setTextViewText(noteIds[i], t.optString("note"))
-            }
             manager.updateAppWidget(id, v)
+            // Re-ask the factory. Without this the launcher keeps the rows it
+            // already has and the widget silently shows yesterday's trades.
+            manager.notifyAppWidgetViewDataChanged(id, R.id.p_list)
         }
     }
 }

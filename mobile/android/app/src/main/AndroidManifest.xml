@@ -56,6 +56,12 @@
                 android:resource="@xml/widget_positions_info" />
         </receiver>
 
+        <!-- Feeds the scrollable trade list. BIND_REMOTEVIEWS is required:
+             it is what lets the launcher, another process, bind to this. -->
+        <service android:name=".PositionsWidgetService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
