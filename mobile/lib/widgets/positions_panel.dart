@@ -404,7 +404,7 @@ class TradeRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 5),
                 Text(
-                    '${_trim(entry.size)} @ ${money(entry.entryPrice)}'
+                    '${trim(entry.size)} @ ${money(entry.entryPrice)}'
                     '  ->  ${money(entry.markPrice(livePrice))}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -454,11 +454,232 @@ class TradeRow extends StatelessWidget {
   }
 
   /// 0.50000000 is noise in a list. Trailing zeros go, the number stays exact.
-  static String _trim(double v) {
+  static String trim(double v) {
     var s = v.toStringAsFixed(8);
     if (s.contains('.')) {
       s = s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
     }
     return s;
+  }
+}
+
+
+/// A logged trade, in the shape the profile mockup uses: identity and badges
+/// on top, P&L on the right, the three levels along the bottom.
+///
+/// Wider than `TradeRow` and narrower than `PositionCard` — this is the list
+/// you scan when reviewing what you did, so entry, target and stop all have
+/// to be visible without a tap.
+class JournalCard extends StatelessWidget {
+  const JournalCard({
+    super.key,
+    required this.entry,
+    this.livePrice,
+    this.onClose,
+    this.onDelete,
+  });
+
+  final TradeEntry entry;
+  final double? livePrice;
+  final VoidCallback? onClose, onDelete;
+
+  static const _medallion = <String, Color>{
+    'BTC': Color(0xFFF7931A), 'ETH': Color(0xFF6F8AE8),
+    'SOL': Color(0xFFB07CF0), 'XRP': Color(0xFF6FD3E8),
+    'DOGE': Color(0xFFD9C066), 'ZEC': Color(0xFFE8B36F),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final short = TradeRow.short(entry.symbol);
+    final tint = _medallion[short] ?? Obsidian.primary;
+    final sideTone = entry.isShort ? Obsidian.red : Obsidian.green;
+    final pct = entry.pnlPct(livePrice);
+    final abs = entry.pnl(livePrice);
+    final tone = pct == null
+        ? Obsidian.outline
+        : (pct >= 0 ? Obsidian.green : Obsidian.red);
+
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: tint.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: tint.withValues(alpha: 0.30)),
+                ),
+                alignment: Alignment.center,
+                child: Text(short,
+                    maxLines: 1,
+                    style: Obsidian.labelSm(color: tint, size: 9.5)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text('$short / USDT',
+                            style: Obsidian.bodyLg().copyWith(
+                                fontSize: 13.5, fontWeight: FontWeight.w700)),
+                        _chip(entry.isShort ? 'SELL / SHORT' : 'BUY / LONG',
+                            sideTone, filled: true),
+                        _statusChip(),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(_when(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Obsidian.dataTable(
+                            size: 10.5, color: Obsidian.outline)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(signedPct(pct),
+                      style: Obsidian.dataTable(
+                          size: 13, color: tone, w: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(
+                      abs == null
+                          ? '—'
+                          : '${abs >= 0 ? '+' : ''}${money(abs, dp: 2)}',
+                      style: Obsidian.dataTable(
+                          size: 10.5, color: Obsidian.outline)),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 11),
+          Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+          const SizedBox(height: 9),
+          Row(
+            children: [
+              Expanded(child: _level('ENTRY PRICE', entry.entryPrice, null)),
+              Expanded(
+                  child: _level('TAKE PROFIT', entry.takeProfit,
+                      Obsidian.green)),
+              Expanded(
+                  child: _level('STOP LOSS', entry.stopLoss, Obsidian.red)),
+            ],
+          ),
+          if (onClose != null || onDelete != null) ...[
+            const SizedBox(height: 11),
+            Row(
+              children: [
+                if (onClose != null)
+                  Expanded(
+                    child: SizedBox(
+                      height: 36,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                              color: Obsidian.primary.withValues(alpha: 0.35)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius:
+                                  BorderRadius.circular(Obsidian.rMd)),
+                        ),
+                        onPressed: onClose,
+                        icon: const Icon(Icons.check_circle_outline_rounded,
+                            size: 15, color: Obsidian.primary),
+                        label: Text('Close log',
+                            style: Obsidian.body(
+                                color: Obsidian.primary, size: 12)),
+                      ),
+                    ),
+                  ),
+                if (onClose != null && onDelete != null)
+                  const SizedBox(width: 8),
+                if (onDelete != null)
+                  SizedBox(
+                    width: 42,
+                    height: 36,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        side: BorderSide(
+                            color: Colors.white.withValues(alpha: 0.10)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(Obsidian.rMd)),
+                      ),
+                      onPressed: onDelete,
+                      child: const Icon(Icons.delete_outline_rounded,
+                          size: 16, color: Obsidian.outline),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip() {
+    if (entry.isOpen) return _chip('ACTIVE', Obsidian.outline);
+    if (entry.closedBy == 'take_profit') {
+      return _chip('CLOSED TP', Obsidian.greenDim);
+    }
+    if (entry.closedBy == 'stop_loss') {
+      return _chip('CLOSED SL', Obsidian.redSoft);
+    }
+    return _chip('CLOSED', Obsidian.outline);
+  }
+
+  static Widget _chip(String text, Color c, {bool filled = false}) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: filled ? 0.15 : 0.07),
+          borderRadius: BorderRadius.circular(4),
+          border: filled
+              ? Border.all(color: c.withValues(alpha: 0.35))
+              : null,
+        ),
+        child: Text(text, style: Obsidian.labelSm(color: c, size: 9)),
+      );
+
+  static Widget _level(String label, double? v, Color? tone) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: Obsidian.labelSm(color: Obsidian.outline, size: 8.5)),
+          const SizedBox(height: 3),
+          Text(money(v),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Obsidian.dataTable(
+                  size: 11.5, color: tone ?? Obsidian.onSurface)),
+        ],
+      );
+
+  String _when() {
+    final t = entry.openedAt.toLocal();
+    final now = DateTime.now();
+    final sameDay =
+        t.year == now.year && t.month == now.month && t.day == now.day;
+    const months = ['Jan','Feb','Mar','Apr','May','Jun',
+                    'Jul','Aug','Sep','Oct','Nov','Dec'];
+    final hhmm = '${t.hour.toString().padLeft(2, '0')}:'
+        '${t.minute.toString().padLeft(2, '0')}';
+    final when = sameDay ? 'Today, $hhmm' : '${months[t.month - 1]} ${t.day}, $hhmm';
+    return '$when  ·  Size: ${TradeRow.trim(entry.size)} '
+        '${TradeRow.short(entry.symbol)}';
   }
 }

@@ -23,6 +23,7 @@ import '../api/watchlist.dart';
 import '../api/notifications.dart';
 import '../api/push.dart';
 import '../theme/liquid_obsidian.dart';
+import '../widgets/acknowledgement.dart';
 import '../widgets/alert_settings_sheet.dart';
 import '../widgets/frosted_nav.dart';
 import '../widgets/glass.dart';
@@ -82,6 +83,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    // The notice, once per account. Deferred to the first frame because it
+    // needs a Navigator, and this runs before one exists.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAcknowledge());
     WidgetsBinding.instance.addObserver(this);
     _live.start();
     _startAlerts();
@@ -637,6 +641,21 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         _tab = NavTab.dashboard;
       }
     });
+  }
+
+  /// Show the acknowledgement to an account that has not read this version.
+  ///
+  /// PER ACCOUNT AND PER VERSION. A new sign-up sees it before touching a
+  /// single number, which is the entire point — somebody arriving at a screen
+  /// full of BUY and SELL will assume the calls are good unless told what the
+  /// measurements actually say.
+  Future<void> _maybeAcknowledge() async {
+    final id = widget.account.identifier;
+    if (id.isEmpty) return;
+    final seen = await Settings.instance.acknowledgedVersion(id);
+    if (seen >= acknowledgementVersion || !mounted) return;
+    final ok = await showAcknowledgement(context);
+    if (ok) await Settings.instance.saveAcknowledged(id, acknowledgementVersion);
   }
 
   Future<void> _signOut() async {

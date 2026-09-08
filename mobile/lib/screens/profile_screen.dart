@@ -24,11 +24,13 @@ import '../api/power.dart';
 import '../api/muted.dart';
 import '../api/notifications.dart';
 import '../api/push.dart';
+import '../api/journal.dart';
 import '../api/settings.dart';
 import '../api/trades.dart';
 import '../api/watchlist.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
+import '../widgets/acknowledgement.dart';
 import '../widgets/positions_panel.dart';
 import '../widgets/status_dot.dart';
 
@@ -80,6 +82,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ///     whole list.
   Map<String, double> _prices = const {};
 
+  /// Which tab is showing. The mockup stacks all three down one page; that
+  /// buries the trade log under two screens of prose you have already read.
+  /// They are tabs, and only one is built at a time.
+  int _tab = 0;
+
+  /// Which pair the log is filtered to, or null for all.
+  String? _pairFilter;
+
+  double _dailyStopPct = 5.0;
+  double? _balance;
   bool _batteryExempt = true;
   DateTime? _bgLastRun;
   int _bgRuns = 0;
@@ -92,6 +104,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadPush();
     _loadBackgroundHealth();
     _loadTrades();
+    Trades.instance.balance().then(
+        (v) => mounted ? setState(() => _balance = v) : null);
+    Settings.instance.dailyStopPct().then(
+        (v) => mounted ? setState(() => _dailyStopPct = v) : null);
     Settings.instance.sensitivity().then(
         (v) => mounted ? setState(() => _sensitivity = v) : null);
   }
@@ -653,10 +669,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final a = widget.account;
+    final stats = JournalStats.of(_trades, prices: _prices);
     return RefreshIndicator(
       onRefresh: () async {
         await _probe();
         await _countMuted();
+        await _loadTrades();
       },
       backgroundColor: Obsidian.surfaceContainer,
       color: Obsidian.primary,
@@ -666,172 +684,290 @@ class _ProfileScreenState extends State<ProfileScreen> {
         padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
             Obsidian.containerPadding, Obsidian.navClearance + 24),
         children: [
-          Text('Profile', style: Obsidian.displayLg()),
-          const SizedBox(height: 20),
-          _identityCard(a),
-          const SizedBox(height: Obsidian.gutter),
-          _section('SUBSCRIPTION', [
-            _tile(
-              icon: a.tier == 'admin'
-                  ? Icons.verified_user_rounded
-                  : Icons.workspace_premium_rounded,
-              title: _tierName(a),
-              subtitle: _tierDetail(a),
-              trailing: StatusDot(live: a.entitled),
-            ),
-          ]),
-          const SizedBox(height: Obsidian.gutter),
-          _section('SIGNALS', [
-            _tile(
-              icon: Icons.tune_rounded,
-              title: 'Signal strength',
-              subtitle: _levels[_sensitivity]?.$1 ?? 'Strong only',
-              onTap: _pickSensitivity,
-            ),
-          ]),
-          const SizedBox(height: Obsidian.gutter),
-          _section('ALERTS', [
-            _tile(
-              icon: Notifications.instance.granted
-                  ? Icons.notifications_active_rounded
-                  : Icons.notifications_off_rounded,
-              title: 'System permission',
-              subtitle: Notifications.instance.granted
-                  ? 'Granted — alerts can reach this phone'
-                  : 'Denied in system settings; nothing will be delivered',
-              trailing: StatusDot(live: Notifications.instance.granted),
-            ),
-            _divider(),
-            _tile(
-              icon: Icons.send_rounded,
-              title: 'Send test notifications',
-              subtitle: _testing
-                  ? 'Sent — pull down the shade to see them'
-                  : 'One of each kind, right now',
-              trailing: _testing
-                  ? const Icon(Icons.check_rounded,
-                      size: 18, color: Obsidian.greenDim)
-                  : const Icon(Icons.chevron_right_rounded,
-                      size: 18, color: Obsidian.outline),
-              onTap: _sendTests,
-            ),
-            _divider(),
-            _tile(
-              icon: Icons.schedule_rounded,
-              title: 'Background checks',
-              subtitle: _backgroundDetail,
-              trailing: StatusDot(
-                  live: _bgLastRun != null &&
-                      DateTime.now().difference(_bgLastRun!).inMinutes <= 45),
-              onTap: _loadBackgroundHealth,
-            ),
-            if (Power.instance.supported && !_batteryExempt) ...[
-              _divider(),
-              _tile(
-                icon: Icons.battery_alert_rounded,
-                title: 'Battery optimisation is on',
-                subtitle: 'Android is free to hold the alert check back for '
-                    'hours while the phone is idle. Turning this off for '
-                    'ThusIldy is the only fix on the device itself.',
-                trailing: const Icon(Icons.chevron_right_rounded,
-                    size: 18, color: Obsidian.amber),
-                onTap: _fixBattery,
-              ),
-            ],
-            _divider(),
-            _tile(
-              icon: _push != null
-                  ? Icons.cloud_done_rounded
-                  : Icons.cloud_off_rounded,
-              title: 'Delivery with the app closed',
-              subtitle: _pushDetail,
-              trailing: _pushBusy
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Obsidian.primary))
-                  : StatusDot(live: _push != null),
-              onTap: _pushBusy ? null : _openPushSheet,
-            ),
-            _divider(),
-            _tile(
-              icon: Icons.notifications_paused_rounded,
-              title: 'Silenced pairs',
-              subtitle: _muted == 0
-                  ? 'None — every followed pair can alert you'
-                  : '$_muted of your pairs are muted',
-              trailing: Text('$_muted',
-                  style: Obsidian.dataTable(size: 15, w: FontWeight.w700)),
-            ),
-          ]),
-          const SizedBox(height: Obsidian.gutter),
-          ..._tradesSection(),
-          _section('CONNECTION', [
-            _tile(
-              icon: _checking ? Icons.sync_rounded : Icons.dns_rounded,
-              title: 'Server address',
-              subtitle: widget.client.base,
-              trailing: _checking
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Obsidian.primary))
-                  : StatusDot(live: _linked),
-              onTap: _editHost,
-            ),
-            _divider(),
-            _tile(
-              icon: Icons.key_rounded,
-              title: 'Access token',
-              subtitle: widget.client.token.isEmpty
-                  ? 'none — server is on this network'
-                  : '•' * 16,
-              onTap: _editToken,
-            ),
-          ]),
-          const SizedBox(height: Obsidian.gutter),
-          _section('ABOUT', [
-            _tile(
-              icon: Icons.gavel_rounded,
-              title: 'What ThusIldy does',
-              subtitle: 'Reads and analyses. It never places an order, holds '
-                  'a key, or moves money.',
-            ),
-            _divider(),
-            _tile(
-              icon: Icons.query_stats_rounded,
-              title: 'Accuracy',
-              subtitle: 'Most timeframes backtest at or near chance (AUC '
-                  '0.46–0.53, where 0.5 is a coin flip). The 1h models are '
-                  'the exception at 0.52–0.54 across four assets. Small and '
-                  'consistent is not the same as reliable.',
-            ),
-          ]),
-          const SizedBox(height: 26),
-          SizedBox(
-            height: 50,
-            child: OutlinedButton(
-              onPressed: _confirmSignOut,
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(Obsidian.rLg)),
-              ),
-              child: Text('SIGN OUT',
-                  style:
-                      Obsidian.labelSm(color: Obsidian.redSoft, size: 12)),
-            ),
-          ),
+          _topBar(a),
+          const SizedBox(height: 16),
+          _summaryCard(stats),
+          const SizedBox(height: 14),
+          _tabBar(),
+          const SizedBox(height: 16),
+          // ONE TAB AT A TIME. Bot Instructions and Preferences are built
+          // only when chosen, so the trade log is not buried under prose.
+          if (_tab == 0) ..._entriesTab(stats),
+          if (_tab == 1) ..._instructionsTab(),
+          if (_tab == 2) ..._preferencesTab(a),
         ],
       ),
     );
   }
 
+  Widget _topBar(Account a) {
+    final initials = a.identifier.isEmpty
+        ? '?'
+        : a.identifier.trim().substring(0, 1).toUpperCase();
+    return Row(
+      children: [
+        Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Obsidian.primary.withValues(alpha: 0.12),
+            border: Border.all(color: Obsidian.primary.withValues(alpha: 0.4)),
+          ),
+          alignment: Alignment.center,
+          child: Text(initials,
+              style: Obsidian.dataTable(
+                  size: 17, color: Obsidian.primary, w: FontWeight.w700)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(a.identifier,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Obsidian.headlineMd()),
+                  ),
+                  const SizedBox(width: 7),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Obsidian.primary.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: Obsidian.primary.withValues(alpha: 0.3)),
+                    ),
+                    child: Text(_tierName(a).toUpperCase(),
+                        style:
+                            Obsidian.labelSm(color: Obsidian.primary, size: 9)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Row(
+                children: [
+                  StatusDot(live: _linked, size: 7),
+                  const SizedBox(width: 6),
+                  Text(_linked ? 'Connected' : 'Server unreachable',
+                      style: Obsidian.dataTable(
+                          size: 11, color: Obsidian.outline)),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // The settings button from the design: it opens Preferences rather
+        // than a second place where settings live.
+        _roundButton(Icons.settings_rounded, () => setState(() => _tab = 2)),
+      ],
+    );
+  }
+
+  Widget _roundButton(IconData icon, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.white.withValues(alpha: 0.05),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+          ),
+          child: Icon(icon, size: 19, color: Obsidian.onSurfaceVariant),
+        ),
+      );
+
+  /// The headline card.
+  ///
+  /// NOT A PORTFOLIO VALUE. The design shows "$48,290.45" under "Trading
+  /// Portfolio", which would require reading an exchange account — this app
+  /// has no key and never will. What it shows instead is the thing it can
+  /// actually account for: what your logged trades have made, split into
+  /// what is banked and what is still moving.
+  Widget _summaryCard(JournalStats s) {
+    final net = s.net;
+    final tone = net >= 0 ? Obsidian.green : Obsidian.red;
+    return GlassPanel(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('LOGGED PERFORMANCE',
+                        style: Obsidian.labelSm(size: 10)),
+                    const SizedBox(height: 4),
+                    Text('${net >= 0 ? '+' : ''}${money(net, dp: 2)}',
+                        style: Obsidian.dataTable(
+                            size: 26, color: tone, w: FontWeight.w700)),
+                  ],
+                ),
+              ),
+              if (s.open > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Obsidian.primary.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(
+                        color: Obsidian.primary.withValues(alpha: 0.22)),
+                  ),
+                  child: Text('${s.open} open',
+                      style: Obsidian.dataTable(
+                          size: 11, color: Obsidian.primary)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+              '${money(s.realised, dp: 2)} banked · '
+              '${money(s.unrealised, dp: 2)} still moving',
+              style: Obsidian.dataTable(size: 10.5, color: Obsidian.outline)),
+          const SizedBox(height: 12),
+          Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _stat('Total Logs', '${s.total}', Obsidian.onSurface),
+              _stat(
+                  'Win Rate',
+                  s.winRate == null
+                      ? '—'
+                      : '${s.winRate!.toStringAsFixed(1)}%',
+                  s.winRate == null ? Obsidian.outline : Obsidian.green),
+              _stat(
+                  'Profit Factor',
+                  s.profitFactor == null
+                      ? '—'
+                      : s.profitFactor!.toStringAsFixed(2),
+                  s.profitFactor == null
+                      ? Obsidian.outline
+                      : Obsidian.primary),
+            ],
+          ),
+          if (_dailyStopBreached(s)) ...[
+            const SizedBox(height: 12),
+            _dailyStopBanner(s),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _stat(String label, String value, Color tone) => Expanded(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 3),
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.22),
+            borderRadius: BorderRadius.circular(Obsidian.rMd),
+          ),
+          child: Column(
+            children: [
+              Text(label,
+                  style: Obsidian.body(color: Obsidian.outline, size: 10.5)),
+              const SizedBox(height: 3),
+              Text(value,
+                  style: Obsidian.dataTable(
+                      size: 13.5, color: tone, w: FontWeight.w700)),
+            ],
+          ),
+        ),
+      );
+
+  /// Has today's realised loss passed the line you drew?
+  ///
+  /// Realised only, and today only. A floating loss on an open position is
+  /// not a loss you have taken, and folding it in would trip the warning on
+  /// every drawdown you were sitting through on purpose.
+  bool _dailyStopBreached(JournalStats s) {
+    if (_dailyStopPct <= 0 || _balance == null || _balance! <= 0) return false;
+    return -s.realisedToday >= _balance! * _dailyStopPct / 100.0;
+  }
+
+  Widget _dailyStopBanner(JournalStats s) => Container(
+        padding: const EdgeInsets.all(11),
+        decoration: BoxDecoration(
+          color: Obsidian.red.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(Obsidian.rMd),
+          border: Border.all(color: Obsidian.red.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.shield_rounded,
+                size: 17, color: Obsidian.redSoft),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                  'Daily stop reached: ${money(s.realisedToday, dp: 2)} today, '
+                  'past your ${_dailyStopPct.toStringAsFixed(1)}% limit. '
+                  'The app cannot stop you trading — it holds no keys — but '
+                  'this is the line you drew.',
+                  style: Obsidian.body(color: Obsidian.redSoft, size: 11)),
+            ),
+          ],
+        ),
+      );
+
+  Widget _tabBar() {
+    Widget tab(int i, String label) {
+      final on = _tab == i;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => setState(() => _tab = i),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 130),
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: on
+                  ? Obsidian.primary.withValues(alpha: 0.16)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(Obsidian.rMd - 2),
+              border: Border.all(
+                  color: on
+                      ? Obsidian.primary.withValues(alpha: 0.3)
+                      : Colors.transparent),
+            ),
+            alignment: Alignment.center,
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Obsidian.body(
+                    size: 11.5,
+                    color: on ? Obsidian.primary : Obsidian.outline)),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(Obsidian.rMd + 2),
+      ),
+      child: Row(children: [
+        tab(0, 'Logged Entries'),
+        tab(1, 'Bot Instructions'),
+        tab(2, 'Preferences'),
+      ]),
+    );
+  }
+
   String _tierName(Account a) => switch (a.tier) {
         'admin' => 'Owner',
-        'pro' => a.entitled ? 'Subscribed' : 'Subscription lapsed',
+        'pro' => a.entitled ? 'Subscribed' : 'Lapsed',
         _ => 'Free',
       };
 
@@ -850,100 +986,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return 'Chart only — the analysis needs a subscription';
   }
 
-  Widget _identityCard(Account a) => GlassPanel(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            Container(
-              width: 58,
-              height: 58,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Obsidian.surfaceLowest,
-                border:
-                    Border.all(color: Colors.white.withValues(alpha: 0.10)),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                  a.operator
-                      ? '★'
-                      : (a.identifier.isEmpty
-                          ? '?'
-                          : a.identifier.characters.first.toUpperCase()),
-                  style: Obsidian.headlineMd()),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(a.operator ? 'Operator' : a.identifier,
-                      style: Obsidian.headlineMd()),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 9, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: (a.entitled ? Obsidian.greenDim : Obsidian.outline)
-                          .withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(_tierName(a).toUpperCase(),
-                        style: Obsidian.labelSm(
-                            size: 9.5,
-                            color: a.entitled
-                                ? Obsidian.greenDim
-                                : Obsidian.outline)),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-
-  /// Your trade log: everything entered on this device, open first.
-  ///
-  /// LOGGED, NOT PLACED. Nothing in this app has ever sent an order — these
-  /// are trades you made elsewhere and recorded here so they can be marked
-  /// against the same prices the rest of the app uses. The empty state says
-  /// so, because the empty state is where someone forms their idea of what
-  /// the feature is.
-  List<Widget> _tradesSection() {
-    final open = _trades.where((t) => t.isOpen).length;
-    final closed = _trades.length - open;
-    // Closed trades only, and `pnl(null)` is right for them: a closed trade
-    // marks against the exit you recorded, never against today's price.
-    final realised = _trades
-        .where((t) => !t.isOpen)
-        .map((t) => t.pnl(null) ?? 0)
-        .fold<double>(0, (a, b) => a + b);
-    // Open profit is live, so it needs the fetched prices.
-    final unrealised = _trades
-        .where((t) => t.isOpen)
-        .map((t) => t.pnl(_prices[t.symbol]) ?? 0)
-        .fold<double>(0, (a, b) => a + b);
-
+  // ------------------------------------------------------------- tab 0
+  List<Widget> _entriesTab(JournalStats stats) {
+    final pairs = _trades.map((t) => t.symbol).toSet().toList()..sort();
+    final shown = _pairFilter == null
+        ? _trades
+        : _trades.where((t) => t.symbol == _pairFilter).toList();
     return [
       Row(
         children: [
-          Text('YOUR TRADES', style: Obsidian.labelSm(size: 10.5)),
-          const Spacer(),
-          if (_trades.isNotEmpty)
-            Text(
-                [
-                  if (open > 0)
-                    '$open open ${unrealised >= 0 ? '+' : ''}'
-                        '${money(unrealised, dp: 2)}',
-                  if (closed > 0)
-                    '$closed closed ${realised >= 0 ? '+' : ''}'
-                        '${money(realised, dp: 2)}',
-                ].join('  ·  '),
-                style: Obsidian.dataTable(
-                    size: 11,
-                    color: (open > 0 ? unrealised : realised) >= 0
-                        ? Obsidian.green
-                        : Obsidian.red)),
+          Container(
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(
+                  color: Obsidian.primary, shape: BoxShape.circle)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('LOGGED MARKET ENTRIES',
+                style: Obsidian.labelSm(size: 10.5)),
+          ),
+          if (pairs.length > 1)
+            DropdownButton<String?>(
+              value: _pairFilter,
+              isDense: true,
+              underline: const SizedBox.shrink(),
+              dropdownColor: Obsidian.surfaceContainer,
+              iconEnabledColor: Obsidian.outline,
+              style: Obsidian.dataTable(size: 11.5),
+              items: [
+                DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('All pairs (${_trades.length})',
+                        style: Obsidian.dataTable(size: 11.5))),
+                for (final p in pairs)
+                  DropdownMenuItem<String?>(
+                      value: p,
+                      child: Text(TradeRow.short(p),
+                          style: Obsidian.dataTable(size: 11.5))),
+              ],
+              onChanged: (v) => setState(() => _pairFilter = v),
+            ),
         ],
       ),
       const SizedBox(height: 10),
@@ -957,8 +1039,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const Icon(Icons.receipt_long_rounded,
                     size: 18, color: Obsidian.outline),
                 const SizedBox(width: 10),
-                Text('No trades logged yet',
-                    style: Obsidian.body(size: 13.5)),
+                Text('No trades logged yet', style: Obsidian.body(size: 13.5)),
               ]),
               const SizedBox(height: 8),
               Text(
@@ -970,30 +1051,420 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         )
       else
-        for (final t in _trades) ...[
-          Dismissible(
-            key: ValueKey(t.id),
-            direction: DismissDirection.endToStart,
-            confirmDismiss: (_) async {
-              await _deleteTrade(t);
-              return false;          // the handler reloads; do not animate out
-            },
-            background: Container(
-              alignment: Alignment.centerRight,
-              padding: const EdgeInsets.only(right: 20),
-              child: const Icon(Icons.delete_outline_rounded,
-                  color: Obsidian.redSoft, size: 20),
-            ),
-            child: TradeRow(
-              entry: t,
-              livePrice: _prices[t.symbol],
-              onClose: t.isOpen ? () => _closeTrade(t) : null,
+        for (final t in shown) ...[
+          JournalCard(
+            entry: t,
+            livePrice: _prices[t.symbol],
+            onClose: t.isOpen ? () => _closeTrade(t) : null,
+            onDelete: () => _deleteTrade(t),
+          ),
+          const SizedBox(height: 10),
+        ],
+      if (_trades.isNotEmpty && stats.closed > 0) ...[
+        const SizedBox(height: 4),
+        Text(
+            '${stats.wins} won · ${stats.losses} lost'
+            '${stats.closed - stats.wins - stats.losses > 0 ? " · "
+                "${stats.closed - stats.wins - stats.losses} flat" : ""}',
+            textAlign: TextAlign.center,
+            style: Obsidian.dataTable(size: 11, color: Obsidian.outline)),
+      ],
+    ];
+  }
+
+  // ------------------------------------------------------------- tab 1
+  List<Widget> _instructionsTab() => [
+        Row(
+          children: [
+            const Icon(Icons.menu_book_rounded,
+                size: 16, color: Obsidian.primary),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text('HOW TO USE THIS', style: Obsidian.labelSm(size: 10.5))),
+            Text('${howToSteps.length} steps',
+                style: Obsidian.dataTable(size: 11, color: Obsidian.outline)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        for (final h in howToSteps) ...[
+          GlassPanel(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        color: Obsidian.primary.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(h.n,
+                          style: Obsidian.dataTable(
+                              size: 10.5,
+                              color: Obsidian.primary,
+                              w: FontWeight.w700)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(h.title,
+                          style: Obsidian.bodyLg().copyWith(
+                              fontSize: 13.5, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(h.body,
+                    style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+              ],
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
         ],
-      const SizedBox(height: Obsidian.gutter - Obsidian.panelGap),
-    ];
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Icon(Icons.shield_outlined, size: 16, color: Obsidian.amber),
+            const SizedBox(width: 8),
+            Text('WHAT YOU AGREED TO', style: Obsidian.labelSm(size: 10.5)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        for (final a in acknowledgementPoints) ...[
+          GlassPanel(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(a.icon, size: 17, color: a.tone),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(a.title,
+                          style: Obsidian.bodyLg().copyWith(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 5),
+                      Text(a.body,
+                          style: Obsidian.body(
+                              color: Obsidian.outline, size: 11.5)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        const SizedBox(height: 6),
+        SizedBox(
+          height: 44,
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(Obsidian.rMd)),
+            ),
+            onPressed: () => showAcknowledgement(context, firstRun: false),
+            icon: const Icon(Icons.open_in_full_rounded,
+                size: 15, color: Obsidian.outline),
+            label: Text('Show the full notice again',
+                style: Obsidian.body(size: 12.5)),
+          ),
+        ),
+      ];
+
+  // ------------------------------------------------------------- tab 2
+  //
+  // EVERY SETTING LIVES HERE NOW. They used to be seven stacked sections on
+  // the main profile page, above and below the trade log; the log was the
+  // thing people open this screen for and it was the hardest thing to reach.
+  List<Widget> _preferencesTab(Account a) => [
+        _section('SUBSCRIPTION', [
+          _tile(
+            icon: a.tier == 'admin'
+                ? Icons.verified_user_rounded
+                : Icons.workspace_premium_rounded,
+            title: _tierName(a),
+            subtitle: _tierDetail(a),
+            trailing: StatusDot(live: a.entitled),
+          ),
+        ]),
+        const SizedBox(height: Obsidian.gutter),
+        _section('RISK', [
+          _tile(
+            icon: Icons.shield_rounded,
+            title: 'Auto daily stop limit',
+            subtitle: _dailyStopPct <= 0
+                ? 'Off — no warning however the day goes'
+                : 'Warn when today\u2019s closed trades lose more than '
+                    '${_dailyStopPct.toStringAsFixed(1)}% of your balance',
+            trailing: Text(
+                _dailyStopPct <= 0
+                    ? 'OFF'
+                    : '-${_dailyStopPct.toStringAsFixed(1)}%',
+                style: Obsidian.dataTable(
+                    size: 13,
+                    color: _dailyStopPct <= 0
+                        ? Obsidian.outline
+                        : Obsidian.redSoft,
+                    w: FontWeight.w700)),
+            onTap: _pickDailyStop,
+          ),
+          _divider(),
+          _tile(
+            icon: Icons.account_balance_wallet_rounded,
+            title: 'Account balance',
+            subtitle: _balance == null
+                ? 'Not set — the stop limit and the % buttons need it'
+                : 'You entered ${_balance!.toStringAsFixed(4)}. '
+                    'ThusIldy cannot read your exchange.',
+            onTap: _pickBalance,
+          ),
+        ]),
+        const SizedBox(height: Obsidian.gutter),
+        _section('SIGNALS', [
+          _tile(
+            icon: Icons.tune_rounded,
+            title: 'Signal strength',
+            subtitle: _levels[_sensitivity]?.$1 ?? 'Strong only',
+            onTap: _pickSensitivity,
+          ),
+        ]),
+        const SizedBox(height: Obsidian.gutter),
+        _section('ALERTS', [
+          _tile(
+            icon: Notifications.instance.granted
+                ? Icons.notifications_active_rounded
+                : Icons.notifications_off_rounded,
+            title: 'System permission',
+            subtitle: Notifications.instance.granted
+                ? 'Granted — alerts can reach this phone'
+                : 'Denied in system settings; nothing will be delivered',
+            trailing: StatusDot(live: Notifications.instance.granted),
+          ),
+          _divider(),
+          _tile(
+            icon: Icons.send_rounded,
+            title: 'Send test notifications',
+            subtitle: _testing
+                ? 'Sent — pull down the shade to see them'
+                : 'One of each kind, right now',
+            trailing: _testing
+                ? const Icon(Icons.check_rounded,
+                    size: 18, color: Obsidian.greenDim)
+                : const Icon(Icons.chevron_right_rounded,
+                    size: 18, color: Obsidian.outline),
+            onTap: _sendTests,
+          ),
+          _divider(),
+          _tile(
+            icon: Icons.schedule_rounded,
+            title: 'Background checks',
+            subtitle: _backgroundDetail,
+            trailing: StatusDot(
+                live: _bgLastRun != null &&
+                    DateTime.now().difference(_bgLastRun!).inMinutes <= 45),
+            onTap: _loadBackgroundHealth,
+          ),
+          if (Power.instance.supported && !_batteryExempt) ...[
+            _divider(),
+            _tile(
+              icon: Icons.battery_alert_rounded,
+              title: 'Battery optimisation is on',
+              subtitle: 'Android is free to hold the alert check back for '
+                  'hours while the phone is idle. Turning this off for '
+                  'ThusIldy is the only fix on the device itself.',
+              trailing: const Icon(Icons.chevron_right_rounded,
+                  size: 18, color: Obsidian.amber),
+              onTap: _fixBattery,
+            ),
+          ],
+          _divider(),
+          _tile(
+            icon: _push != null
+                ? Icons.cloud_done_rounded
+                : Icons.cloud_off_rounded,
+            title: 'Delivery with the app closed',
+            subtitle: _pushDetail,
+            trailing: _pushBusy
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Obsidian.primary))
+                : StatusDot(live: _push != null),
+            onTap: _pushBusy ? null : _openPushSheet,
+          ),
+          _divider(),
+          _tile(
+            icon: Icons.notifications_paused_rounded,
+            title: 'Silenced pairs',
+            subtitle: _muted == 0
+                ? 'None — every followed pair can alert you'
+                : '$_muted of your pairs are muted',
+            trailing: Text('$_muted',
+                style: Obsidian.dataTable(size: 15, w: FontWeight.w700)),
+          ),
+        ]),
+        const SizedBox(height: Obsidian.gutter),
+        _section('CONNECTION', [
+          _tile(
+            icon: _checking ? Icons.sync_rounded : Icons.dns_rounded,
+            title: 'Server address',
+            subtitle: widget.client.base,
+            trailing: _checking
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Obsidian.primary))
+                : StatusDot(live: _linked),
+            onTap: _editHost,
+          ),
+          _divider(),
+          _tile(
+            icon: Icons.key_rounded,
+            title: 'Access token',
+            subtitle: widget.client.token.isEmpty
+                ? 'none — server is on this network'
+                : '\u2022' * 16,
+            onTap: _editToken,
+          ),
+        ]),
+        const SizedBox(height: 26),
+        SizedBox(
+          height: 50,
+          child: OutlinedButton.icon(
+            onPressed: _confirmSignOut,
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: Obsidian.red.withValues(alpha: 0.22)),
+              backgroundColor: Obsidian.red.withValues(alpha: 0.08),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(Obsidian.rLg)),
+            ),
+            icon: const Icon(Icons.logout_rounded,
+                size: 16, color: Obsidian.redSoft),
+            label: Text('SIGN OUT',
+                style: Obsidian.labelSm(color: Obsidian.redSoft, size: 12)),
+          ),
+        ),
+      ];
+
+  /// The daily loss limit, as a percent of the balance you entered.
+  Future<void> _pickDailyStop() async {
+    final choices = <double>[0, 2, 3, 5, 10];
+    final v = await showModalBottomSheet<double>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(Obsidian.containerPadding),
+          child: GlassPanel(
+            active: true,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('AUTO DAILY STOP LIMIT',
+                    style: Obsidian.labelSm(size: 10.5)),
+                const SizedBox(height: 10),
+                Text(
+                    'When today\u2019s CLOSED trades have lost more than this, '
+                    'the profile shows a warning. Open positions do not count '
+                    '\u2014 a drawdown you are still sitting through is not a '
+                    'loss you have taken.',
+                    style:
+                        Obsidian.body(color: Obsidian.outline, size: 11.5)),
+                const SizedBox(height: 6),
+                Text(
+                    'It cannot stop you trading. This app holds no exchange '
+                    'key, so the limit is a line you drew and have to respect '
+                    'yourself.',
+                    style: Obsidian.body(color: Obsidian.amber, size: 11.5)),
+                const SizedBox(height: 16),
+                for (final c in choices) ...[
+                  GestureDetector(
+                    onTap: () => Navigator.of(ctx).pop(c),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 13),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: (_dailyStopPct - c).abs() < 0.01
+                            ? Obsidian.primary.withValues(alpha: 0.12)
+                            : Colors.white.withValues(alpha: 0.04),
+                        borderRadius: BorderRadius.circular(Obsidian.rMd),
+                        border: Border.all(
+                            color: (_dailyStopPct - c).abs() < 0.01
+                                ? Obsidian.primary.withValues(alpha: 0.4)
+                                : Colors.transparent),
+                      ),
+                      child: Text(
+                          c <= 0 ? 'Off' : '-${c.toStringAsFixed(0)}% in a day',
+                          style: Obsidian.body(size: 13.5)),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (v == null || !mounted) return;
+    await Settings.instance.saveDailyStopPct(v);
+    if (mounted) setState(() => _dailyStopPct = v);
+  }
+
+  Future<void> _pickBalance() async {
+    final c = TextEditingController(text: _balance?.toString() ?? '');
+    final v = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        title: Text('Account balance', style: Obsidian.headlineMd()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+                'ThusIldy holds no exchange key, so it cannot read this. It is '
+                'used for the daily stop limit and the percentage buttons on '
+                'the entry form, and nowhere else.',
+                style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: c,
+              autofocus: true,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              style: Obsidian.dataTable(size: 15),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('Cancel', style: Obsidian.body())),
+          TextButton(
+              onPressed: () => Navigator.of(ctx)
+                  .pop(double.tryParse(c.text.replaceAll(',', ''))),
+              child: Text('Save',
+                  style: Obsidian.body(color: Obsidian.primary))),
+        ],
+      ),
+    );
+    if (v == null || v <= 0 || !mounted) return;
+    await Trades.instance.saveBalance(v);
+    if (mounted) setState(() => _balance = v);
   }
 
   Widget _section(String label, List<Widget> rows) => Column(

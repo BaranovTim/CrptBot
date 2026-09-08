@@ -12,6 +12,7 @@ import 'dart:convert';
 
 import 'package:tradingbot_app/api/background.dart';
 import 'package:tradingbot_app/api/muted.dart';
+import 'package:tradingbot_app/api/journal.dart';
 import 'package:tradingbot_app/api/trades.dart';
 import 'package:tradingbot_app/api/push.dart';
 import 'package:tradingbot_app/api/settings.dart';
@@ -482,6 +483,71 @@ void main() {
     store.resetForTest();
     expect(await store.load(), isEmpty,
         reason: 'deleted trades came back from the backup');
+  });
+
+  test('win rate and profit factor count only decided trades', () {
+    TradeEntry closed(String sym, double entry, double exit, double size) =>
+        TradeEntry.create(
+                symbol: sym, side: 'LONG', size: size, entryPrice: entry)
+            .closedAtPrice(exit);
+
+    final s = JournalStats.of([
+      closed('BTCUSDT', 100, 120, 1),   // +20
+      closed('ETHUSDT', 100, 110, 1),   // +10
+      closed('SOLUSDT', 100, 85, 1),    // -15
+      closed('XRPUSDT', 100, 100, 1),   // flat — neither a win nor a loss
+      TradeEntry.create(
+          symbol: 'ADAUSDT', side: 'LONG', size: 1, entryPrice: 100),
+    ], prices: {'ADAUSDT': 150});
+
+    expect(s.total, 5);
+    expect(s.open, 1);
+    expect(s.closed, 4);
+    expect(s.wins, 2);
+    expect(s.losses, 1);
+    // A break-even trade is neither, and counting it as a win is the easiest
+    // possible way to flatter a record.
+    expect(s.winRate, closeTo(200 / 3, 1e-9));
+    expect(s.profitFactor, closeTo(30 / 15, 1e-9));
+    expect(s.realised, closeTo(15, 1e-9));
+    // the open one is marked live, and stays OUT of the win rate
+    expect(s.unrealised, closeTo(50, 1e-9));
+    expect(s.net, closeTo(65, 1e-9));
+  });
+
+  test('an undecided record reports nothing rather than zero', () {
+    // "No trades yet" and "you lose every time" are very different claims and
+    // a 0% would print the second when it means the first.
+    final empty = JournalStats.of(const []);
+    expect(empty.winRate, isNull);
+    expect(empty.profitFactor, isNull);
+
+    // an unbeaten record has no finite profit factor either
+    final unbeaten = JournalStats.of([
+      TradeEntry.create(
+              symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100)
+          .closedAtPrice(150),
+    ]);
+    expect(unbeaten.winRate, 100);
+    expect(unbeaten.profitFactor, isNull);
+  });
+
+  test('the daily figure counts today only, and closed trades only', () {
+    final now = DateTime.utc(2026, 9, 8, 12);
+    final todayLoss = TradeEntry.create(
+            symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100)
+        .closedAtPrice(90);
+    final s = JournalStats.of([todayLoss], now: now);
+    // closedAtPrice stamps "now", so this one is today
+    expect(s.realisedToday, closeTo(-10, 1e-9));
+
+    // an OPEN position deep in drawdown is not a loss you have taken
+    final floating = TradeEntry.create(
+        symbol: 'ETHUSDT', side: 'LONG', size: 1, entryPrice: 100);
+    final s2 = JournalStats.of([floating],
+        prices: {'ETHUSDT': 1}, now: now);
+    expect(s2.realisedToday, 0);
+    expect(s2.unrealised, closeTo(-99, 1e-9));
   });
 
   test('the status badge never claims the bot trades', () {

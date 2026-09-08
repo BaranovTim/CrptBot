@@ -138,6 +138,58 @@ class Settings {
 
   Future<void> saveInterval(String v) => _put(_intervalKey, v);
 
+  /// Which acknowledgement version this account has read.
+  ///
+  /// PER ACCOUNT, not per device. A second person signing in on the same
+  /// phone has not read anything, and the whole point of the notice is that
+  /// it reaches the person about to act on the numbers.
+  static String _ackKey(String identifier) =>
+      'ack.version.v1.${identifier.trim().toLowerCase()}';
+
+  Future<int> acknowledgedVersion(String identifier) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getInt(_ackKey(identifier)) ?? 0;
+    } catch (_) {
+      // Storage unavailable: treat as unread. Showing it twice is a mild
+      // annoyance; never showing it is the failure that matters.
+      return 0;
+    }
+  }
+
+  Future<void> saveAcknowledged(String identifier, int version) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_ackKey(identifier), version);
+    } catch (_) {}
+  }
+
+  /// The daily loss the app should warn you about, as a percent of the
+  /// balance you entered. Zero means off.
+  ///
+  /// WHAT IT CAN AND CANNOT DO. It cannot stop you trading — there are no
+  /// keys here and never will be. It reads your own logged trades, adds up
+  /// what today's closed ones lost, and says plainly when that has passed the
+  /// line you drew. A circuit breaker you have to obey yourself is still
+  /// worth having; one the app pretended to enforce would not be.
+  static const _dailyStopKey = 'risk.daily_stop_pct.v1';
+
+  Future<double> dailyStopPct() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getDouble(_dailyStopKey) ?? 5.0;
+    } catch (_) {
+      return 5.0;
+    }
+  }
+
+  Future<void> saveDailyStopPct(double v) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_dailyStopKey, v.clamp(0.0, 100.0));
+    } catch (_) {}
+  }
+
   Future<void> clearSession() async {
     await _put(_tokenKey, '');
     await _put(_accountKey, '');
