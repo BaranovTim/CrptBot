@@ -154,6 +154,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!mounted) return;
     _sortAndShow(stored);
     unawaited(_loadPrices(stored));
+    // The socket carries only what is asked for, so it has to be told which
+    // pairs are open. Without this it connects to nothing and every card
+    // sits on a dash — which is exactly what happened.
+    _ticker.watch(stored
+        .where((t) => t.isOpen && t.symbol.endsWith('USDT'))
+        .map((t) => t.symbol));
 
     final settled = await Trades.instance.settle(widget.client);
     final all = await Trades.instance.load();

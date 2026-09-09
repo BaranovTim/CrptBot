@@ -4,10 +4,25 @@
 ///     That one follows the pair the dashboard is showing, on
 ///     `<symbol>@bookTicker` — one socket per symbol. Market lists a dozen
 ///     coins at once, and a dozen sockets is a dozen handshakes, a dozen
-///     reconnect timers and a dozen things to leak. Binance publishes
-///     `!miniTicker@arr`, which pushes EVERY symbol that traded in the last
-///     second down a single connection, so the cost here is one socket
-///     regardless of how long the watchlist gets.
+///     reconnect timers and a dozen things to leak. Binance's COMBINED
+///     stream endpoint carries any number of streams down one connection,
+///     so the cost here is one socket regardless of how long the list gets.
+///
+/// THE BUG THIS WAS REWRITTEN TO FIX
+///     The first version subscribed to `!miniTicker@arr`, the all-market
+///     array stream, which is documented and which the futures endpoint
+///     silently does not serve: the socket opens, stays open, and delivers
+///     NOTHING. Measured — 0 frames in 12 seconds against 267 for a single
+///     `btcusdt@bookTicker` over the same connection.
+///
+///     It went unnoticed on the Market screen because the rows fall back to
+///     the price from `/api/coins`, which refreshes on load and looked fine.
+///     The Profile trade cards have no such fallback, so they simply never
+///     showed a live price — which is exactly how it was reported.
+///
+///     A socket that is open and silent looks connected. That is why `live`
+///     below is derived from when a frame last ARRIVED and never from socket
+///     state, and why the watchdog exists.
 ///
 /// WHY IT DOES NOT GO THROUGH THE SERVER
 ///     The droplet has one core and 967MB, and it already carries the models,
@@ -48,8 +63,36 @@ class MarketTicker {
   bool _closed = false, _connecting = false, _dirty = false;
   DateTime _lastFrame = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// The symbols this socket is carrying.
+  Set<String> _symbols = <String>{};
+
   Stream<Map<String, double>> get stream => _out.stream;
   Map<String, double> get prices => Map.unmodifiable(_prices);
+
+  /// Point the socket at a set of pairs.
+  ///
+  /// Reconnects only when the set actually CHANGES: the Market screen calls
+  /// this on every reload, and tearing down a working socket to resubscribe
+  /// to the same six symbols would drop frames for no reason.
+  void watch(Iterable<String> symbols) {
+    final want = symbols
+        .map((s) => s.trim().toUpperCase())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+    if (want.isEmpty || (want.length == _symbols.length &&
+        want.every(_symbols.contains))) {
+      return;
+    }
+    _symbols = want;
+    if (_ch != null || _connecting) {
+      _sub?.cancel();
+      _sub = null;
+      _ch?.sink.close();
+      _ch = null;
+      _connecting = false;
+    }
+    if (!_closed) _connect();
+  }
 
   /// Whether a frame has arrived recently enough to call this live.
   ///
@@ -60,7 +103,7 @@ class MarketTicker {
 
   void start() {
     if (_closed || _ch != null || _connecting) return;
-    _connect();
+    if (_symbols.isNotEmpty) _connect();
     _pump ??= Timer.periodic(emitEvery, (_) {
       if (!_dirty) return;
       _dirty = false;
@@ -74,11 +117,16 @@ class MarketTicker {
   }
 
   void _connect() {
+    if (_symbols.isEmpty) return;
     _connecting = true;
     _retry?.cancel();
-    // Every symbol, one connection. The payload is an array of mini tickers,
-    // each `{s: symbol, c: close, ...}`.
-    final uri = Uri.parse('wss://fstream.binance.com/ws/!miniTicker@arr');
+    // One connection, many streams. `bookTicker` pushes the best bid and ask
+    // on every change — the freshest thing Binance publishes, and verified
+    // to actually arrive, which `!miniTicker@arr` was not.
+    final streams =
+        _symbols.map((s) => '${s.toLowerCase()}@bookTicker').join('/');
+    final uri =
+        Uri.parse('wss://fstream.binance.com/stream?streams=$streams');
     try {
       final ch = WebSocketChannel.connect(uri);
       _ch = ch;
@@ -105,14 +153,22 @@ class MarketTicker {
     _lastFrame = DateTime.now();
     try {
       final decoded = json.decode(raw as String);
-      if (decoded is! List) return;
-      for (final e in decoded) {
-        if (e is! Map) continue;
-        final sym = e['s'] as String?;
-        final close = double.tryParse('${e['c']}');
-        if (sym == null || close == null) continue;
-        _prices[sym] = close;
-      }
+      if (decoded is! Map) return;
+      // Combined streams wrap each payload as {stream, data}.
+      final d = decoded['data'];
+      if (d is! Map) return;
+      final sym = d['s'] as String?;
+      final bid = double.tryParse('${d['b']}');
+      final ask = double.tryParse('${d['a']}');
+      if (sym == null) return;
+      // THE MID, not the bid. A position is marked between the two — quoting
+      // the bid would show every long as slightly worse than it is and every
+      // short as slightly better, all day.
+      final px = (bid != null && ask != null && bid > 0 && ask > 0)
+          ? (bid + ask) / 2
+          : (bid ?? ask);
+      if (px == null || px <= 0) return;
+      _prices[sym] = px;
       _dirty = true;
     } catch (e) {
       debugPrint('[ticker] bad frame: $e');

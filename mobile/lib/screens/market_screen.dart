@@ -136,6 +136,9 @@ class _MarketScreenState extends State<MarketScreen> {
         _lastFailure = null;
         _waitingSince = DateTime.now();
       });
+      // Point the socket at the list actually on screen. `watch` reconnects
+      // only when the set changes, so calling it on every reload is free.
+      _ticker.watch(c.map((x) => x.symbol));
     } catch (e) {
       if (!mounted) return;
       _lastFailure = e.toString();
