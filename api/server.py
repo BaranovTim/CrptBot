@@ -181,6 +181,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(self, html: str, status: int = 200) -> None:
+        """For the two Stripe landing pages, and nothing else.
+
+        The API speaks JSON to the app; these two are opened by a person's
+        browser after a payment, and a browser shown `{"ok": true}` has told
+        that person nothing about whether their money arrived.
+        """
+        body = html.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self) -> None:                       # noqa: N802
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -205,8 +220,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # Reachable with no credential at all. Health must stay open for the
     # container probe, and a login form obviously cannot require a session.
+    # The two Stripe landing pages are open because they must be: the
+    # customer arrives on them straight from Stripe's payment page, in
+    # whatever browser their phone opened, carrying no session token. They
+    # read nothing and grant nothing -- the upgrade is the webhook's job,
+    # not this page's -- so being open costs nothing.
     OPEN = ("/", "/api", "/api/health",
-            "/api/auth/login", "/api/auth/register", "/api/billing/plans")
+            "/api/auth/login", "/api/auth/register", "/api/billing/plans",
+            "/billing/done", "/billing/cancelled")
 
     # Reachable by a signed-in account with no subscription. The chart is
     # here because the paywall is meant to show the graph and withhold the
@@ -329,6 +350,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(user.public() if user else
                                {"identifier": None, "tier": "free",
                                 "entitled": False})
+            elif route in ("/billing/done", "/billing/cancelled"):
+                from api.billing import landing_html, landing_state
+                self._send_html(landing_html(
+                    landing_state(route, opt("session_id"))))
             elif route == "/api/billing/plans":
                 from api.billing import plans
                 self._send({"plans": plans(), "provider": "stripe",
@@ -602,8 +627,62 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return {}
 
+    def _stripe_webhook(self) -> None:
+        """Stripe's events. Authenticated by signature, not by session."""
+        from api.accounts import get_accounts
+        from api.billing import SignatureError, apply_webhook, verify_signature
+
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n <= 0 or n > 512 * 1024:
+            self._send({"error": "empty or oversized payload"}, status=400)
+            return
+        raw = self.rfile.read(n)
+
+        try:
+            event = verify_signature(raw, self.headers.get(
+                "Stripe-Signature", ""))
+        except SignatureError as e:
+            # 400, and deliberately not retryable: a bad signature will not
+            # become good on the fifth attempt. Logged at warning because on
+            # a public URL this is either a misconfiguration or somebody
+            # probing for exactly the hole this check closes.
+            log.warning("stripe webhook rejected: %s", e)
+            self._send({"error": str(e)}, status=400)
+            return
+        except NotImplementedError as e:
+            self._send({"error": str(e)}, status=501)
+            return
+
+        ident = apply_webhook(event, get_accounts())
+        # 200 even when nothing was applied. Stripe retries any non-2xx for
+        # days and then disables the endpoint, so an event type we do not
+        # act on must still be acknowledged rather than left to poison the
+        # delivery queue for the events we do care about. A genuine failure
+        # inside apply_webhook raises instead, and the 500 asks for a retry
+        # that might actually succeed.
+        self._send({"ok": True, "applied": bool(ident)})
+
     def do_POST(self) -> None:                          # noqa: N802
         route = urlparse(self.path).path.rstrip("/") or "/"
+
+        # Stripe first: before `_gate`, and before `_body`. Both matter.
+        #
+        # Stripe holds no session token, so its credential is the signature
+        # on the payload; `_gate` knows only about bearer tokens and would
+        # 401 every delivery. And the signature covers the exact bytes on
+        # the wire, which `_body` throws away when it parses -- so this
+        # route has to read `rfile` itself.
+        #
+        # NOT added to OPEN for that reason. This is not an open endpoint,
+        # it is one with a different credential, and listing it as open
+        # would invite someone to reuse that entry for a route where the
+        # signature check does not exist.
+        if route == "/api/billing/webhook":
+            self._stripe_webhook()
+            return
 
         denied = self._gate(route)
         if denied is not None:

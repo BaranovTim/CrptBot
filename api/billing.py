@@ -31,9 +31,12 @@ WHY urllib AND NOT THE STRIPE SDK
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -140,6 +143,118 @@ def _post(path: str, form: Dict[str, str]) -> Dict[str, Any]:
         raise RuntimeError(f"stripe {path}: {detail or e}") from e
 
 
+def _get(path: str) -> Dict[str, Any]:
+    req = urllib.request.Request(
+        f"{STRIPE_API}{path}",
+        headers={"Authorization": f"Bearer {_key()}"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())
+
+
+# `cs_` then Stripe's own id characters, and nothing else. This string comes
+# out of a query parameter and goes into a URL we then call with our secret
+# key attached, so it is validated rather than trusted -- an unchecked value
+# here lets a stranger point our authenticated request at any Stripe path.
+_SESSION_ID = re.compile(r"^cs_[A-Za-z0-9_]{1,200}$")
+
+
+def session_paid(session_id: str) -> Optional[bool]:
+    """True paid, False not, None unknown. `None` is a real answer.
+
+    The landing page must not assert "you are subscribed" on the strength of
+    somebody opening a URL. But it must not call a real payment a failure
+    either, just because Stripe was slow for ten seconds -- so a lookup that
+    cannot complete says "unknown" and the page stays honest about it.
+    """
+    if not _SESSION_ID.match(session_id or "") or not os.environ.get(
+            "STRIPE_SECRET_KEY", ""):
+        return None
+    try:
+        got = _get(f"/checkout/sessions/{session_id}")
+    except Exception as e:
+        log.warning("could not read checkout session: %s", e)
+        return None
+    return got.get("payment_status") == "paid" or got.get(
+        "status") == "complete"
+
+
+# The three things a person can arrive at this page having done. "PENDING"
+# is not a hedge, it is the honest answer when Stripe could not be reached:
+# their money may well have left, and telling them it did not would be worse
+# than telling them we are still checking.
+PAID, PENDING, CANCELLED = "paid", "pending", "cancelled"
+
+_COPY = {
+    PAID: ("&#10003;", "#34d399", "Payment received",
+           "You're subscribed. Reopen ThusIldy \u2014 your account is "
+           "already upgraded.",
+           "Stripe has emailed your receipt."),
+    PENDING: ("&#8226;", "#fbbf24", "Payment is being confirmed",
+              "This normally takes a few seconds. Reopen ThusIldy and pull "
+              "down to refresh; if it still shows Free in a minute or two, "
+              "nothing is lost \u2014 get in touch and we will sort it.",
+              "Do not pay again. A second checkout would charge you twice."),
+    CANCELLED: ("&#8592;", "#94a3b8", "No payment was taken",
+                "You closed the checkout before it finished, so nothing was "
+                "charged. Reopen ThusIldy whenever you want to try again.",
+                "Your account is unchanged."),
+}
+
+
+def landing_state(route: str, session_id: Optional[str]) -> str:
+    """Which page to show. Separate from the handler so it can be tested.
+
+    The `is True` is the whole point: `session_paid` answers None when it
+    could not reach Stripe, and None must never be read as "not paid" by
+    someone whose card was charged eight seconds ago.
+    """
+    if route.rstrip("/").endswith("cancelled"):
+        return CANCELLED
+    return PAID if session_paid(session_id or "") is True else PENDING
+
+
+def landing_html(state: str) -> str:
+    """The page Stripe sends the customer to. Deliberately self-contained.
+
+    No fonts, no scripts, no CDN. It is the first thing somebody sees after
+    handing over money, on whatever browser their phone opened, possibly on
+    a bad connection -- so it has to render from the one response, with
+    nothing left to fetch that could fail or hang.
+    """
+    mark, colour, title, body, foot = _COPY.get(state, _COPY[PENDING])
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ThusIldy</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  body {{ margin: 0; min-height: 100vh; display: flex; align-items: center;
+         justify-content: center; background: #0b0f14; color: #e6edf3;
+         font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Roboto, sans-serif; padding: 24px; box-sizing: border-box; }}
+  .card {{ width: 100%; max-width: 26rem; background: #121821;
+          border: 1px solid #1f2937; border-radius: 18px; padding: 32px 28px;
+          text-align: center; }}
+  .mark {{ width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 26px; color: #0b0f14; background: {colour}; }}
+  h1 {{ font-size: 1.3rem; margin: 0 0 12px; letter-spacing: -0.01em; }}
+  p {{ margin: 0 0 18px; color: #9fb0c0; }}
+  .foot {{ margin: 0; padding-top: 18px; border-top: 1px solid #1f2937;
+          font-size: 0.85rem; color: #64748b; }}
+  .brand {{ margin-top: 22px; font-size: 0.8rem; letter-spacing: 0.14em;
+           text-transform: uppercase; color: #475569; }}
+</style></head>
+<body><div class="card">
+  <div class="mark">{mark}</div>
+  <h1>{title}</h1>
+  <p>{body}</p>
+  <p class="foot">{foot}</p>
+  <div class="brand">ThusIldy</div>
+</div></body></html>"""
+
+
 def checkout_session(user, plan_id: Optional[str] = None) -> Dict[str, Any]:
     """A Stripe Checkout URL for this account to open in a browser.
 
@@ -174,14 +289,89 @@ def checkout_session(user, plan_id: Optional[str] = None) -> Dict[str, Any]:
     return {"url": s.get("url"), "session": s.get("id")}
 
 
+# How long after Stripe signs an event we still accept it. Stripe's own
+# libraries use 300s and so do we.
+#
+# This is not paranoia about clock drift, it is the replay defence. The
+# signature over a real "subscription active" event stays valid forever;
+# without a timestamp check, anyone who ever observed one delivery could
+# POST those same bytes back for free access, for years. Rejecting old
+# timestamps is what makes a captured event a single-use thing.
+SIGNATURE_TOLERANCE = 300
+
+
+class SignatureError(Exception):
+    """The payload was not signed by Stripe, or was signed too long ago."""
+
+
+def verify_signature(raw: bytes, header: str, secret: Optional[str] = None,
+                     now: Optional[float] = None) -> Dict[str, Any]:
+    """Return the parsed event, or raise. NEVER parse `raw` before this.
+
+    `raw` must be the exact bytes off the wire. Stripe signs the payload
+    byte for byte, so decoding to JSON and re-serialising -- reordering a
+    key, changing float formatting, restyling whitespace -- produces a
+    different string and every signature fails. That is the whole reason
+    this route reads the body itself instead of using `_body()`.
+    """
+    secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "") if secret is None \
+        else secret
+    if not secret:
+        raise NotImplementedError(
+            "STRIPE_WEBHOOK_SECRET is not set. Until it is, this endpoint "
+            "cannot tell a real Stripe event from anyone who found the URL, "
+            "so it accepts nothing.")
+
+    timestamp, sigs = "", []
+    for piece in header.split(","):
+        key, _, value = piece.partition("=")
+        key, value = key.strip(), value.strip()
+        if key == "t":
+            timestamp = value
+        elif key == "v1":
+            # A list, not one value: during a secret rotation Stripe signs
+            # with both the old and the new secret and sends both. Reading
+            # only the first would drop half the events mid-rotation.
+            sigs.append(value)
+    if not timestamp or not sigs:
+        raise SignatureError("malformed Stripe-Signature header")
+    try:
+        sent = int(timestamp)
+    except ValueError:
+        raise SignatureError("malformed timestamp in Stripe-Signature")
+
+    age = (time.time() if now is None else now) - sent
+    if abs(age) > SIGNATURE_TOLERANCE:
+        raise SignatureError(
+            f"event timestamp is {int(abs(age))}s away, outside the "
+            f"{SIGNATURE_TOLERANCE}s window")
+
+    # The signed string is "<timestamp>.<body>", and the timestamp goes in
+    # exactly as it arrived rather than reformatted from the int above.
+    expected = hmac.new(secret.encode(), timestamp.encode() + b"." + raw,
+                        hashlib.sha256).hexdigest()
+    # compare_digest, not ==. String equality returns early at the first
+    # wrong byte, and the timing difference leaks the signature one byte at
+    # a time to anyone willing to send enough requests.
+    # `isascii` before comparing, not defensiveness for its own sake:
+    # compare_digest raises TypeError on a non-ASCII str, which would leave
+    # the route returning 500 to a hand-crafted header -- and a 500 is the
+    # one answer that tells Stripe to keep retrying.
+    if not any(s.isascii() and hmac.compare_digest(expected, s) for s in sigs):
+        raise SignatureError("signature does not match")
+
+    try:
+        return json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        raise SignatureError("signed payload was not JSON")
+
+
 def apply_webhook(event: Dict[str, Any], accounts) -> Optional[str]:
     """Grant or revoke from a verified Stripe event. Returns the identifier.
 
-    NOT called by anything yet: it needs a public endpoint to receive events
-    and `STRIPE_WEBHOOK_SECRET` to verify their signature. It is written now
-    so the shape of the grant is settled, and so the one rule that matters is
-    recorded — **verify the signature before acting**. An unverified webhook
-    endpoint is a free-subscription button for anyone who finds the URL.
+    Callers MUST have verified the event first: `verify_signature` above is
+    the only thing standing between this and anyone who finds the URL, since
+    what it does is hand out paid access.
     """
     kind = event.get("type", "")
     obj = event.get("data", {}).get("object", {})

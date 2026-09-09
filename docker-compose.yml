@@ -37,6 +37,18 @@ services:
       # not the deployment.
       ALPACA_KEY_ID: ${ALPACA_KEY_ID:-}
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+      # Billing, optional for the same reason. Unset, /api/billing/plans still
+      # answers and says checkout is not configured; the rest of the app is
+      # untouched. `:?` here would mean a Stripe typo takes the bot offline.
+      #
+      # PUBLIC_BASE_URL is not decoration: Stripe redirects the customer back
+      # here after paying and posts the webhook here, so it must be the URL a
+      # phone can actually reach, not localhost.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PRICE_MONTHLY: ${STRIPE_PRICE_MONTHLY:-}
+      STRIPE_PRICE_YEARLY: ${STRIPE_PRICE_YEARLY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
     volumes:
       - ./data_cache:/app/data_cache
       - ./output:/app/output
