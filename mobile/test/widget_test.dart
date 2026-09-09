@@ -534,13 +534,27 @@ void main() {
   });
 
   test('the daily figure counts today only, and closed trades only', () {
-    final now = DateTime.utc(2026, 9, 8, 12);
+    // THE REAL CLOCK, NOT A HARDCODED DATE.
+    //
+    // A previous version pinned `now` to a fixed day while `closedAtPrice`
+    // stamps the actual time. It passed for one day and failed at the next
+    // midnight — a test that fails on a calendar boundary teaches people to
+    // ignore a red suite, which is worse than not having it.
+    final now = DateTime.now().toUtc();
     final todayLoss = TradeEntry.create(
             symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100)
         .closedAtPrice(90);
     final s = JournalStats.of([todayLoss], now: now);
-    // closedAtPrice stamps "now", so this one is today
     expect(s.realisedToday, closeTo(-10, 1e-9));
+
+    // and one closed yesterday is NOT today's, however recently it was made
+    final yesterday = TradeEntry(
+        id: 'y', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+        openedAt: now.subtract(const Duration(days: 2)),
+        closedAt: now.subtract(const Duration(days: 1)), closePrice: 80);
+    final s3 = JournalStats.of([yesterday], now: now);
+    expect(s3.realised, closeTo(-20, 1e-9));
+    expect(s3.realisedToday, 0);
 
     // an OPEN position deep in drawdown is not a loss you have taken
     final floating = TradeEntry.create(

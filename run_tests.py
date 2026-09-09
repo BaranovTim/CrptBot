@@ -28,6 +28,7 @@ MODULES = [
     "tests.test_agent4_schema",
     "tests.test_robustness",
     "tests.test_agent5_labels",
+    "tests.test_barriers",
     "tests.test_agent5_splits",
     "tests.test_agent5_pipeline",
     "tests.test_livefeed",

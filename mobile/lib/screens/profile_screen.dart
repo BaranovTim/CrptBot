@@ -93,6 +93,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   /// Which pair the log is filtered to, or null for all.
   String? _pairFilter;
 
+  /// Which lifecycle stage to show: all, only open, or only finished.
+  ///
+  /// SEPARATE FROM THE PAIR FILTER, and they compose. They answer different
+  /// questions — "what am I in right now" and "how did BTC go for me" — and
+  /// folding them into one control would make the second impossible.
+  _Status _statusFilter = _Status.all;
+
   double _dailyStopPct = 5.0;
   double? _balance;
   bool _lockOn = false, _lockAvailable = false;
@@ -1056,9 +1063,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ------------------------------------------------------------- tab 0
   List<Widget> _entriesTab(JournalStats stats) {
     final pairs = _trades.map((t) => t.symbol).toSet().toList()..sort();
-    final shown = _pairFilter == null
-        ? _trades
-        : _trades.where((t) => t.symbol == _pairFilter).toList();
+    final shown = _trades.where((t) {
+      if (_pairFilter != null && t.symbol != _pairFilter) return false;
+      return switch (_statusFilter) {
+        _Status.all => true,
+        _Status.active => t.isOpen,
+        _Status.closed => !t.isOpen,
+      };
+    }).toList();
+    final openCount = _trades.where((t) => t.isOpen).length;
+    final closedCount = _trades.length - openCount;
     return [
       Row(
         children: [
@@ -1095,6 +1109,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
         ],
       ),
+      if (_trades.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        _statusBar(openCount, closedCount),
+      ],
       const SizedBox(height: 10),
       if (_trades.isEmpty)
         GlassPanel(
@@ -1114,6 +1132,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   'dashboard. It records a trade you entered elsewhere — this '
                   'app holds no exchange key and places no orders.',
                   style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+            ],
+          ),
+        )
+      else if (shown.isEmpty)
+        // NOT the same as "no trades". Saying "you have none" when a filter
+        // is hiding them all would send someone looking for a bug.
+        GlassPanel(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              const Icon(Icons.filter_alt_off_rounded,
+                  size: 17, color: Obsidian.outline),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Text(
+                    _statusFilter == _Status.active
+                        ? 'No open positions right now.'
+                        : _statusFilter == _Status.closed
+                            ? 'Nothing closed yet.'
+                            : 'Nothing matches this filter.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 12)),
+              ),
+              TextButton(
+                onPressed: () => setState(() {
+                  _statusFilter = _Status.all;
+                  _pairFilter = null;
+                }),
+                child: Text('Clear',
+                    style: Obsidian.body(color: Obsidian.primary, size: 12)),
+              ),
             ],
           ),
         )
@@ -1137,6 +1185,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: Obsidian.dataTable(size: 11, color: Obsidian.outline)),
       ],
     ];
+  }
+
+  /// All / Active / Closed, with counts.
+  ///
+  /// The counts are the point: a tab reading "Active" tells you what it will
+  /// show, one reading "Active 2" tells you whether it is worth tapping.
+  Widget _statusBar(int open, int closed) {
+    Widget seg(_Status v, String label, int? count, Color tone) {
+      final on = _statusFilter == v;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => setState(() => _statusFilter = v),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: on ? tone.withValues(alpha: 0.15) : Colors.transparent,
+              borderRadius: BorderRadius.circular(Obsidian.rMd - 3),
+              border: Border.all(
+                  color: on ? tone.withValues(alpha: 0.35) : Colors.transparent),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+                count == null ? label : '$label  $count',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Obsidian.body(
+                    size: 11.5, color: on ? tone : Obsidian.outline)),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.035),
+        borderRadius: BorderRadius.circular(Obsidian.rMd),
+      ),
+      child: Row(children: [
+        seg(_Status.all, 'All', _trades.length, Obsidian.primary),
+        seg(_Status.active, 'Active', open, Obsidian.green),
+        seg(_Status.closed, 'Closed', closed, Obsidian.outline),
+      ]),
+    );
   }
 
   // ------------------------------------------------------------- tab 1
@@ -1667,3 +1760,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       );
 }
+
+
+/// Which stage of a trade's life the log is showing.
+enum _Status { all, active, closed }
