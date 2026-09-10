@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:tradingbot_app/api/background.dart';
 import 'package:tradingbot_app/api/muted.dart';
@@ -1313,5 +1314,63 @@ void main() {
         selectDeliverable([exit],
             sensitivity: 'strong', isMuted: (s, i) => s == 'ADAUSDT'),
         isEmpty);
+  });
+
+  // THE PAYWALL THAT SURVIVED THE PAYMENT
+  //
+  // `launchUrl` completes when the browser opens, not when the customer
+  // comes back. The first version asked the server about the account on the
+  // line after it -- while they were still typing their card number -- got
+  // "free", and never asked again, so a successful payment left the paywall
+  // up until the app was force-quit.
+  //
+  // Neither half is reachable from a widget test: one is an OS lifecycle
+  // callback, the other launches an external browser. Both are asserted
+  // against the source instead.
+  //
+  // The FIRST version of these tests searched the whole file and passed with
+  // the bug deliberately put back, because `_pollForUpgrade()` still matched
+  // its own declaration further down. Hence the brace matching: the
+  // assertion has to be about the method body, not the file.
+  String bodyOf(String src, String signature) {
+    final start = src.indexOf(signature);
+    expect(start, greaterThan(-1), reason: 'no $signature');
+    final open = src.indexOf('{', start);
+    var depth = 0;
+    for (var j = open; j < src.length; j++) {
+      if (src[j] == '{') depth++;
+      if (src[j] == '}') {
+        depth--;
+        if (depth == 0) return src.substring(open, j + 1);
+      }
+    }
+    fail('unbalanced braces after $signature');
+  }
+
+  group('coming back from Stripe', () {
+    test('the shell looks for the upgrade on resume', () {
+      final body = bodyOf(File('lib/screens/shell.dart').readAsStringSync(),
+          'void didChangeAppLifecycleState');
+      expect(body.contains('AppLifecycleState.resumed'), isTrue);
+      expect(body.contains('_pollForUpgrade()'), isTrue,
+          reason: 'resume must look for the upgrade the webhook granted');
+    });
+
+    test('it asks more than once, because the webhook may not have landed',
+        () {
+      final body = bodyOf(File('lib/screens/shell.dart').readAsStringSync(),
+          'Future<void> _pollForUpgrade');
+      expect('Duration(seconds:'.allMatches(body).length,
+          greaterThanOrEqualTo(2),
+          reason: 'one check races Stripe and shows a payer the paywall');
+    });
+
+    test('the subscribe screen never decides this for itself', () {
+      final src =
+          File('lib/screens/subscribe_screen.dart').readAsStringSync();
+      expect(src.contains('client.me()'), isFalse,
+          reason: 'asking here runs before the customer has paid');
+      expect(src.contains('onCheckoutStarted()'), isTrue);
+    });
   });
 }

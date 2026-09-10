@@ -29,13 +29,17 @@ class SubscribeScreen extends StatefulWidget {
     required this.client,
     required this.account,
     required this.onSignOut,
-    required this.onRefreshAccount,
+    required this.onCheckoutStarted,
   });
 
   final ApiClient client;
   final Account account;
   final VoidCallback onSignOut;
-  final Future<void> Function() onRefreshAccount;
+  /// Called once the customer has been handed to Stripe.
+  ///
+  /// NOT "payment finished" -- nothing here can know that. It tells the
+  /// shell to start watching for the upgrade when the app comes back.
+  final VoidCallback onCheckoutStarted;
 
   @override
   State<SubscribeScreen> createState() => _SubscribeScreenState();
@@ -83,10 +87,16 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
       if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
         throw ApiException('Could not open the payment page.');
       }
-      // Checkout finishes in a browser, and the server is told by Stripe, not
-      // by us. Re-asking on return is how the app notices; trusting the
-      // browser's return would let anyone grant themselves a subscription.
-      await widget.onRefreshAccount();
+      // `launchUrl` completes when the BROWSER OPENS, not when the customer
+      // comes back -- so asking the server about the account here would run
+      // while they were still typing their card number, get "free", and
+      // leave the paywall up over a payment that then succeeded.
+      //
+      // The shell watches for it on resume instead. The answer has to come
+      // from the server either way: Stripe tells it, not us, and trusting
+      // the browser's return would let anyone grant themselves a
+      // subscription by opening a URL.
+      widget.onCheckoutStarted();
     } catch (e) {
       if (!mounted) return;
       showDialog<void>(

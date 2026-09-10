@@ -122,7 +122,30 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _live.start();
       _pollAlerts();
+      // Back from Stripe. The upgrade happened on the server, over a webhook
+      // sent while this app was in the background, so nothing in here knows
+      // about it yet and no amount of local state can work it out.
+      if (_awaitingCheckout) _pollForUpgrade();
     }
+  }
+
+  /// Ask repeatedly, because the upgrade is not ours to wait for.
+  ///
+  /// Stripe posts the webhook to the server within a second or two of the
+  /// payment, but a customer who taps straight back can beat it. A single
+  /// check would then show the paywall to somebody who has just paid -- the
+  /// exact thing this exists to prevent -- so it asks again a few times
+  /// before giving up, and gives up quietly: the account is correct on the
+  /// server either way, and the next launch will read it.
+  Future<void> _pollForUpgrade() async {
+    for (final wait in const [Duration.zero, Duration(seconds: 2),
+                              Duration(seconds: 5), Duration(seconds: 10)]) {
+      if (!mounted) return;
+      if (wait > Duration.zero) await Future<void>.delayed(wait);
+      if (!mounted) return;
+      if (await _refreshAccount()) break;
+    }
+    _awaitingCheckout = false;
   }
 
   Future<void> _startAlerts() async {
@@ -457,7 +480,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                           client: widget.client,
                           account: widget.account,
                           onSignOut: _signOut,
-                          onRefreshAccount: _refreshAccount,
+                          onCheckoutStarted: () => _awaitingCheckout = true,
                         ),
                 },
               ),
@@ -493,15 +516,26 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   bool get _entitled => widget.account.entitled;
 
-  /// Re-ask the server who we are. Called after a checkout returns.
-  Future<void> _refreshAccount() async {
+  /// Set when the customer is handed to Stripe, cleared once we stop
+  /// looking. Without it every resume on a free account would poll for an
+  /// upgrade that is not coming, on a server that is already busy.
+  bool _awaitingCheckout = false;
+
+  /// Re-ask the server who we are. Returns whether that account is entitled.
+  ///
+  /// The answer is returned rather than read back off `widget.account`,
+  /// which does not update until the parent rebuilds -- a frame later than
+  /// the caller needs it.
+  Future<bool> _refreshAccount() async {
     try {
       final me = await widget.client.me();
       await Settings.instance.saveAccount(me);
       widget.onAccountChanged(me);
+      return me.entitled;
     } catch (_) {
       // leave the account as-is; the paywall stays up, which is the safe
       // direction to fail in
+      return false;
     }
   }
 
@@ -565,7 +599,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                 client: widget.client,
                 account: widget.account,
                 onSignOut: _signOut,
-                onRefreshAccount: _refreshAccount,
+                onCheckoutStarted: () => _awaitingCheckout = true,
               );
       case NavTab.market:
         return StockMarketScreen(
