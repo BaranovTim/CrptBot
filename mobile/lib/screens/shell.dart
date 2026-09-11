@@ -16,6 +16,7 @@ import '../api/background.dart';
 import '../api/client.dart';
 import '../api/market_mode.dart';
 import '../api/live_price.dart';
+import '../api/market_ticker.dart';
 import '../api/models.dart';
 import '../api/settings.dart';
 import '../api/muted.dart';
@@ -102,6 +103,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     // phone has shipped. The fingerprint in push.dart makes this free when
     // nothing relevant changed.
     Trades.instance.addListener(_onTradesChanged);
+    _positionsSub = _positions.stream.listen(
+        (p) => unawaited(Trades.instance.checkLive(p)));
+    _positions.start();
+    unawaited(_watchPositions());
     MarketModeStore.instance.load();
     _loadFollowed();
     // Restore the timeframe last looked at, in either market. Without this
@@ -115,6 +120,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     MarketModeStore.instance.removeListener(_onModeChanged);
     Trades.instance.removeListener(_onTradesChanged);
+    _positionsSub?.cancel();
+    _positions.dispose();
     _alertTimer?.cancel();
     _calendarTimer?.cancel();
     _live.dispose();
@@ -133,6 +140,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       // sent while this app was in the background, so nothing in here knows
       // about it yet and no amount of local state can work it out.
       if (_awaitingCheckout) _pollForUpgrade();
+      // Whatever price did while this was in the background. The
+      // background poll is meant to have caught it, and on Android it
+      // frequently has not run at all -- so ask the server for the high
+      // and low since each entry, here, where the app is definitely awake.
+      unawaited(Trades.instance.settle(widget.client));
     }
   }
 
@@ -523,6 +535,15 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   bool get _entitled => widget.account.entitled;
 
+  /// One socket carrying every coin you hold an open entry in, whatever
+  /// screen is in front. The per-screen checks in profile, market and
+  /// dashboard only see the coins those screens show; this one sees the
+  /// positions, so a level hit closes the entry while you are on any tab
+  /// at all. Zero cost when nothing is held: `watch` on an empty set opens
+  /// no socket.
+  final MarketTicker _positions = MarketTicker();
+  StreamSubscription<Map<String, double>>? _positionsSub;
+
   /// Set when the customer is handed to Stripe, cleared once we stop
   /// looking. Without it every resume on a free account would poll for an
   /// upgrade that is not coming, on a server that is already busy.
@@ -689,8 +710,19 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         ),
       );
 
-  void _onTradesChanged() =>
-      unawaited(PushDelivery.instance.sync(widget.client));
+  void _onTradesChanged() {
+    unawaited(PushDelivery.instance.sync(widget.client));
+    unawaited(_watchPositions());
+  }
+
+  Future<void> _watchPositions() async {
+    final held = (await Trades.instance.load())
+        .where((t) => t.isOpen &&
+            (t.takeProfit != null || t.stopLoss != null) &&
+            t.symbol.endsWith('USDT'))
+        .map((t) => t.symbol);
+    _positions.watch(held);
+  }
 
   void _onModeChanged() {
     if (!mounted) return;

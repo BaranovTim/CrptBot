@@ -153,7 +153,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // only things that move are the price, the change badge and the two
     // re-anchored barrier rows
     _tick = widget.live.stream.listen((t) {
-      if (mounted) setState(() => _live = t);
+      if (!mounted) return;
+      setState(() => _live = t);
+      final p = t.price;
+      if (p != null) unawaited(_settleLive({widget.live.symbol: p}));
     });
     _load();
     _loadPositions();
@@ -436,6 +439,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// Open ones only. A closed trade is history and belongs in the Profile
   /// list rather than stacked above the news on the pair you are reading
   /// about right now.
+  Future<void> _settleLive(Map<String, double> live) async {
+    final closed = await Trades.instance.checkLive(live);
+    if (closed.isNotEmpty && mounted) await _loadPositions();
+  }
+
   Future<void> _loadPositions() async {
     // DRAW FIRST, SETTLE BEHIND IT.
     //

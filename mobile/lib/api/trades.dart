@@ -330,6 +330,68 @@ class Trades extends ChangeNotifier {
   /// ASKS THE SERVER FOR THE RANGE SINCE THE ENTRY rather than comparing the
   /// current price. A stop hit at 3am that retraced by morning still took
   /// the trade out, and a current-price check would miss every one of those.
+  /// Close because price touched the level, and say so. ONCE.
+  ///
+  /// Both automatic paths end here -- `settle`, which asks the server for
+  /// the high/low since the entry, and `checkLive`, which compares against
+  /// the websocket price as it arrives. They can both see the same touch,
+  /// seconds apart; re-reading the log and refusing to close what is already
+  /// closed is what keeps that to one close and one notification, whichever
+  /// path got there first.
+  ///
+  /// Manual closes do not come through here on purpose: you did that
+  /// yourself and do not need telling.
+  Future<TradeEntry?> autoClose(String id, String hit) async {
+    final all = List<TradeEntry>.from(await load());
+    final i = all.indexWhere((t) => t.id == id);
+    if (i < 0 || !all[i].isOpen) return null;
+    final t = all[i];
+    final level = hit == 'take_profit' ? t.takeProfit : t.stopLoss;
+    if (level == null) return null;
+    final closed = t.closedAtPrice(level, by: hit);
+    all[i] = closed;
+    await _save(all);
+    unawaited(Notifications.instance.showTradeClosed(
+      id: t.id,
+      symbol: t.symbol,
+      takeProfit: hit == 'take_profit',
+      level: priceText(level),
+      pnl: '${(closed.pnlPct(null) ?? 0) >= 0 ? '+' : ''}'
+          '${(closed.pnlPct(null) ?? 0).toStringAsFixed(2)}%  '
+          '${priceText(closed.pnl(null))}',
+    ));
+    return closed;
+  }
+
+  /// Every open entry against a live price. Immediate, cheap, idempotent.
+  ///
+  /// THIS IS WHAT MAKES A CLOSE HAPPEN WHILE YOU WATCH. `settle` runs on
+  /// screen load and on the background poll; between those a position sat
+  /// open on a screen whose live price had visibly crossed the level, and
+  /// if price then came back the level was never seen to be hit at all.
+  /// The socket delivers a price several times a second; comparing each one
+  /// against the open entries is a few dozen comparisons. Wired into every
+  /// screen that has a socket, because whichever screen is open is the one
+  /// that has to notice.
+  ///
+  /// A single price is passed as both `high` and `low` -- a touch is a
+  /// touch. Nothing at or below zero is believed: a reconnecting socket can
+  /// emit one, and closing a real position on it would be permanent.
+  Future<List<TradeEntry>> checkLive(Map<String, double> prices) async {
+    if (prices.isEmpty) return const [];
+    final settled = <TradeEntry>[];
+    for (final t in await load()) {
+      if (!t.isOpen) continue;
+      final p = prices[t.symbol];
+      if (p == null || !p.isFinite || p <= 0) continue;
+      final hit = levelHitBy(t, high: p, low: p);
+      if (hit == null) continue;
+      final closed = await autoClose(t.id, hit);
+      if (closed != null) settled.add(closed);
+    }
+    return settled;
+  }
+
   Future<List<TradeEntry>> settle(ApiClient client) async {
     final open = (await load())
         .where((t) => t.isOpen && (t.takeProfit != null || t.stopLoss != null))
@@ -363,26 +425,8 @@ class Trades extends ChangeNotifier {
           high: (e.value['high'] as num?)?.toDouble(),
           low: (e.value['low'] as num?)?.toDouble());
       if (hit == null) continue;
-      final level =
-          hit == 'take_profit' ? e.key.takeProfit! : e.key.stopLoss!;
-      await close(e.key.id, level, by: hit);
-      settled.add(e.key);
-
-      // TOLD HERE, not by the callers.
-      //
-      // `settle` runs from the dashboard, the profile AND the background
-      // poll. Notifying from each of those would mean up to three buzzes for
-      // one closed trade; notifying here means exactly one, at the moment the
-      // trade actually changes state, whichever path noticed it.
-      final closed = e.key.closedAtPrice(level, by: hit);
-      unawaited(Notifications.instance.showTradeClosed(
-        symbol: e.key.symbol,
-        takeProfit: hit == 'take_profit',
-        level: priceText(level),
-        pnl: '${(closed.pnlPct(null) ?? 0) >= 0 ? '+' : ''}'
-            '${(closed.pnlPct(null) ?? 0).toStringAsFixed(2)}%  '
-            '${priceText(closed.pnl(null))}',
-      ));
+      final closed = await autoClose(e.key.id, hit);
+      if (closed != null) settled.add(closed);
     }
     return settled;
   }

@@ -268,6 +268,7 @@ class Notifications {
   ///     notification reading "stop loss hit" with no qualifier would imply
   ///     an order this app cannot place.
   Future<void> showTradeClosed({
+    required String id,
     required String symbol,
     required bool takeProfit,
     required String level,
@@ -282,19 +283,35 @@ class Notifications {
     final body = 'Closed in your log at $level · $pnl\n'
         'Vanth places no orders — check your exchange.';
     final details = _details('signal', takeProfit ? 'medium' : 'high');
-    final id = _idFor('trade:$symbol:$level:${takeProfit ? 'tp' : 'sl'}');
+    // Keyed by the ENTRY, not by symbol and level. Two entries on the same
+    // coin at the same target shared an id, and Android treats a repeated
+    // id as an update -- so the second close silently replaced the first
+    // notification instead of adding one.
+    final nid = _idFor('trade:$id:${takeProfit ? 'tp' : 'sl'}');
 
-    if (!kIsWeb && Platform.isIOS) {
-      final when = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 1));
-      await _plugin.zonedSchedule(
-        id, title, body, when, details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
-      );
-      return;
+    // BEST EFFORT, AND NEVER THROWN. This is called after the journal has
+    // already been written; the close is a fact by now. A notification that
+    // cannot be posted -- permission revoked, plugin not initialised, no
+    // platform at all under test -- is worth a log line and nothing more.
+    // Letting it throw out of `autoClose` would turn "the buzz did not
+    // arrive" into "the caller's await failed", which is a different and
+    // worse bug.
+    try {
+      if (!kIsWeb && Platform.isIOS) {
+        final when =
+            tz.TZDateTime.now(tz.local).add(const Duration(seconds: 1));
+        await _plugin.zonedSchedule(
+          nid, title, body, when, details,
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+        );
+        return;
+      }
+      await _plugin.show(nid, title, body, details);
+    } catch (e) {
+      debugPrint('[notify] trade close for $symbol not shown: $e');
     }
-    await _plugin.show(id, title, body, details);
   }
 
   /// Fire one notification of every kind, so you can see what they look like.

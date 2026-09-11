@@ -123,6 +123,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() => _prices = {..._prices, ...live});
       unawaited(Widgets.instance
           .pushPositions(_trades, prices: _prices, balance: _balance));
+      // The price on this screen just crossed a level you set: close it
+      // now, on this tick, not at the next poll. This is the screen the
+      // "still going" reports came from.
+      unawaited(_settleLive(live));
     });
     _priceTimer = Timer.periodic(const Duration(seconds: 60),
         (_) => _loadPrices(_trades));
@@ -144,6 +148,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _ticker.dispose();
     _priceTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _settleLive(Map<String, double> live) async {
+    final closed = await Trades.instance.checkLive(live);
+    if (closed.isNotEmpty && mounted) await _loadTrades();
   }
 
   Future<void> _loadTrades() async {

@@ -1471,4 +1471,98 @@ void main() {
       }
     });
   });
+
+  // CLOSING ON THE TICK
+  //
+  // `settle` ran on screen load and on the background poll, and nowhere
+  // else. Between those a position sat open on a screen whose live price
+  // had visibly crossed the level; if price came back before the next
+  // poll, the touch was never recorded at all. `checkLive` runs on every
+  // socket tick. `autoClose` is the one door both paths go through, so a
+  // touch both of them see still closes once and notifies once.
+  group('a level hit on the live price closes the entry now', () {
+    TradeEntry open(String sym, String side, double entry,
+        {double? tp, double? sl}) =>
+        TradeEntry(
+            id: '$sym-$side', symbol: sym, side: side, size: 1,
+            entryPrice: entry, openedAt: DateTime.now(),
+            takeProfit: tp, stopLoss: sl);
+
+    Future<void> fresh(List<TradeEntry> entries) async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      for (final t in entries) {
+        await Trades.instance.add(t);
+      }
+    }
+
+    test('a long at its take profit, a short at its stop', () async {
+      await fresh([
+        open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90),
+        open('ETHUSDT', 'SHORT', 100, tp: 90, sl: 110),
+      ]);
+      final closed = await Trades.instance
+          .checkLive({'BTCUSDT': 110.0, 'ETHUSDT': 110.0});
+      expect(closed.map((t) => '${t.symbol}:${t.closedBy}').toSet(),
+          {'BTCUSDT:take_profit', 'ETHUSDT:stop_loss'});
+      final all = await Trades.instance.load();
+      expect(all.where((t) => t.isOpen), isEmpty);
+      // closed AT the level you set, not at whatever the tick was
+      expect(all.firstWhere((t) => t.symbol == 'BTCUSDT').closePrice, 110);
+    });
+
+    test('a price between the levels changes nothing', () async {
+      await fresh([open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90)]);
+      expect(await Trades.instance.checkLive({'BTCUSDT': 105.0}), isEmpty);
+      expect((await Trades.instance.load()).single.isOpen, isTrue);
+    });
+
+    test('a coin with no tick, and an entry with no levels, are left alone',
+        () async {
+      await fresh([
+        open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90),
+        open('SOLUSDT', 'LONG', 100),               // no levels at all
+      ]);
+      expect(await Trades.instance.checkLive({'ETHUSDT': 1.0}), isEmpty);
+      expect(await Trades.instance.checkLive({'SOLUSDT': 999.0}), isEmpty);
+      expect((await Trades.instance.load()).every((t) => t.isOpen), isTrue);
+    });
+
+    test('a zero or broken tick is never believed', () async {
+      // A reconnecting socket can emit 0. A long with a stop at 90 would
+      // close on it -- permanently, in the journal.
+      await fresh([open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90)]);
+      expect(await Trades.instance.checkLive({'BTCUSDT': 0.0}), isEmpty);
+      expect(await Trades.instance.checkLive({'BTCUSDT': double.nan}),
+          isEmpty);
+      expect(await Trades.instance.checkLive({'BTCUSDT': -5.0}), isEmpty);
+      expect((await Trades.instance.load()).single.isOpen, isTrue);
+    });
+
+    test('two paths seeing one touch produce one close', () async {
+      // The tick closes it; then settle, having asked the server, sees the
+      // same touch. The second must find it already closed and do nothing
+      // -- not close it again, and not notify again.
+      await fresh([open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90)]);
+      final first = await Trades.instance.autoClose('BTCUSDT-LONG',
+          'take_profit');
+      final second = await Trades.instance.autoClose('BTCUSDT-LONG',
+          'take_profit');
+      expect(first, isNotNull);
+      expect(second, isNull, reason: 'closed twice');
+      final t = (await Trades.instance.load()).single;
+      expect(t.isOpen, isFalse);
+      expect(t.closedBy, 'take_profit');
+    });
+
+    test('a manual close beats the tick, and the tick then says nothing',
+        () async {
+      await fresh([open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90)]);
+      await Trades.instance.close('BTCUSDT-LONG', 104);   // you closed it
+      expect(await Trades.instance.checkLive({'BTCUSDT': 110.0}), isEmpty);
+      final t = (await Trades.instance.load()).single;
+      expect(t.closePrice, 104, reason: 'the tick overwrote a manual close');
+      expect(t.closedBy, '');
+    });
+  });
 }
