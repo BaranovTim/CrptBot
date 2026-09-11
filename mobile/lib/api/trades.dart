@@ -177,6 +177,42 @@ class TradeEntry {
     return (moved / span).clamp(0.0, 1.0);
   }
 
+  /// Where price sits between the stop and the target.
+  ///
+  ///     -1 ........ 0 ........ +1
+  ///    stop      entry      target
+  ///
+  /// Each side is scaled to ITS OWN barrier, so the two ends of the bar are
+  /// the two levels you actually set, whatever their distances -- a stop
+  /// 1% away and a target 3% away still put the stop at the left edge and
+  /// the target at the right. The sign says which side of the entry price
+  /// is on, which is what the bar colours by.
+  ///
+  /// `towardTarget` above answers a narrower question -- "how far to the
+  /// target" -- and reports 0 for every adverse move, so a trade sitting a
+  /// hair above its stop and one sitting exactly at entry looked the same.
+  /// That is the bar this replaces.
+  ///
+  /// With only one level set, the other side borrows its span, so an
+  /// adverse move on a trade with no stop still shows as movement rather
+  /// than as nothing. With neither, there is nothing to draw against: null.
+  double? barrierPosition(double? live) {
+    final m = markPrice(live);
+    if (m == null) return null;
+    final tp = takeProfit, sl = stopLoss;
+    if (tp == null && sl == null) return null;
+    final spanTp = tp == null ? null : (tp - entryPrice).abs();
+    final spanSl = sl == null ? null : (sl - entryPrice).abs();
+    // positive = toward the target, for either side of the trade
+    final favourable = isShort ? entryPrice - m : m - entryPrice;
+    if (favourable >= 0) {
+      final span = spanTp ?? spanSl!;
+      return span <= 0 ? 0.0 : (favourable / span).clamp(0.0, 1.0);
+    }
+    final span = spanSl ?? spanTp!;
+    return span <= 0 ? 0.0 : -((-favourable) / span).clamp(0.0, 1.0);
+  }
+
   TradeEntry closedAtPrice(double price, {String by = ''}) => TradeEntry(
         id: id,
         symbol: symbol,

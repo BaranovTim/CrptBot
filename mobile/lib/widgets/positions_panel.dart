@@ -225,21 +225,9 @@ class PositionCard extends StatelessWidget {
         ],
       );
 
-  /// How far price has run toward the target. Empty when no target was
-  /// recorded — a bar at 0% would imply a target of zero.
-  Widget _targetBar() {
-    final p = entry.towardTarget(livePrice);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(3),
-      child: LinearProgressIndicator(
-        value: p ?? 0,
-        minHeight: 5,
-        backgroundColor: Colors.white.withValues(alpha: 0.06),
-        valueColor: AlwaysStoppedAnimation(
-            p == null ? Obsidian.outline : Obsidian.green),
-      ),
-    );
-  }
+  /// Stop on the left, target on the right, entry in the middle. Empty when
+  /// neither level was recorded — there is nothing to draw the ends at.
+  Widget _targetBar() => BarrierBar(entry: entry, livePrice: livePrice);
 
   static Widget _level(String label, double? v, Color tone, TradeEntry e,
           {bool right = false}) =>
@@ -589,32 +577,12 @@ class JournalCard extends StatelessWidget {
                   child: _level('STOP LOSS', entry.stopLoss, Obsidian.red)),
             ],
           ),
-          // HOW FAR TOWARD THE TARGET, for a live trade that has one.
-          // The same bar the dashboard draws, from the same `towardTarget`.
-          if (entry.isOpen && entry.towardTarget(livePrice) != null) ...[
+          // WHERE PRICE SITS BETWEEN YOUR STOP AND YOUR TARGET, for a live
+          // trade that has at least one of them. The same widget the
+          // dashboard card draws.
+          if (entry.isOpen && entry.barrierPosition(livePrice) != null) ...[
             const SizedBox(height: 11),
-            Row(
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: LinearProgressIndicator(
-                      value: entry.towardTarget(livePrice),
-                      minHeight: 5,
-                      backgroundColor: Colors.white.withValues(alpha: 0.06),
-                      valueColor:
-                          const AlwaysStoppedAnimation(Obsidian.green),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 9),
-                Text(
-                    '${(entry.towardTarget(livePrice)! * 100)
-                        .toStringAsFixed(0)}% to TP',
-                    style: Obsidian.dataTable(
-                        size: 10, color: Obsidian.outline)),
-              ],
-            ),
+            BarrierBar(entry: entry, livePrice: livePrice),
           ],
           if (onClose != null || onDelete != null) ...[
             const SizedBox(height: 11),
@@ -737,4 +705,126 @@ class JournalCard extends StatelessWidget {
     return '$when  ·  Size: ${TradeRow.trim(entry.size)} '
         '${TradeRow.short(entry.symbol)}';
   }
+}
+
+
+/// Stop at the left edge, target at the right, entry in the centre. The fill
+/// grows out from the centre toward wherever price is: red on the stop
+/// side, green on the target side.
+///
+/// THE BAR THIS REPLACES ran 0..100% "toward the target" and showed 0% for
+/// every adverse move -- so a trade a hair above its stop and one sitting
+/// exactly at entry were drawn identically. Price on the wrong side of the
+/// entry is the case you most need to see, and it was the one case the bar
+/// had no way to show.
+///
+/// The two halves are scaled independently (see `barrierPosition`), so the
+/// ends ARE the levels you set, whatever their distances from the entry.
+class BarrierBar extends StatelessWidget {
+  const BarrierBar({super.key, required this.entry, this.livePrice});
+
+  final TradeEntry entry;
+  final double? livePrice;
+
+  @override
+  Widget build(BuildContext context) {
+    final pos = entry.barrierPosition(livePrice);
+    final track = Colors.white.withValues(alpha: 0.06);
+    final left = pos == null || pos >= 0 ? 0.0 : -pos;
+    final right = pos == null || pos <= 0 ? 0.0 : pos;
+    final tone = pos == null
+        ? Obsidian.outline
+        : pos < 0
+            ? Obsidian.red
+            : Obsidian.green;
+    final pct = pos == null ? null : (pos.abs() * 100).round();
+    final caption = pct == null
+        ? '\u2014'
+        : pos! < 0
+            ? '$pct% to SL'
+            : '$pct% to TP';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 6,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: ColoredBox(color: track),
+                ),
+              ),
+              // Two halves. The left one grows leftwards from the centre,
+              // the right one rightwards, and only one of them is ever
+              // non-zero.
+              Row(
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: FractionallySizedBox(
+                        widthFactor: left,
+                        child: _fill(tone, leftSide: true),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: FractionallySizedBox(
+                        widthFactor: right,
+                        child: _fill(tone, leftSide: false),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              // The entry, drawn last so it stays visible through the fill.
+              Align(
+                alignment: Alignment.center,
+                child: Container(
+                  width: 2,
+                  height: 6,
+                  color: Obsidian.onSurface.withValues(alpha: 0.85),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Text(
+              entry.stopLoss == null ? 'SL \u2014' : 'SL ${priceText(entry.stopLoss)}',
+              style: Obsidian.dataTable(size: 9.5, color: Obsidian.red),
+            ),
+            const Spacer(),
+            Text(caption,
+                style: Obsidian.dataTable(size: 10, color: tone)),
+            const Spacer(),
+            Text(
+              entry.takeProfit == null
+                  ? 'TP \u2014'
+                  : 'TP ${priceText(entry.takeProfit)}',
+              style: Obsidian.dataTable(size: 9.5, color: Obsidian.green),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  static Widget _fill(Color tone, {required bool leftSide}) => Container(
+        height: 6,
+        decoration: BoxDecoration(
+          color: tone,
+          borderRadius: BorderRadius.horizontal(
+            left: leftSide ? const Radius.circular(3) : Radius.zero,
+            right: leftSide ? Radius.zero : const Radius.circular(3),
+          ),
+        ),
+      );
 }

@@ -6,6 +6,8 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tradingbot_app/theme/liquid_obsidian.dart';
+import 'package:tradingbot_app/widgets/positions_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
 import 'dart:convert';
@@ -270,6 +272,48 @@ void main() {
         id: 'b', symbol: 'BTCUSDT', side: 'SHORT', size: 1, entryPrice: 100,
         openedAt: DateTime.now(), takeProfit: 80);
     expect(short.towardTarget(90), closeTo(0.5, 1e-9));
+  });
+
+  test('position between the barriers: stop at -1, entry at 0, target at +1',
+      () {
+    // THE CASE THE OLD BAR COULD NOT SHOW. `towardTarget` clamped every
+    // adverse move to 0, so price a hair above the stop and price sitting
+    // at entry were drawn identically. The sign is the point.
+    final long = TradeEntry(
+        id: 'a', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 130, stopLoss: 90);
+    expect(long.barrierPosition(100), 0.0);
+    expect(long.barrierPosition(115), closeTo(0.5, 1e-9));   // half to TP
+    expect(long.barrierPosition(95), closeTo(-0.5, 1e-9));   // half to SL
+    expect(long.barrierPosition(130), 1.0);
+    expect(long.barrierPosition(90), -1.0);
+    expect(long.barrierPosition(500), 1.0);                  // clamped
+    expect(long.barrierPosition(1), -1.0);                   // clamped
+    // Each side scaled to ITS OWN level: 30 up is the whole right half,
+    // 10 down is the whole left half. The same 5 dollars is 1/6 of the way
+    // to the target but half the way to the stop.
+    expect(long.barrierPosition(105), closeTo(1 / 6, 1e-9));
+    expect(long.barrierPosition(95), closeTo(-0.5, 1e-9));
+
+    final short = TradeEntry(
+        id: 'b', symbol: 'BTCUSDT', side: 'SHORT', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 80, stopLoss: 110);
+    expect(short.barrierPosition(90), closeTo(0.5, 1e-9));   // down = good
+    expect(short.barrierPosition(105), closeTo(-0.5, 1e-9)); // up = bad
+  });
+
+  test('a missing level borrows the other side\'s span; none means no bar',
+      () {
+    final tpOnly = TradeEntry(
+        id: 'c', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: 120);
+    expect(tpOnly.barrierPosition(90), closeTo(-0.5, 1e-9),
+        reason: 'an adverse move with no stop must still show as movement');
+    final none = TradeEntry(
+        id: 'd', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+        openedAt: DateTime.now());
+    expect(none.barrierPosition(90), isNull);
+    expect(tpOnly.barrierPosition(null), isNull);
   });
 
   test('a logged trade survives being written and read back', () {
@@ -1563,6 +1607,61 @@ void main() {
       final t = (await Trades.instance.load()).single;
       expect(t.closePrice, 104, reason: 'the tick overwrote a manual close');
       expect(t.closedBy, '');
+    });
+  });
+
+  // THE BARRIER BAR
+  //
+  // Stop at the left edge, target at the right, entry in the middle; the
+  // fill grows from the centre toward price and is red on the stop side,
+  // green on the target side. Rendered and checked by colour, because the
+  // bar it replaced could not show an adverse move at all.
+  group('the barrier bar', () {
+    TradeEntry e(String side, double tp, double sl) => TradeEntry(
+        id: 'x', symbol: 'BTCUSDT', side: side, size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: tp, stopLoss: sl);
+
+    Future<Set<Color>> fillColours(WidgetTester t, TradeEntry entry,
+        double live) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SizedBox(
+                  width: 300,
+                  child: BarrierBar(entry: entry, livePrice: live)))));
+      return t
+          .widgetList<Container>(find.byType(Container))
+          .map((c) => (c.decoration as BoxDecoration?)?.color)
+          .whereType<Color>()
+          .toSet();
+    }
+
+    testWidgets('red toward the stop, green toward the target', (t) async {
+      var c = await fillColours(t, e('LONG', 130, 90), 95);
+      expect(c, contains(Obsidian.red));
+      expect(c, isNot(contains(Obsidian.green)));
+      expect(find.text('50% to SL'), findsOneWidget);
+
+      c = await fillColours(t, e('LONG', 130, 90), 118);
+      expect(c, contains(Obsidian.green));
+      expect(c, isNot(contains(Obsidian.red)));
+      expect(find.text('60% to TP'), findsOneWidget);
+    });
+
+    testWidgets('a short colours by its own direction', (t) async {
+      // down is good for a short: 90 on a 100 short with target 80 is
+      // halfway to the target, and must be green, not red
+      final c = await fillColours(t, e('SHORT', 80, 110), 90);
+      expect(c, contains(Obsidian.green));
+      expect(c, isNot(contains(Obsidian.red)));
+      expect(find.text('50% to TP'), findsOneWidget);
+    });
+
+    testWidgets('the ends are labelled with the levels', (t) async {
+      await fillColours(t, e('LONG', 130, 90), 100);
+      expect(find.textContaining('SL '), findsOneWidget);
+      expect(find.textContaining('TP '), findsOneWidget);
+      expect(find.textContaining('130'), findsOneWidget);
+      expect(find.textContaining('90'), findsOneWidget);
     });
   });
 }
