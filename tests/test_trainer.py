@@ -233,3 +233,51 @@ def test_a_seed_that_found_nothing_says_so_by_name():
     n2 = T._no_model_note(other, "some other failure entirely")
     assert "higher-timeframe" in n2, n2
     return True
+
+
+def test_a_fit_from_the_phone_skips_the_tape_backfill():
+    """The flag that is the difference between 30 minutes and 6.7 hours.
+
+    Backfilling the trade tape is ~99% of a training run, and an ablation
+    over 8 paired fits put those features at -0.002 AUC -- inside the spread
+    between folds. This shipped without the flag once already, so the
+    command itself is asserted rather than the intent.
+
+    Equities are excluded on purpose: `train_stocks.py` has no such flag and
+    passing it would fail the fit outright.
+    """
+    import subprocess as sp
+
+    import api.trainer as T
+
+    seen = {}
+
+    class Proc:
+        returncode = 0
+        stdout = ("======\nBTCUSDT 1h   htf 4h\n======\n"
+                  "  32,376 bars  2023-01-01 -> 2026-09-10\n"
+                  "  AUC 0.531\n")
+        stderr = ""
+
+    real = sp.run
+
+    def capture(cmd, *a, **k):
+        seen["cmd"] = list(cmd)
+        return Proc()
+
+    sp.run = capture
+    try:
+        t = _fresh()
+        crypto = T.Job(id="c1", symbol="BTCUSDT", interval="1h",
+                       market="crypto")
+        t._fit(crypto)
+        assert "--no-tape" in seen["cmd"], seen["cmd"]
+
+        equity = T.Job(id="e1", symbol="AAPL", interval="1d",
+                       market="stocks")
+        t._fit(equity)
+        assert "--no-tape" not in seen["cmd"], seen["cmd"]
+        assert "train_stocks.py" in " ".join(seen["cmd"]), seen["cmd"]
+    finally:
+        sp.run = real
+    return True

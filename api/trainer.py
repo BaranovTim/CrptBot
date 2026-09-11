@@ -271,6 +271,20 @@ class Trainer:
         cmd = [sys.executable, script, "--symbol", job.symbol,
                "--intervals", job.interval]
         if job.market != "stocks":
+            # --no-tape, ALWAYS, for a fit started from the phone.
+            #
+            # Backfilling the trade tape is ~99% of a training run. An
+            # ablation over 8 paired fits put the tape features at -0.002
+            # AUC -- smaller than the spread between folds, i.e. no
+            # measurable contribution. Paying 6.7 hours instead of 30
+            # minutes for that is not a trade-off, it is a mistake, and on a
+            # single-vCPU box it is one that also starves the API serving
+            # the dashboard.
+            #
+            # The flag stays opt-IN in train.py so the ablation can still be
+            # re-run from the command line and argue the other way.
+            cmd.append("--no-tape")
+        if job.market != "stocks":
             # crypto seeds from Binance inside train.py; equities are seeded
             # by the wrapper, which also pulls the higher timeframe
             cmd.append("--no-seed")
