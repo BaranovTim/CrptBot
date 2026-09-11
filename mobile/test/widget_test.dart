@@ -1373,4 +1373,26 @@ void main() {
       expect(src.contains('onCheckoutStarted()'), isTrue);
     });
   });
+
+  // The same table lives in `tests/test_alerts.py`. The notification is
+  // formatted in Python and the dashboard behind it in Dart, so a price that
+  // renders differently in the two means the level you tapped is not the
+  // level you were shown. Change one, change the other.
+  group('prices read the same in the notification and the app', () {
+    const table = <List<Object>>[
+      [79607.25, r'$79,607.25'],
+      [2517.085, r'$2,517.09'],
+      [0.82615, r'$0.8262'],
+      [0.003624, r'$0.003624'],
+      [0.00001234, r'$0.00001234'],
+      [0.0, r'$0.00'],
+      [-1234.5, r'-$1,234.50'],
+    ];
+    test('every entry matches the Python table', () {
+      for (final row in table) {
+        expect(priceText(row[0] as double), row[1] as String,
+            reason: 'price ${row[0]} disagrees with api/alerts.py');
+      }
+    });
+  });
 }

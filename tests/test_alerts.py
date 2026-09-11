@@ -42,8 +42,16 @@ NOW = datetime.now(timezone.utc)
 class StubService:
     """A dashboard payload we can steer, with no models and no network."""
 
-    def __init__(self, action="FLAT", live=None, whales=None, news=None):
+    def __init__(self, action="FLAT", live=None, whales=None, news=None,
+                 strength="strong", levels=None):
         self.action, self._live = action, live
+        # The notification body is built from these. They were absent from
+        # the stub while the body was prose, so the redesign onto strength
+        # and levels arrived with three lines nothing exercised.
+        self.strength = strength
+        self.levels = {"take_profit": 79607.25, "stop_loss": 77100.5,
+                       "tp_offset_pct": 2.41, "sl_offset_pct": -1.83,
+                       "side": "LONG"} if levels is None else levels
         # Steerable, because "one signal per bar" means a second transition
         # inside the same bar is correctly suppressed — a test that wants to
         # see one has to move the clock.
@@ -67,7 +75,9 @@ class StubService:
             "last_closed_bar": self._bar,
             "recommendation": {"action": self.action, "tone": "flat",
                                "detail": "d", "ev": 0.1, "size_pct": 1.0,
+                               "strength": self.strength,
                                "window_ends": "x"},
+            "levels": self.levels,
             "live": self._live,
         }
 
@@ -441,8 +451,14 @@ def test_context_rides_along_and_never_claims_to_be_the_cause():
 
     assert len(fired) == 1, fired
     body = fired[0].body
-    assert "Around the same time" in body, body
-    assert "SEC approves spot ETF" in body
+    # A FLAG, not the headline. The body is four lines now; quoting a story
+    # in it was most of the "too much text" the notification was cut down
+    # from. What survives is the part that makes you go and look.
+    assert "News that could affect: yes" in body, body
+    assert "SEC approves spot ETF" not in body, body
+    # The rule that outlives the redesign: temporal, never causal. "could
+    # affect" is a thing to check; "because of" would invent a mechanism the
+    # model does not have.
     for forbidden in ("because", "caused", "due to", "driven by"):
         assert forbidden not in body.lower(), (forbidden, body)
     return True
@@ -461,5 +477,72 @@ def test_context_older_than_the_window_is_not_attached():
                        "at": NOW - CONTEXT_WINDOW - _dt.timedelta(hours=1)})
     svc.action = "SELL"
     fired = e.refresh()
-    assert "ancient news" not in fired[0].body, fired[0].body
+    # Asserted on the FLAG, not on the absence of the text. With the body
+    # reduced to yes/no, "ancient news" is absent from every alert whether
+    # the window works or not -- so checking for the string would pass
+    # without testing anything.
+    assert "News that could affect: no" in fired[0].body, fired[0].body
+    return True
+
+
+# The same table lives in `mobile/test/widget_test.dart`. Two runtimes format
+# the same price -- Python for the notification, Dart for the dashboard behind
+# it -- and a level that reads differently in the two is the bug this pins.
+# Change one, change the other, or one of these two tests fails.
+PRICE_TABLE = [
+    (79607.25, "79,607.25"),
+    (2517.085, "2,517.09"),
+    (0.82615, "0.8262"),
+    (0.003624, "0.003624"),
+    (0.00001234, "0.00001234"),
+    (0.0, "0.00"),
+    (-1234.5, "-1,234.50"),
+]
+
+
+def test_prices_in_notifications_match_the_app_digit_for_digit():
+    from api.alerts import _price_text
+
+    for value, want in PRICE_TABLE:
+        got = _price_text(value)
+        assert got == want, f"{value}: {got!r} != {want!r}"
+    assert _price_text(None) == "\u2014"
+    return True
+
+
+def test_an_entry_notification_is_four_lines_and_no_prose():
+    """What Tim asked for, pinned. Strength, the two levels, the news flag."""
+    svc = StubService(action="FLAT")
+    e = _engine(svc)
+    svc.action = "BUY"
+    a = e.refresh()[0]
+
+    assert a.title == "BTCUSDT: 1h; FLAT \u2192 BUY", a.title
+    lines = a.body.split("\n")
+    assert lines == ["STRONG",
+                     "Take profit 79,607.25; +2.41%",
+                     "Stop loss 77,100.50",
+                     "News that could affect: no"], lines
+    # The prose that used to be here and is not coming back.
+    for gone in ("EV ", "size ", "% of equity", "Around the same time"):
+        assert gone not in a.body, (gone, a.body)
+    return True
+
+
+def test_an_exit_notification_carries_no_target_or_stop():
+    """Closing a position has no take-profit. Printing the model's barriers
+    under the word FLAT would read as a new trade in the opposite direction.
+    """
+    svc = StubService(action="FLAT")
+    e = _engine(svc)
+    svc.action = "BUY"
+    e.refresh()
+    svc.action = "FLAT"
+    svc._bar = "2026-08-28T13:59:59.999000+00:00"
+    a = e.refresh()[0]
+
+    assert "FLAT" in a.title, a.title
+    assert "Take profit" not in a.body, a.body
+    assert "Stop loss" not in a.body, a.body
+    assert "News that could affect:" in a.body, a.body
     return True

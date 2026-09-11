@@ -73,6 +73,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -185,6 +186,41 @@ class Alert:
 
 def _hash(*parts) -> str:
     return hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:16]
+
+
+def _price_text(v) -> str:
+    """A price with enough digits to act on. Mirrors `format.dart`'s
+    `priceText`, thresholds and trimming included.
+
+    A SECOND COPY, KNOWINGLY. The phone formats prices in Dart and this
+    formats them in Python, and the two have to agree or the same level
+    reads differently in the notification and on the dashboard behind it.
+    Shared code is not available across the two runtimes, so the rule is
+    written twice and `test_alerts` pins them to the same answers.
+
+    Fixed decimals are the bug this avoids: 1000PEPEUSDT trades at 0.003624
+    and `%.4f` renders it 0.0036, throwing away the digits the coin moves in.
+    """
+    if v is None:
+        return "\u2014"
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "\u2014"
+    a = abs(v)
+    if a >= 1000:
+        dp = 2
+    elif a >= 1 or a == 0:
+        dp = 4 if a else 2
+    else:
+        dp = min(8, max(2, -(math.floor(math.log10(a)) + 1) + 4))
+    out = f"{v:,.{dp}f}"
+    if "." in out and dp > 2:
+        whole, frac = out.split(".")
+        while len(frac) > 2 and frac.endswith("0"):
+            frac = frac[:-1]
+        out = f"{whole}.{frac}"
+    return out
 
 
 class AlertEngine:
@@ -486,14 +522,31 @@ class AlertEngine:
         closing = action == "FLAT"
         ctx = self._recent_context()
 
-        body = (f"{rec.get('detail', '')}"
-                + (f"  EV {ev:+.3f}%" if ev is not None else "")
-                + (f", size {size:.2f}% of equity" if size else ""))
-        if ctx:
-            # "Around the same time", never "because of". News is not an input
-            # to the model — see the module docstring.
-            body += ("\nAround the same time: "
-                     + " · ".join(c["text"] for c in ctx))
+        # FOUR LINES, AT MOST. The old body carried `detail`, EV, position
+        # size and the headlines themselves; on a lock screen that is three
+        # lines of prose before the two numbers you actually act on.
+        #
+        # News is reported as a FLAG, not as text. Still never "because of":
+        # news is not an input to the model, so the wording is "could
+        # affect" — a thing to go and check, not an explanation of the call.
+        levels = d.get("levels") or {}
+        lines = []
+        strength = str(rec.get("strength") or "").upper()
+        if strength:
+            lines.append(strength)
+        if not closing:
+            # Omitted entirely on an exit: closing a position has no target
+            # and no stop, and printing the model's barriers next to the word
+            # FLAT would read as a new trade.
+            tp, sl = levels.get("take_profit"), levels.get("stop_loss")
+            tp_pct = levels.get("tp_offset_pct")
+            if tp is not None:
+                lines.append(f"Take profit {_price_text(tp)}" + (
+                    f"; {tp_pct:+.2f}%" if tp_pct is not None else ""))
+            if sl is not None:
+                lines.append(f"Stop loss {_price_text(sl)}")
+        lines.append("News that could affect: " + ("yes" if ctx else "no"))
+        body = "\n".join(lines)
 
         out.append(Alert(
             id=_hash("signal", d["symbol"], iv, bar, action),
@@ -505,7 +558,7 @@ class AlertEngine:
             # so the phone can apply the same sensitivity gate to the
             # notification that it applies to the dashboard card
             strength=str(rec.get("strength") or ""),
-            title=(f"{d['symbol']} {iv}: {prev} \u2192 {action}"),
+            title=(f"{d['symbol']}: {iv}; {prev} \u2192 {action}"),
             body=body,
             at=utc_now(), detected_at=utc_now(),
             extra={"bar": bar, "window_ends": str(rec.get("window_ends", "")),
