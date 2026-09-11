@@ -157,6 +157,46 @@ def is_kind_muted(muted: List[str], kind: str) -> bool:
     return f"kind:{(kind or '').lower()}" in set(muted or ())
 
 
+MAX_POSITIONS = 50
+
+
+def _clean_positions(raw) -> List[Dict[str, Any]]:
+    """Keep only what the line needs, in a shape nothing downstream has to
+    defend against. One entry per symbol -- a second open entry on the same
+    coin is still one "you hold this"."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for p in raw or ():
+        if not isinstance(p, dict):
+            continue
+        sym = str(p.get("symbol") or "").strip().upper()
+        side = str(p.get("side") or "").strip().upper()
+        try:
+            entry = float(p.get("entry"))
+        except (TypeError, ValueError):
+            continue
+        if not sym or side not in ("LONG", "SHORT") or not entry > 0:
+            continue
+        if sym not in out and len(out) < MAX_POSITIONS:
+            out[sym] = {"symbol": sym, "side": side, "entry": entry}
+    return list(out.values())
+
+
+def entry_line(side: str, entry: float) -> str:
+    """The line the phone shows too. Mirrored in `notifications.dart`, and
+    the price goes through the same formatter the rest of the alert uses so
+    the entry does not read as a different number from the levels above it.
+    """
+    from api.alerts import _price_text
+    return f"Open entry: {side} @ {_price_text(entry)}"
+
+
+def held_line(sub, symbol: str) -> Optional[str]:
+    for p in sub.positions:
+        if p.get("symbol") == symbol:
+            return entry_line(p["side"], p["entry"])
+    return None
+
+
 @dataclass
 class Subscription:
     """One phone, and the settings it filters by."""
@@ -171,6 +211,12 @@ class Subscription:
     # The device's mute list, shipped verbatim — symbols, symbol:interval
     # pairs and kind: keys all in one flat list, exactly as the app stores it.
     muted: List[str] = field(default_factory=list)
+    # The phone's OPEN trade log, shipped the same way as `muted`: a list of
+    # {symbol, side, entry}. Used for exactly one thing -- a line in a signal
+    # notification saying "you hold this" -- because the log lives on the
+    # phone and the notification text is built here, so the relay cannot
+    # know otherwise. Re-shipped whenever an entry opens or closes.
+    positions: List[Dict[str, Any]] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     # Observability, because a relay that silently stops is worse than one
@@ -285,7 +331,9 @@ class PushRelay:
     def register(self, topic: str, *, account: str = "",
                  server: str = DEFAULT_SERVER,
                  sensitivity: str = "strong", news: str = "all",
-                 muted: Optional[List[str]] = None) -> Dict[str, Any]:
+                 muted: Optional[List[str]] = None,
+                 positions: Optional[List[Dict[str, Any]]] = None
+                 ) -> Dict[str, Any]:
         topic = (topic or "").strip()
         if not TOPIC_RE.match(topic):
             return {"ok": False,
@@ -314,6 +362,7 @@ class PushRelay:
                 topic=topic, server=server, account=account,
                 sensitivity=sensitivity or "strong", news=news or "all",
                 muted=list(muted or ()),
+                positions=_clean_positions(positions),
                 created_at=existing.created_at if existing else time.time(),
                 last_ok=existing.last_ok if existing else None,
                 sent=existing.sent if existing else 0,
@@ -415,6 +464,15 @@ class PushRelay:
 
     def _post(self, sub: Subscription, a) -> bool:
         body = a.body or ""
+        # FIRST line, not last. Android's collapsed notification shows the
+        # title and one line of body; when you are holding the coin the call
+        # just changed on, "you hold this" is the one line that should be
+        # visible before you expand anything. Signals only: a news item
+        # about a coin you hold is not a decision about your position.
+        if getattr(a, "kind", "") == "signal":
+            held = held_line(sub, getattr(a, "symbol", ""))
+            if held:
+                body = held + ("\n" + body if body else "")
         payload = {
             "topic": sub.topic,
             "title": a.title[:120],

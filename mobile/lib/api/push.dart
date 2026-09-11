@@ -65,6 +65,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'client.dart';
 import 'muted.dart';
 import 'settings.dart';
+import 'trades.dart';
 
 class PushDelivery {
   PushDelivery._();
@@ -147,6 +148,23 @@ class PushDelivery {
     await _put(_fingerprintKey, '');
   }
 
+  /// The open trade log, in the shape the relay wants.
+  ///
+  /// Shipped so a signal on a coin you hold can say so on the lock screen,
+  /// where the phone's own code is not running to add the line itself. It
+  /// is part of the fingerprint, so opening or closing an entry is a
+  /// change that re-registers on the next sync — the same way muting a
+  /// coin does. Sorted, so the same set always produces the same
+  /// fingerprint regardless of the order the log happens to be in.
+  Future<List<Map<String, Object>>> openPositions() async {
+    final open = (await Trades.instance.load()).where((t) => t.isOpen).toList()
+      ..sort((a, b) => a.symbol.compareTo(b.symbol));
+    return [
+      for (final t in open)
+        {'symbol': t.symbol, 'side': t.side, 'entry': t.entryPrice},
+    ];
+  }
+
   /// Re-register if — and only if — something the server filters on changed.
   ///
   /// Safe to call on every launch and every poll. Does nothing at all when
@@ -174,9 +192,10 @@ class PushDelivery {
     final sensitivity = await Settings.instance.sensitivity();
     final news = await Settings.instance.newsAlerts();
     final muted = (await Muted.instance.load()).toList()..sort();
+    final positions = await openPositions();
     final srv = await server();
 
-    final print = json.encode([t, srv, sensitivity, news, muted]);
+    final print = json.encode([t, srv, sensitivity, news, muted, positions]);
     if (!force && print == await _read(_fingerprintKey)) return true;
 
     try {
@@ -186,6 +205,7 @@ class PushDelivery {
         sensitivity: sensitivity,
         news: news,
         muted: muted,
+        positions: positions,
       );
       if (r['ok'] != true) {
         debugPrint('[push] register refused: ${r['error']}');

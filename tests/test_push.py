@@ -351,3 +351,115 @@ def test_the_delivery_record_survives_a_settings_change():
     r.register(t, account="tim", sensitivity="small")
     assert r.pushed_to("tim") == {a.id}, "the delivery record was wiped"
     return True
+
+
+# ------------------------------------------------------------ "you hold this"
+#
+#   THE LOG IS ON THE PHONE   the trade journal never leaves the device, and
+#                             the notification text is built on the server.
+#                             So the phone ships its open entries with the
+#                             subscription, the way it ships `muted`, and the
+#                             relay adds one line when a signal lands on a
+#                             coin that list contains.
+#
+#   THE EXIT YOU HOLD         the case this exists for. You are long, the
+#                             call goes BUY -> FLAT. That notification has no
+#                             levels in it and reads like any other exit
+#                             unless it says you are in the trade.
+#
+#   FIRST LINE                Android's collapsed notification shows one line
+#                             of body. The held line goes above everything.
+
+def _held(r, *positions):
+    t = new_topic()
+    r.register(t, account="tim", sensitivity="strong", positions=list(positions))
+    return t
+
+
+def test_a_signal_on_a_coin_you_hold_says_so_first():
+    r, rec = _relay()
+    _held(r, {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0})
+    r.deliver([FakeAlert(body="STRONG\nTake profit 81,000.00; +2.27%",
+                         extra={"from": "FLAT", "to": "BUY"})])
+    assert len(rec.sent) == 1, rec.sent
+    lines = rec.sent[0]["message"].split("\n")
+    assert lines[0] == "Open entry: LONG @ 79,200.00", lines
+    assert lines[1] == "STRONG", lines
+    return True
+
+
+def test_an_exit_on_a_coin_you_hold_carries_the_line():
+    """The one that matters. An exit has no levels and no strength, so
+    without this line it is indistinguishable from an exit on a coin you
+    do not care about."""
+    r, rec = _relay()
+    _held(r, {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0})
+    r.deliver([FakeAlert(strength="", title="BTCUSDT: 1h; BUY \u2192 FLAT",
+                         body="News that could affect: no",
+                         extra={"from": "BUY", "to": "FLAT"})])
+    assert len(rec.sent) == 1
+    assert rec.sent[0]["message"].startswith("Open entry: LONG @"), rec.sent[0]
+    return True
+
+
+def test_a_coin_you_do_not_hold_gets_no_line():
+    r, rec = _relay()
+    _held(r, {"symbol": "ETHUSDT", "side": "SHORT", "entry": 2500.0})
+    r.deliver([FakeAlert(body="STRONG", extra={"from": "FLAT", "to": "BUY"})])
+    assert "Open entry" not in rec.sent[0]["message"], rec.sent[0]
+    return True
+
+
+def test_only_signals_get_the_line():
+    """A headline about a coin you hold is not a decision about your
+    position, and dressing it up as one is noise of exactly the kind the
+    notification was just cut down to remove."""
+    r, rec = _relay()
+    _held(r, {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0})
+    r.deliver([FakeAlert(kind="news", title="News \u00b7 crypto", body="x",
+                         bias="BULL", impact="STRONG IMPACT")])
+    assert rec.sent and "Open entry" not in rec.sent[0]["message"], rec.sent
+    return True
+
+
+def test_a_cheap_coin_entry_keeps_its_digits():
+    """1000PEPE at 0.003624 must not become 0.0036 -- the same rule as the
+    levels above it, or the entry reads as a different price."""
+    r, rec = _relay()
+    _held(r, {"symbol": "1000PEPEUSDT", "side": "LONG", "entry": 0.003624})
+    r.deliver([FakeAlert(symbol="1000PEPEUSDT", body="STRONG",
+                         extra={"from": "FLAT", "to": "BUY"})])
+    assert "Open entry: LONG @ 0.003624" in rec.sent[0]["message"], rec.sent[0]
+    return True
+
+
+def test_positions_are_cleaned_and_replaced_not_accumulated():
+    """Re-registering with a shorter list must shrink it: closing a trade is
+    the phone sending the list without that symbol. And the shape is
+    validated, because this comes off the wire from whatever holds the
+    session token."""
+    r, _ = _relay()
+    t = _held(r, {"symbol": "btcusdt", "side": "long", "entry": "79200"},
+              {"symbol": "ETHUSDT", "side": "SIDEWAYS", "entry": 1.0},
+              {"symbol": "SOLUSDT", "side": "SHORT", "entry": -5},
+              {"symbol": "SOLUSDT", "side": "SHORT", "entry": 0},
+              "not a dict", {"symbol": "", "side": "LONG", "entry": 1.0})
+    sub = r.for_account("tim")
+    assert sub["positions"] == [
+        {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0}], sub
+
+    r.register(t, account="tim", sensitivity="strong", positions=[])
+    assert r.for_account("tim")["positions"] == [], "closing did not clear"
+    return True
+
+
+def test_the_position_list_survives_a_restart():
+    d = Path(tempfile.mkdtemp()) / "push.json"
+    rec = Recorder()
+    t = new_topic()
+    PushRelay(state_path=d, opener=rec).register(
+        t, account="tim", positions=[{"symbol": "BTCUSDT", "side": "LONG",
+                                      "entry": 79200.0}])
+    again = PushRelay(state_path=d, opener=rec)
+    assert again.for_account("tim")["positions"][0]["symbol"] == "BTCUSDT"
+    return True

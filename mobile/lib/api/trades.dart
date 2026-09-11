@@ -36,7 +36,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart'
-    show debugPrint, visibleForTesting;
+    show ChangeNotifier, debugPrint, visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'dart:async';
@@ -217,7 +217,7 @@ String? levelHitBy(TradeEntry t, {double? high, double? low}) {
   return null;
 }
 
-class Trades {
+class Trades extends ChangeNotifier {
   Trades._();
   static final Trades instance = Trades._();
 
@@ -431,6 +431,12 @@ class Trades {
     } catch (e) {
       debugPrint('[trades] could not save: $e');
     }
+    // After the write, whether it succeeded or not: the in-memory list has
+    // already changed, and that is what listeners read. The shell uses this
+    // to re-ship the open positions to the push relay, so a signal on a
+    // coin you just logged can say so on the lock screen within seconds
+    // rather than at the next fifteen-minute poll.
+    notifyListeners();
   }
 
   /// Drop the in-memory cache so the next `load()` re-reads storage.

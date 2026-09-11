@@ -747,7 +747,9 @@ class Handler(BaseHTTPRequestHandler):
                         sensitivity=str(body.get("sensitivity") or "strong"),
                         news=str(body.get("news") or "all"),
                         muted=[str(x) for x in (body.get("muted") or [])
-                               if isinstance(x, str)][:200])
+                               if isinstance(x, str)][:200],
+                        positions=[p for p in (body.get("positions") or [])
+                                   if isinstance(p, dict)][:200])
                 self._send(r, status=200 if r.get("ok") else 400)
                 return
             if route == "/api/train/cancel":

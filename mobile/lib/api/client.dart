@@ -311,6 +311,7 @@ class ApiClient {
     required String sensitivity,
     required String news,
     required List<String> muted,
+    required List<Map<String, Object>> positions,
   }) =>
       _post('/api/push/subscribe', {
         'topic': topic,
@@ -318,6 +319,7 @@ class ApiClient {
         'sensitivity': sensitivity,
         'news': news,
         'muted': muted,
+        'positions': positions,
       });
 
   Future<Map<String, dynamic>> pushUnsubscribe(String topic) =>

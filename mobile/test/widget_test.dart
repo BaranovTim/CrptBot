@@ -16,6 +16,7 @@ import 'package:tradingbot_app/api/muted.dart';
 import 'package:tradingbot_app/api/format.dart';
 import 'package:tradingbot_app/api/journal.dart';
 import 'package:tradingbot_app/api/trades.dart';
+import 'package:tradingbot_app/api/notifications.dart';
 import 'package:tradingbot_app/api/push.dart';
 import 'package:tradingbot_app/api/settings.dart';
 import 'package:tradingbot_app/api/watchlist.dart';
@@ -1392,6 +1393,81 @@ void main() {
       for (final row in table) {
         expect(priceText(row[0] as double), row[1] as String,
             reason: 'price ${row[0]} disagrees with api/alerts.py');
+      }
+    });
+  });
+
+  // "YOU HOLD THIS"
+  //
+  // The trade log lives on this phone; the notification text is built on
+  // the server. So the line is added in two places -- here for the in-app
+  // banner, and in api/push.py for the lock-screen push -- and the wording
+  // is pinned to the Python side's `entry_line` character for character.
+  // If one drifts, the same alert reads differently depending on which
+  // path delivered it.
+  group('a signal on a coin you hold says so', () {
+    test('the line, word for word as api/push.py writes it', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(TradeEntry.create(
+          symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 79200));
+      expect(await heldLine('BTCUSDT'), 'Open entry: LONG @ 79,200.00');
+      expect(await heldLine('ETHUSDT'), isNull);
+    });
+
+    test('a closed entry no longer counts', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      final t = TradeEntry.create(
+          symbol: 'SOLUSDT', side: 'SHORT', size: 1, entryPrice: 200);
+      await Trades.instance.add(t);
+      expect(await heldLine('SOLUSDT'), 'Open entry: SHORT @ 200.00');
+      await Trades.instance.close(t.id, 190);
+      expect(await heldLine('SOLUSDT'), isNull);
+    });
+
+    test('a cheap coin keeps its digits, same as the levels', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(TradeEntry.create(
+          symbol: '1000PEPEUSDT', side: 'LONG', size: 1,
+          entryPrice: 0.003624));
+      expect(await heldLine('1000PEPEUSDT'), 'Open entry: LONG @ 0.003624');
+    });
+
+    test('what the phone ships to the relay', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(TradeEntry.create(
+          symbol: 'ETHUSDT', side: 'SHORT', size: 1, entryPrice: 2500));
+      await Trades.instance.add(TradeEntry.create(
+          symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 79200));
+      final closed = TradeEntry.create(
+          symbol: 'SOLUSDT', side: 'LONG', size: 1, entryPrice: 200);
+      await Trades.instance.add(closed);
+      await Trades.instance.close(closed.id, 210);
+
+      final shipped = await PushDelivery.instance.openPositions();
+      // sorted by symbol, closed one absent, exactly the three keys the
+      // server validates
+      expect(shipped, [
+        {'symbol': 'BTCUSDT', 'side': 'LONG', 'entry': 79200.0},
+        {'symbol': 'ETHUSDT', 'side': 'SHORT', 'entry': 2500.0},
+      ]);
+    });
+
+    test('opening an entry notifies, so the shell can re-sync', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      var fired = 0;
+      void bump() => fired++;
+      Trades.instance.addListener(bump);
+      try {
+        await Trades.instance.add(TradeEntry.create(
+            symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 1));
+        expect(fired, 1);
+      } finally {
+        Trades.instance.removeListener(bump);
       }
     });
   });

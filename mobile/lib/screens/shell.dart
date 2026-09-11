@@ -22,6 +22,7 @@ import '../api/muted.dart';
 import '../api/watchlist.dart';
 import '../api/notifications.dart';
 import '../api/push.dart';
+import '../api/trades.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/acknowledgement.dart';
 import '../widgets/alert_settings_sheet.dart';
@@ -96,6 +97,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     // The market switch decides what four of the five tabs are about, so the
     // shell rebuilds when it changes rather than each screen polling it.
     MarketModeStore.instance.addListener(_onModeChanged);
+    // Opening or closing a logged entry changes what the push relay should
+    // say about a signal on that coin, and the relay only knows what the
+    // phone has shipped. The fingerprint in push.dart makes this free when
+    // nothing relevant changed.
+    Trades.instance.addListener(_onTradesChanged);
     MarketModeStore.instance.load();
     _loadFollowed();
     // Restore the timeframe last looked at, in either market. Without this
@@ -108,6 +114,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     MarketModeStore.instance.removeListener(_onModeChanged);
+    Trades.instance.removeListener(_onTradesChanged);
     _alertTimer?.cancel();
     _calendarTimer?.cancel();
     _live.dispose();
@@ -681,6 +688,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           ),
         ),
       );
+
+  void _onTradesChanged() =>
+      unawaited(PushDelivery.instance.sync(widget.client));
 
   void _onModeChanged() {
     if (!mounted) return;

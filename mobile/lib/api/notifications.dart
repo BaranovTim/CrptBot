@@ -42,6 +42,8 @@ import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
 import 'models.dart';
+import 'format.dart';
+import 'trades.dart';
 
 String describeWhen(DateTime at, {DateTime? now}) {
   final n = now ?? DateTime.now();
@@ -70,6 +72,18 @@ String describeWhen(DateTime at, {DateTime? now}) {
       ? ''
       : ' ${local.day.toString().padLeft(2, '0')}/${local.month.toString().padLeft(2, '0')}';
   return '$hhmm$date · $rel';
+}
+
+/// "Open entry: LONG @ 79,200.00" — or null when the log holds nothing open
+/// on that symbol. Mirrors `entry_line` in `api/push.py` word for word, and
+/// the price goes through `priceText` so it reads as the same number the
+/// dashboard shows.
+Future<String?> heldLine(String symbol) async {
+  final open = (await Trades.instance.load())
+      .where((t) => t.isOpen && t.symbol == symbol);
+  if (open.isEmpty) return null;
+  final t = open.first;
+  return 'Open entry: ${t.side} @ ${priceText(t.entryPrice, prefix: '')}';
 }
 
 class Notifications {
@@ -209,7 +223,17 @@ class Notifications {
   ///     delivered every time. One second is imperceptible.
   Future<void> showAlert(Alert a) async {
     if (!_ready) await init();
-    final body = '${a.body}\n${a.whenLine()}';
+    // The relay adds this same line on the lock screen path; this is the
+    // in-app path doing it from the local log. Signals only, first line,
+    // for the reason in `api/push.py`: the collapsed notification shows one
+    // line, and when you hold the coin a call just changed on, that line
+    // is "you hold this".
+    final held = a.kind == 'signal' ? await heldLine(a.symbol) : null;
+    final body = [
+      ?held,
+      a.body,
+      a.whenLine(),
+    ].join('\n');
     final details = _details(a.kind, a.severity);
 
     if (!kIsWeb && Platform.isIOS) {
