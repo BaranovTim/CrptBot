@@ -1,0 +1,9 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vanth">
+  <rect width="64" height="64" rx="14" fill="#111317"/>
+  <path d="M17 47 L32 32 L47 47" fill="none" stroke="#414755"
+        stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M21 38 L32 27 L43 38" fill="none" stroke="#4B8EFF"
+        stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M25 29 L32 22 L39 29" fill="none" stroke="#00FFAB"
+        stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

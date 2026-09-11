@@ -1,4 +1,4 @@
-/// Sign in to ThusIldy.
+/// Sign in to Vanth.
 ///
 /// This screen used to be a prop. The two fields looked like an auth wall,
 /// were never transmitted, and let anybody through — which was the honest
@@ -180,7 +180,7 @@ class _LoginScreenState extends State<LoginScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'The address of your ThusIldy server. Use the https:// '
+              'The address of your Vanth server. Use the https:// '
               'address — over plain http your password would travel in clear '
               'text.',
               style: Obsidian.body(),
@@ -230,7 +230,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   Image.asset('assets/logo.png',
                       width: 76, height: 76, filterQuality: FilterQuality.high),
                   const SizedBox(height: 14),
-                  Text('THUSILDY',
+                  Text('VANTH',
                       textAlign: TextAlign.center,
                       style: Obsidian.displayLg().copyWith(letterSpacing: 6)),
                   const SizedBox(height: 6),
@@ -368,7 +368,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Text('Analysis only. ThusIldy places no orders.',
+                  Text('Analysis only. Vanth places no orders.',
                       textAlign: TextAlign.center,
                       style:
                           Obsidian.body(color: Obsidian.outline, size: 11)),

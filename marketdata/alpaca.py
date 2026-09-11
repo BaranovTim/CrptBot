@@ -142,7 +142,7 @@ class Alpaca:
         req = urllib.request.Request(url, headers={
             "APCA-API-KEY-ID": self.key_id,
             "APCA-API-SECRET-KEY": self.secret,
-            "User-Agent": "ThusIldy/1.0",
+            "User-Agent": "Vanth/1.0",
         })
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:

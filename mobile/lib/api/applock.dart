@@ -63,7 +63,7 @@ class AppLock {
   /// Returns true when the lock is off, when the device cannot do it, and
   /// when the plugin throws — see the fail-open note above. It returns false
   /// only for a prompt that was shown and not satisfied.
-  Future<bool> unlock({String reason = 'Unlock ThusIldy'}) async {
+  Future<bool> unlock({String reason = 'Unlock Vanth'}) async {
     if (!await enabled()) return true;
     if (!await available()) return true;
     try {

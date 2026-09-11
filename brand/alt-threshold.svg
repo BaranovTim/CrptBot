@@ -1,0 +1,9 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vanth">
+  <rect width="64" height="64" rx="14" fill="#111317"/>
+  <line x1="14" y1="22" x2="50" y2="22" stroke="#414755" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="14" y1="46" x2="50" y2="46" stroke="#414755" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M15 42 L26 36 L38 22 L50 13" fill="none" stroke="#00FFAB"
+        stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="38" cy="22" r="4.5" fill="#111317"/>
+  <circle cx="38" cy="22" r="2.75" fill="#00FFAB"/>
+</svg>

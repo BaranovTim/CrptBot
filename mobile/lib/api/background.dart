@@ -86,17 +86,32 @@ import 'settings.dart';
 import 'trades.dart';
 import 'widgets.dart';
 
-const String _taskName = 'thusildy.alerts.poll';
+const String _taskName = 'vanth.alerts.poll';
 
 /// The scheduled job's name, which on iOS is also its BGTaskScheduler
 /// identifier — so it has to match `Info.plist`'s
 /// `BGTaskSchedulerPermittedIdentifiers` and the AppDelegate exactly.
 ///
-/// TWO NAMES, DELIBERATELY. Android's has to stay what it already was: a
-/// periodic WorkManager job is keyed by its unique name, so renaming it would
-/// leave the old one running forever on every phone that had already
-/// installed the app, polling under a name nothing cancels.
+/// TWO NAMES, DELIBERATELY, and both changed at the Vanth rename.
+///
+/// A periodic WorkManager job is keyed by its unique name. Renaming it does
+/// NOT rename the job already scheduled on a phone that has the old build --
+/// it leaves that one running forever under a name nothing cancels, polling
+/// alongside the new one. Two jobs, two notifications for every alert.
+///
+/// So the rename comes with `_legacyUniqueName` below, which the registration
+/// cancels every time. That is the migration; without it this rename ships a
+/// duplicate-notification bug to every existing install.
 String get _uniqueName => (!kIsWeb && Platform.isIOS)
+    ? 'com.dmtcoj.vanth.alertPoll'
+    : 'vanth-alert-poll';
+
+/// What the job was called before the rename, kept only to cancel it.
+///
+/// Safe to call on a phone that never had the old build: cancelling a unique
+/// name with nothing scheduled under it is a no-op, not an error. Delete this
+/// once no install from before the rename plausibly remains.
+String get _legacyUniqueName => (!kIsWeb && Platform.isIOS)
     ? 'com.dmtcoj.thusildy.alertPoll'
     : 'thusildy-alert-poll';
 
@@ -243,6 +258,17 @@ Future<void> startBackgroundAlerts() async {
   if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
   try {
     await Workmanager().initialize(alertPollEntry);
+    // Before registering, not after: the old job and the new one would
+    // otherwise both be live for however long this function takes, and the
+    // whole point is that they are never scheduled together.
+    try {
+      await Workmanager().cancelByUniqueName(_legacyUniqueName);
+    } catch (e) {
+      // Never fatal. A phone that never had the old build has nothing to
+      // cancel, and failing to start alerts over a no-op would be worse
+      // than the duplicate this prevents.
+      debugPrint('[bg] legacy task cancel: $e');
+    }
     await Workmanager().registerPeriodicTask(
       _uniqueName,
       _taskName,

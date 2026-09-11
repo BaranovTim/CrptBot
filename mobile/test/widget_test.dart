@@ -41,11 +41,11 @@ void main() {
     // thing stopping them seeing data would be the server's 402.
     SharedPreferences.setMockInitialValues({});
 
-    await tester.pumpWidget(const ThusIldyApp());
+    await tester.pumpWidget(const VanthApp());
     await tester.pump();                                  // kick off restore
     await tester.pump(const Duration(milliseconds: 50));   // let it land
 
-    expect(find.text('THUSILDY'), findsOneWidget);
+    expect(find.text('VANTH'), findsOneWidget);
     expect(find.text('SIGN IN'), findsOneWidget);
     expect(find.text('Sign in to your account'), findsOneWidget);
   });
@@ -58,7 +58,7 @@ void main() {
     // prop — it would look like it was checking.
     SharedPreferences.setMockInitialValues({});
 
-    await tester.pumpWidget(const ThusIldyApp());
+    await tester.pumpWidget(const VanthApp());
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -66,7 +66,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Both fields are required.'), findsOneWidget);
-    expect(find.text('THUSILDY'), findsOneWidget);      // still on sign-in
+    expect(find.text('VANTH'), findsOneWidget);      // still on sign-in
   });
 
   test('absent numbers stay null and never become zero', () {
@@ -677,7 +677,7 @@ void main() {
       }),
     });
 
-    await tester.pumpWidget(const ThusIldyApp());
+    await tester.pumpWidget(const VanthApp());
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
@@ -695,7 +695,7 @@ void main() {
       'api.token.v1': 'a-session-token',
     });
 
-    await tester.pumpWidget(const ThusIldyApp());
+    await tester.pumpWidget(const VanthApp());
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 

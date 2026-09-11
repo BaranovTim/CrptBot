@@ -34,7 +34,7 @@ const List<AckPoint> acknowledgementPoints = [
   AckPoint(
     Icons.gavel_rounded,
     'It never places an order',
-    'ThusIldy holds no exchange key, signs nothing and moves no money. It '
+    'Vanth holds no exchange key, signs nothing and moves no money. It '
         'reads market data and shows you what its models make of it. Every '
         'trade is one you place yourself, somewhere else — the trade log here '
         'is a record of what you did, not an instruction that was carried out.',

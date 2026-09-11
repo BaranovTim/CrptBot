@@ -137,7 +137,7 @@ class RssSource:
                 # Several publishers return 403 to a default urllib agent.
                 # This is a plain identification, not an attempt to look like
                 # a browser to get past a paywall.
-                headers={"User-Agent": "ThusIldy/1.0 (+news reader)"})
+                headers={"User-Agent": "Vanth/1.0 (+news reader)"})
             with self._opener().open(req, timeout=self.timeout) as r:
                 raw = r.read()
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:

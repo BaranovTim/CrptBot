@@ -1,7 +1,7 @@
-/// ThusIldy — a phone-shaped view of the Python stack in this repo.
+/// Vanth — a phone-shaped view of the Python stack in this repo.
 ///
 /// It reads. It does not trade, hold keys, or place orders. Every number it
-/// shows comes from the ThusIldy server, which in turn reads exactly what
+/// shows comes from the Vanth server, which in turn reads exactly what
 /// `monitor.py` reads.
 library;
 
@@ -23,17 +23,17 @@ void main() {
     statusBarIconBrightness: Brightness.light,
     statusBarBrightness: Brightness.dark,
   ));
-  runApp(const ThusIldyApp());
+  runApp(const VanthApp());
 }
 
-class ThusIldyApp extends StatefulWidget {
-  const ThusIldyApp({super.key});
+class VanthApp extends StatefulWidget {
+  const VanthApp({super.key});
 
   @override
-  State<ThusIldyApp> createState() => _ThusIldyAppState();
+  State<VanthApp> createState() => _VanthAppState();
 }
 
-class _ThusIldyAppState extends State<ThusIldyApp> {
+class _VanthAppState extends State<VanthApp> {
   final _client = ApiClient();
   Account? _account;
   bool _restored = false;
@@ -112,7 +112,7 @@ class _ThusIldyAppState extends State<ThusIldyApp> {
       );
     }
     return MaterialApp(
-      title: 'ThusIldy',
+      title: 'Vanth',
       debugShowCheckedModeBanner: false,
       theme: Obsidian.theme(),
       home: _locked
@@ -153,7 +153,7 @@ class _LockedGate extends StatelessWidget {
                 const Icon(Icons.fingerprint_rounded,
                     size: 54, color: Obsidian.primary),
                 const SizedBox(height: 18),
-                Text('ThusIldy is locked',
+                Text('Vanth is locked',
                     style: Obsidian.headlineMd()),
                 const SizedBox(height: 8),
                 Text(

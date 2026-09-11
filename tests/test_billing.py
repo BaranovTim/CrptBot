@@ -365,11 +365,24 @@ def test_a_hostile_session_id_never_reaches_stripe():
 
 
 def test_the_pages_fetch_nothing_from_the_network():
-    """First screen after paying, on a phone, on whatever connection."""
+    """First screen after paying, on a phone, on whatever connection.
+
+    Asserted as "issues no request", not "contains no http" -- the favicon is
+    an inline SVG and an SVG carries `xmlns="http://www.w3.org/2000/svg"`,
+    which is a namespace NAME that no browser ever fetches. The cruder string
+    check failed on it, and loosening it to let that one string through would
+    have let a real stylesheet through too. So every src/href is extracted and
+    each one has to be a data: URI.
+    """
+    import re
+
     from api.billing import CANCELLED, PAID, PENDING, landing_html
 
     for state in (PAID, PENDING, CANCELLED):
         html = landing_html(state)
-        for tag in ("<script", "http://", "https://", "<img", "@import"):
+        for tag in ("<script", "<img", "<iframe", "@import", "url(http"):
             assert tag not in html, f"{state} page pulls in {tag}"
+        for attr, value in re.findall(r'\b(src|href)\s*=\s*"([^"]*)"', html):
+            assert value.startswith("data:"), \
+                f"{state} page fetches {attr}={value[:60]}"
     return True

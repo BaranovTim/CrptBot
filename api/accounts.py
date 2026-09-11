@@ -103,12 +103,18 @@ MIN_PASSWORD = 8
 # The list is short on purpose. A real breach corpus is millions of entries and
 # belongs behind an API; this catches the handful that a person actually types
 # when asked to invent something quickly.
+#
+# The old app name stays on this list after the rename to Vanth. A
+# password that was too guessable to allow does not become acceptable
+# because the product is called something else now -- and anyone who
+# picked it before the rename is exactly who would pick it after.
 _COMMON_PASSWORDS = frozenset("""
 password password1 password123 12345678 123456789 1234567890 qwerty123
 qwertyuiop letmein00 iloveyou1 admin123 welcome1 welcome123 abc12345
 football1 baseball1 dragon123 sunshine1 princess1 trustno1 monkey123
 passw0rd p@ssword p@ssw0rd changeme letmein123 starwars1 whatever1
-thusildy thusildy1 tradingbot bitcoin1 bitcoin123 crypto123
+vanth vanth1 vanth123 tradingbot bitcoin1 bitcoin123 crypto123
+thusildy thusildy1
 """.split())
 
 

@@ -401,7 +401,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     'instead, which is allowed to wake your phone whenever it '
                     'likes. Install ntfy, subscribe to the address below, and '
                     'alerts arrive about a minute after the server sees them '
-                    '— whatever ThusIldy is doing.\n\n'
+                    '— whatever Vanth is doing.\n\n'
                     'On Android, turn on ntfy\u2019s "instant delivery" in its '
                     'own settings. That makes it about a second instead of '
                     'about a minute, and nothing on the phone can defer it.',
@@ -634,7 +634,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         backgroundColor: Obsidian.surfaceHigh,
         content: Text(
-            'Notifications are turned off for ThusIldy in system settings, '
+            'Notifications are turned off for Vanth in system settings, '
             'so nothing would be delivered.',
             style: Obsidian.body()),
       ));
@@ -657,7 +657,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final ctrl = TextEditingController(text: widget.client.base);
     final saved = await _prompt(
       title: 'Server address',
-      body: 'Where your ThusIldy server is reachable. Use the https:// '
+      body: 'Where your Vanth server is reachable. Use the https:// '
           'address — over plain http your password and session token travel '
           'in clear text.',
       ctrl: ctrl,
@@ -1415,7 +1415,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             subtitle: _balance == null
                 ? 'Not set — the stop limit and the % buttons need it'
                 : 'You entered ${_balance!.toStringAsFixed(4)}. '
-                    'ThusIldy cannot read your exchange.',
+                    'Vanth cannot read your exchange.',
             onTap: _pickBalance,
           ),
         ]),
@@ -1490,7 +1490,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               title: 'Battery optimisation is on',
               subtitle: 'Android is free to hold the alert check back for '
                   'hours while the phone is idle. Turning this off for '
-                  'ThusIldy is the only fix on the device itself.',
+                  'Vanth is the only fix on the device itself.',
               trailing: const Icon(Icons.chevron_right_rounded,
                   size: 18, color: Obsidian.amber),
               onTap: _fixBattery,
@@ -1675,7 +1675,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-                'ThusIldy holds no exchange key, so it cannot read this. It is '
+                'Vanth holds no exchange key, so it cannot read this. It is '
                 'used for the daily stop limit and the percentage buttons on '
                 'the entry form, and nowhere else.',
                 style: Obsidian.body(color: Obsidian.outline, size: 11.5)),

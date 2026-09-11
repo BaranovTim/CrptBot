@@ -110,7 +110,7 @@ TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 def new_topic() -> str:
     """A fresh, unguessable topic. Used by the app; kept here so both ends
     agree on the shape."""
-    return "thusildy-" + secrets.token_hex(16)
+    return "vanth-" + secrets.token_hex(16)
 
 
 # --------------------------------------------------------------- filtering
@@ -403,7 +403,7 @@ class PushRelay:
             return {"ok": False, "error": "that topic is not registered"}
         ok = self._send(sub, {
             "topic": sub.topic,
-            "title": "ThusIldy is connected",
+            "title": "Vanth is connected",
             "message": ("Alerts will arrive here even with the app closed. "
                         "This is the only test message."),
             "priority": 4,
@@ -433,7 +433,7 @@ class PushRelay:
             sub.server + "/",
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json",
-                     "User-Agent": "thusildy-relay/1"},
+                     "User-Agent": "vanth-relay/1"},
             method="POST",
         )
         try:

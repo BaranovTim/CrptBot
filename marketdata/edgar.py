@@ -60,7 +60,7 @@ FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 
 # SEC's fair-access policy asks for identification, not a key. Rotating this
 # or omitting it is what gets an IP blocked.
-UA = "ThusIldy research contact@thusildy.app"
+UA = "Vanth research contact@vanth.app"
 
 # 10 requests/second is the documented ceiling. This sits under it.
 MIN_INTERVAL = 0.12

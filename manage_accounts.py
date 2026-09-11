@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and manage ThusIldy accounts.
+"""Create and manage Vanth accounts.
 
     python3 manage_accounts.py create-admin tim
     python3 manage_accounts.py grant alice --days 30

@@ -116,7 +116,7 @@ class _LogEntryCardState extends State<LogEntryCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-                'ThusIldy holds no exchange key, so it cannot read your '
+                'Vanth holds no exchange key, so it cannot read your '
                 'balance. Enter it yourself and the percentage buttons will '
                 'work from that figure.',
                 style: Obsidian.body(color: Obsidian.outline, size: 11.5)),

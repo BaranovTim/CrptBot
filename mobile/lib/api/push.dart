@@ -91,7 +91,7 @@ class PushDelivery {
     final r = Random.secure();
     final b = List<int>.generate(16, (_) => r.nextInt(256));
     final hex = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
-    return 'thusildy-$hex';
+    return 'vanth-$hex';
   }
 
   Future<String?> topic() async {

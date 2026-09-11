@@ -350,7 +350,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         backgroundColor: Obsidian.surfaceContainer,
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Obsidian.rLg)),
-        title: Text('Close ThusIldy?', style: Obsidian.headlineMd()),
+        title: Text('Close Vanth?', style: Obsidian.headlineMd()),
         content: Text(
             'Alerts only arrive while the app is running, so closing it '
             'stops notifications until you open it again.',

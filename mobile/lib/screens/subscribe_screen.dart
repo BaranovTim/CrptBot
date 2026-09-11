@@ -140,7 +140,7 @@ class _SubscribeScreenState extends State<SubscribeScreen> {
       padding: const EdgeInsets.fromLTRB(Obsidian.containerPadding, 8,
           Obsidian.containerPadding, Obsidian.navClearance + 24),
       children: [
-        Text('Unlock ThusIldy', style: Obsidian.displayLg()),
+        Text('Unlock Vanth', style: Obsidian.displayLg()),
         const SizedBox(height: 6),
         Text(
             widget.account.identifier.isEmpty

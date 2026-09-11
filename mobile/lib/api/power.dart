@@ -34,7 +34,7 @@ class Power {
   Power._();
   static final Power instance = Power._();
 
-  static const _channel = MethodChannel('thusildy/power');
+  static const _channel = MethodChannel('vanth/power');
 
   bool get supported => !kIsWeb && Platform.isAndroid;
 

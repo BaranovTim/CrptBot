@@ -277,7 +277,7 @@ Future<double?> askExitPrice(BuildContext context, TradeEntry t,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-              'What price did you actually get out at? ThusIldy never saw the '
+              'What price did you actually get out at? Vanth never saw the '
               'fill, so this is the one number it cannot work out for you.',
               style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
           const SizedBox(height: 12),

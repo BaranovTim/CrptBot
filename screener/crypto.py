@@ -52,7 +52,7 @@ BARS = 260
 
 
 def _get(url: str, timeout: int = 25):
-    req = urllib.request.Request(url, headers={"User-Agent": "ThusIldy/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Vanth/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 

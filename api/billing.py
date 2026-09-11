@@ -57,6 +57,13 @@ PLANS: List[Dict[str, Any]] = [
         "amount": 1900,
         "currency": "eur",
         "period": "month",
+        # One line, shown under the plan name. It says what the subscription
+        # IS and what it is not, and it names no number -- claiming an
+        # accuracy here that DISCLOSURE then qualifies two paragraphs later
+        # would be the kind of small dishonesty that earns a chargeback.
+        "description": (
+            "Full access to Vanth, billed monthly. Cancel any time; the "
+            "subscription runs to the end of the period you have paid for."),
         "price_env": "STRIPE_PRICE_MONTHLY",
     },
     {
@@ -66,6 +73,9 @@ PLANS: List[Dict[str, Any]] = [
         "currency": "eur",
         "period": "year",
         "note": "two months free",
+        "description": (
+            "Full access to Vanth for a year, at the price of ten months. "
+            "Best if you already know the analysis is worth having."),
         "price_env": "STRIPE_PRICE_YEARLY",
     },
 ]
@@ -186,17 +196,17 @@ PAID, PENDING, CANCELLED = "paid", "pending", "cancelled"
 
 _COPY = {
     PAID: ("&#10003;", "#34d399", "Payment received",
-           "You're subscribed. Reopen ThusIldy \u2014 your account is "
+           "You're subscribed. Reopen Vanth \u2014 your account is "
            "already upgraded.",
            "Stripe has emailed your receipt."),
     PENDING: ("&#8226;", "#fbbf24", "Payment is being confirmed",
-              "This normally takes a few seconds. Reopen ThusIldy and pull "
+              "This normally takes a few seconds. Reopen Vanth and pull "
               "down to refresh; if it still shows Free in a minute or two, "
               "nothing is lost \u2014 get in touch and we will sort it.",
               "Do not pay again. A second checkout would charge you twice."),
     CANCELLED: ("&#8592;", "#94a3b8", "No payment was taken",
                 "You closed the checkout before it finished, so nothing was "
-                "charged. Reopen ThusIldy whenever you want to try again.",
+                "charged. Reopen Vanth whenever you want to try again.",
                 "Your account is unchanged."),
 }
 
@@ -213,6 +223,21 @@ def landing_state(route: str, session_id: Optional[str]) -> str:
     return PAID if session_paid(session_id or "") is True else PENDING
 
 
+# The torch, inline. A data URI and not a file because these pages are
+# served to somebody who has just paid, possibly on a bad connection, and
+# every external reference is one more thing that can hang -- the same reason
+# there is no font and no script here.
+FAVICON = (
+    "data:image/svg+xml,"
+    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E"
+    "%3Crect width='64' height='64' rx='14' fill='%23111317'/%3E"
+    "%3Cpath d='M32 12C41 23 41 30 32 37C23 30 23 23 32 12Z' fill='%2300FFAB'/%3E"
+    "%3Cpath d='M32 20C36 25 36 29 32 32C28 29 28 25 32 20Z' fill='%23111317'/%3E"
+    "%3Cpath d='M23 39h18M32 41v12' stroke='%238B90A0' stroke-width='4'"
+    " stroke-linecap='round'/%3E%3C/svg%3E"
+)
+
+
 def landing_html(state: str) -> str:
     """The page Stripe sends the customer to. Deliberately self-contained.
 
@@ -226,7 +251,8 @@ def landing_html(state: str) -> str:
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ThusIldy</title>
+<title>Vanth</title>
+<link rel="icon" href="{FAVICON}">
 <style>
   :root {{ color-scheme: dark; }}
   body {{ margin: 0; min-height: 100vh; display: flex; align-items: center;
@@ -251,7 +277,7 @@ def landing_html(state: str) -> str:
   <h1>{title}</h1>
   <p>{body}</p>
   <p class="foot">{foot}</p>
-  <div class="brand">ThusIldy</div>
+  <div class="brand">Vanth</div>
 </div></body></html>"""
 
 

@@ -404,7 +404,7 @@ CRYPTO_FIELDS: Tuple[Field, ...] = (
     Field("perf_quarter", "Performance (quarter)", "Performance", PERCENT),
     Field("perf_year", "Performance (year)", "Performance", PERCENT),
     Field("trained", "Bot has a model", "This app", BOOL,
-          help="Whether ThusIldy has a fitted model for this pair on any "
+          help="Whether Vanth has a fitted model for this pair on any "
                "timeframe. Nothing else screens on this."),
 )
 

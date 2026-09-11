@@ -61,7 +61,7 @@ def _post(offset: int, timeout: int = 60) -> list:
         API, data=body,
         headers={"Content-Type": "application/json",
                  "Accept": "application/json",
-                 "User-Agent": "ThusIldy/1.0"})
+                 "User-Agent": "Vanth/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read()) or []

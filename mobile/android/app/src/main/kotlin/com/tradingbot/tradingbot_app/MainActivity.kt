@@ -40,7 +40,7 @@ import io.flutter.plugin.common.MethodChannel
 // call fails at runtime with `no_fragment_activity` — it compiles, installs
 // and only breaks the first time somebody turns the lock on.
 class MainActivity : FlutterFragmentActivity() {
-    private val channel = "thusildy/power"
+    private val channel = "vanth/power"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

@@ -10,7 +10,7 @@ import workmanager_apple
   /// iOS does not warn when they disagree. It simply never launches the app,
   /// which is indistinguishable from "background refresh did not happen to
   /// run yet" — the failure mode this whole feature is trying to escape.
-  private static let alertPollTaskId = "com.dmtcoj.thusildy.alertPoll"
+  private static let alertPollTaskId = "com.dmtcoj.vanth.alertPoll"
 
   override func application(
     _ application: UIApplication,

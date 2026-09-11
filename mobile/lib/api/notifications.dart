@@ -118,7 +118,7 @@ class Notifications {
     // without alerts. Alerts are a feature; the app is not.
     try {
       await _plugin.initialize(const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: AndroidInitializationSettings('@drawable/ic_notification'),
         iOS: DarwinInitializationSettings(
           requestAlertPermission: true,
           requestBadgePermission: true,
@@ -256,7 +256,7 @@ class Notifications {
         ? '$short hit your take profit'
         : '$short hit your stop loss';
     final body = 'Closed in your log at $level · $pnl\n'
-        'ThusIldy places no orders — check your exchange.';
+        'Vanth places no orders — check your exchange.';
     final details = _details('signal', takeProfit ? 'medium' : 'high');
     final id = _idFor('trade:$symbol:$level:${takeProfit ? 'tp' : 'sl'}');
 
