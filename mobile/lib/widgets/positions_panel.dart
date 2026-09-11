@@ -732,6 +732,13 @@ class BarrierBar extends StatelessWidget {
     final track = Colors.white.withValues(alpha: 0.06);
     final left = pos == null || pos >= 0 ? 0.0 : -pos;
     final right = pos == null || pos <= 0 ? 0.0 : pos;
+    // THE FURTHEST IT HAS BEEN, each way, since the entry. Drawn under the
+    // solid fill in a lighter tone, so the part that shows is exactly the
+    // stretch between where price is and where it got to: "it reached 90%
+    // to TP and has come back to 85%". Never narrower than the solid fill,
+    // because the extremes include the current price by construction.
+    final best = entry.bestPosition ?? 0.0;
+    final worst = entry.worstPosition ?? 0.0;
     final tone = pos == null
         ? Obsidian.outline
         : pos < 0
@@ -758,29 +765,22 @@ class BarrierBar extends StatelessWidget {
                 ),
               ),
               // Two halves. The left one grows leftwards from the centre,
-              // the right one rightwards, and only one of them is ever
-              // non-zero.
-              Row(
-                children: [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: FractionallySizedBox(
-                        widthFactor: left,
-                        child: _fill(tone, leftSide: true),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: FractionallySizedBox(
-                        widthFactor: right,
-                        child: _fill(tone, leftSide: false),
-                      ),
-                    ),
-                  ),
-                ],
+              // the right one rightwards. The extremes go first and the
+              // live fill on top; both sides can carry an extreme at once
+              // -- a trade that dipped toward the stop and then ran toward
+              // the target shows a light red on the left and a solid green
+              // on the right.
+              _halves(
+                left: worst,
+                right: best,
+                leftTone: Obsidian.red.withValues(alpha: 0.28),
+                rightTone: Obsidian.green.withValues(alpha: 0.28),
+              ),
+              _halves(
+                left: left,
+                right: right,
+                leftTone: tone,
+                rightTone: tone,
               ),
               // The entry, drawn last so it stays visible through the fill.
               Align(
@@ -816,6 +816,35 @@ class BarrierBar extends StatelessWidget {
       ],
     );
   }
+
+  static Widget _halves({
+    required double left,
+    required double right,
+    required Color leftTone,
+    required Color rightTone,
+  }) =>
+      Row(
+        children: [
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: FractionallySizedBox(
+                widthFactor: left.clamp(0.0, 1.0),
+                child: _fill(leftTone, leftSide: true),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: FractionallySizedBox(
+                widthFactor: right.clamp(0.0, 1.0),
+                child: _fill(rightTone, leftSide: false),
+              ),
+            ),
+          ),
+        ],
+      );
 
   static Widget _fill(Color tone, {required bool leftSide}) => Container(
         height: 6,

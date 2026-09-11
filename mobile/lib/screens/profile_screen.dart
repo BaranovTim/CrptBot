@@ -151,8 +151,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _settleLive(Map<String, double> live) async {
-    final closed = await Trades.instance.checkLive(live);
-    if (closed.isNotEmpty && mounted) await _loadTrades();
+    final r = await Trades.instance.checkLive(live);
+    if (!mounted) return;
+    if (r.settled.isNotEmpty) {
+      await _loadTrades();
+    } else if (r.extremesMoved) {
+      // A new high or low since entry: the lighter fill on the bar just
+      // grew. Re-read from the cache -- no round trip -- so the card draws
+      // it on this tick rather than at the next full load.
+      _sortAndShow(await Trades.instance.load());
+    }
   }
 
   Future<void> _loadTrades() async {

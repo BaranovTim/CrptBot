@@ -60,6 +60,8 @@ class TradeEntry {
     this.closePrice,
     this.closedBy = '',
     this.note = '',
+    this.highSince,
+    this.lowSince,
   });
 
   factory TradeEntry.create({
@@ -103,6 +105,8 @@ class TradeEntry {
         closePrice: (j['close_price'] as num?)?.toDouble(),
         closedBy: j['closed_by'] as String? ?? '',
         note: j['note'] as String? ?? '',
+        highSince: (j['high_since'] as num?)?.toDouble(),
+        lowSince: (j['low_since'] as num?)?.toDouble(),
       );
 
   final String id, symbol, side, note;
@@ -122,6 +126,15 @@ class TradeEntry {
   final DateTime? closedAt;
   final double? closePrice;
 
+  /// The furthest price has been, either way, since the entry.
+  ///
+  /// Two sources feed these and they are merged, never replaced: the
+  /// server's high/low over the 1m bars since entry (which covers the hours
+  /// the app was closed), and the live ticks while a screen is open (which
+  /// extend it in real time). Persisted, so the bar is right the instant
+  /// Profile opens rather than after the first round trip.
+  final double? highSince, lowSince;
+
   bool get isOpen => closedAt == null;
   bool get isShort => side == 'SHORT';
 
@@ -138,6 +151,8 @@ class TradeEntry {
         'close_price': closePrice,
         'closed_by': closedBy,
         'note': note,
+        'high_since': highSince,
+        'low_since': lowSince,
       };
 
   /// The price this position is marked against: its close for a finished
@@ -196,8 +211,22 @@ class TradeEntry {
   /// With only one level set, the other side borrows its span, so an
   /// adverse move on a trade with no stop still shows as movement rather
   /// than as nothing. With neither, there is nothing to draw against: null.
-  double? barrierPosition(double? live) {
-    final m = markPrice(live);
+  double? barrierPosition(double? live) => _positionOf(markPrice(live));
+
+  /// How far price has EVER got toward the target, 0..1, or null with no
+  /// levels. The lighter fill beyond the solid one: "it was at 90%, it is
+  /// at 85% now".
+  double? get bestPosition {
+    return _positionOf(isShort ? lowSince : highSince)?.clamp(0.0, 1.0);
+  }
+
+  /// How far it has ever got toward the stop, 0..1. Same idea, other side.
+  double? get worstPosition {
+    final p = _positionOf(isShort ? highSince : lowSince);
+    return p == null ? null : (-p).clamp(0.0, 1.0);
+  }
+
+  double? _positionOf(double? m) {
     if (m == null) return null;
     final tp = takeProfit, sl = stopLoss;
     if (tp == null && sl == null) return null;
@@ -226,7 +255,36 @@ class TradeEntry {
         closePrice: price,
         closedBy: by,
         note: note,
+        highSince: highSince,
+        lowSince: lowSince,
       );
+
+  /// This entry with the extremes widened to include `high`/`low`.
+  ///
+  /// Returns THIS object when nothing widened, so a caller can tell by
+  /// identity whether anything changed and skip the write. On a quiet
+  /// tick nothing has -- which is most ticks.
+  TradeEntry withExtremes({double? high, double? low}) {
+    // THE ENTRY IS THE BASELINE. Price was at `entryPrice` when the trade
+    // opened, so the range since entry always contains it. Starting from
+    // the first tick instead made that tick both extremes at once, and a
+    // move back toward the entry then counted as a new low.
+    final h = _wider(highSince ?? entryPrice, high, (a, b) => a > b);
+    final l = _wider(lowSince ?? entryPrice, low, (a, b) => a < b);
+    if (h == highSince && l == lowSince) return this;
+    return TradeEntry(
+      id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
+      openedAt: openedAt, takeProfit: takeProfit, stopLoss: stopLoss,
+      closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
+      note: note, highSince: h, lowSince: l,
+    );
+  }
+
+  static double _wider(double have, double? seen,
+      bool Function(double, double) beats) {
+    if (seen == null || !seen.isFinite || seen <= 0) return have;
+    return beats(seen, have) ? seen : have;
+  }
 }
 
 /// What a price range did to a trade's levels. Null when nothing was hit.
@@ -413,19 +471,54 @@ class Trades extends ChangeNotifier {
   /// A single price is passed as both `high` and `low` -- a touch is a
   /// touch. Nothing at or below zero is believed: a reconnecting socket can
   /// emit one, and closing a real position on it would be permanent.
-  Future<List<TradeEntry>> checkLive(Map<String, double> prices) async {
-    if (prices.isEmpty) return const [];
-    final settled = <TradeEntry>[];
-    for (final t in await load()) {
-      if (!t.isOpen) continue;
+  Future<({List<TradeEntry> settled, bool extremesMoved})> checkLive(
+      Map<String, double> prices) async {
+    if (prices.isEmpty) {
+      return (settled: const <TradeEntry>[], extremesMoved: false);
+    }
+    double? tick(TradeEntry t) {
       final p = prices[t.symbol];
-      if (p == null || !p.isFinite || p <= 0) continue;
+      return p == null || !p.isFinite || p <= 0 ? null : p;
+    }
+
+    // PASS ONE: widen the extremes, in memory only, and commit once.
+    //
+    // A new high or low is what the lighter band on the bar draws; it is
+    // not worth a disk write per tick. The cache is what `load()` hands
+    // out, so the screen sees it on its next read, and the next real save
+    // carries it to disk. A restart before then loses nothing: the server's
+    // 1m bars have the same extreme.
+    var moved = false;
+    final all = List<TradeEntry>.from(await load());
+    for (var i = 0; i < all.length; i++) {
+      final t = all[i];
+      if (!t.isOpen) continue;
+      final p = tick(t);
+      if (p == null) continue;
+      final w = t.withExtremes(high: p, low: p);
+      if (!identical(w, t)) {
+        all[i] = w;
+        moved = true;
+      }
+    }
+    if (moved) _cache = all;
+
+    // PASS TWO: the closes, each through `autoClose`, which re-reads the
+    // log for itself. NOTHING FROM PASS ONE IS WRITTEN BACK AFTER THIS
+    // POINT. The first version kept `all` across the closes and, on the
+    // second entry, wrote that list -- with the first entry still open in
+    // it -- over the cache. Two entries hitting on one tick lost a close.
+    final settled = <TradeEntry>[];
+    for (final t in all) {
+      if (!t.isOpen) continue;
+      final p = tick(t);
+      if (p == null) continue;
       final hit = levelHitBy(t, high: p, low: p);
       if (hit == null) continue;
       final closed = await autoClose(t.id, hit);
       if (closed != null) settled.add(closed);
     }
-    return settled;
+    return (settled: settled, extremesMoved: moved);
   }
 
   Future<List<TradeEntry>> settle(ApiClient client) async {
@@ -454,6 +547,25 @@ class Trades extends ChangeNotifier {
         }
       }),
     );
+
+    // THE RANGE IS WORTH KEEPING whether or not a level was hit: it is the
+    // furthest price has been since the entry, which the bar draws as the
+    // lighter fill. Merged into the stored entries and written once.
+    var all = List<TradeEntry>.from(await load());
+    var widened = false;
+    for (final e in ranges) {
+      final hi = (e.value['high'] as num?)?.toDouble();
+      final lo = (e.value['low'] as num?)?.toDouble();
+      if (hi == null || lo == null) continue;
+      final i = all.indexWhere((t) => t.id == e.key.id);
+      if (i < 0) continue;
+      final w = all[i].withExtremes(high: hi, low: lo);
+      if (!identical(w, all[i])) {
+        all[i] = w;
+        widened = true;
+      }
+    }
+    if (widened) await _save(all);
 
     final settled = <TradeEntry>[];
     for (final e in ranges) {

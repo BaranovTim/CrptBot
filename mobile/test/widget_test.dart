@@ -1545,8 +1545,9 @@ void main() {
         open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90),
         open('ETHUSDT', 'SHORT', 100, tp: 90, sl: 110),
       ]);
-      final closed = await Trades.instance
-          .checkLive({'BTCUSDT': 110.0, 'ETHUSDT': 110.0});
+      final closed = (await Trades.instance
+              .checkLive({'BTCUSDT': 110.0, 'ETHUSDT': 110.0}))
+          .settled;
       expect(closed.map((t) => '${t.symbol}:${t.closedBy}').toSet(),
           {'BTCUSDT:take_profit', 'ETHUSDT:stop_loss'});
       final all = await Trades.instance.load();
@@ -1557,7 +1558,7 @@ void main() {
 
     test('a price between the levels changes nothing', () async {
       await fresh([open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90)]);
-      expect(await Trades.instance.checkLive({'BTCUSDT': 105.0}), isEmpty);
+      expect((await Trades.instance.checkLive({'BTCUSDT': 105.0})).settled, isEmpty);
       expect((await Trades.instance.load()).single.isOpen, isTrue);
     });
 
@@ -1567,8 +1568,8 @@ void main() {
         open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90),
         open('SOLUSDT', 'LONG', 100),               // no levels at all
       ]);
-      expect(await Trades.instance.checkLive({'ETHUSDT': 1.0}), isEmpty);
-      expect(await Trades.instance.checkLive({'SOLUSDT': 999.0}), isEmpty);
+      expect((await Trades.instance.checkLive({'ETHUSDT': 1.0})).settled, isEmpty);
+      expect((await Trades.instance.checkLive({'SOLUSDT': 999.0})).settled, isEmpty);
       expect((await Trades.instance.load()).every((t) => t.isOpen), isTrue);
     });
 
@@ -1576,10 +1577,10 @@ void main() {
       // A reconnecting socket can emit 0. A long with a stop at 90 would
       // close on it -- permanently, in the journal.
       await fresh([open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90)]);
-      expect(await Trades.instance.checkLive({'BTCUSDT': 0.0}), isEmpty);
-      expect(await Trades.instance.checkLive({'BTCUSDT': double.nan}),
-          isEmpty);
-      expect(await Trades.instance.checkLive({'BTCUSDT': -5.0}), isEmpty);
+      expect((await Trades.instance.checkLive({'BTCUSDT': 0.0})).settled, isEmpty);
+      expect((await Trades.instance.checkLive({'BTCUSDT': double.nan}))
+          .settled, isEmpty);
+      expect((await Trades.instance.checkLive({'BTCUSDT': -5.0})).settled, isEmpty);
       expect((await Trades.instance.load()).single.isOpen, isTrue);
     });
 
@@ -1603,7 +1604,7 @@ void main() {
         () async {
       await fresh([open('BTCUSDT', 'LONG', 100, tp: 110, sl: 90)]);
       await Trades.instance.close('BTCUSDT-LONG', 104);   // you closed it
-      expect(await Trades.instance.checkLive({'BTCUSDT': 110.0}), isEmpty);
+      expect((await Trades.instance.checkLive({'BTCUSDT': 110.0})).settled, isEmpty);
       final t = (await Trades.instance.load()).single;
       expect(t.closePrice, 104, reason: 'the tick overwrote a manual close');
       expect(t.closedBy, '');
@@ -1662,6 +1663,106 @@ void main() {
       expect(find.textContaining('TP '), findsOneWidget);
       expect(find.textContaining('130'), findsOneWidget);
       expect(find.textContaining('90'), findsOneWidget);
+    });
+  });
+
+  // THE FURTHEST IT HAS BEEN
+  //
+  // The lighter band on the bar: "it reached 90% to TP, it is at 85% now".
+  // Fed from two places that must merge and never overwrite -- the server's
+  // range since entry (the hours the app was closed) and the live ticks
+  // (while a screen is open) -- and shown on both sides at once when a
+  // trade has been both ways.
+  group('the furthest price has been since entry', () {
+    TradeEntry e(String side, double tp, double sl, {double? hi, double? lo}) =>
+        TradeEntry(id: 'x', symbol: 'BTCUSDT', side: side, size: 1,
+            entryPrice: 100, openedAt: DateTime.now(), takeProfit: tp,
+            stopLoss: sl, highSince: hi, lowSince: lo);
+
+    test('best and worst are scaled like the live position', () {
+      final t = e('LONG', 130, 90, hi: 127, lo: 94);
+      expect(t.bestPosition, closeTo(0.9, 1e-9));    // 27 of 30 up
+      expect(t.worstPosition, closeTo(0.6, 1e-9));   // 6 of 10 down
+      expect(t.barrierPosition(125.5), closeTo(0.85, 1e-9));
+      // a short reads the other way round
+      final sh = e('SHORT', 80, 110, hi: 104, lo: 86);
+      expect(sh.bestPosition, closeTo(0.7, 1e-9));   // 14 of 20 down
+      expect(sh.worstPosition, closeTo(0.4, 1e-9));  // 4 of 10 up
+      // never seen past entry on a side -> 0 on that side, not negative
+      expect(e('LONG', 130, 90, hi: 120, lo: 100).worstPosition, 0.0);
+      expect(e('LONG', 130, 90).bestPosition, isNull);
+    });
+
+    test('extremes only ever widen, from either source', () {
+      var t = e('LONG', 130, 90);
+      t = t.withExtremes(high: 110, low: 97);
+      expect((t.highSince, t.lowSince), (110.0, 97.0));
+      // a single tick above entry sets the high; the low stays at ENTRY,
+      // because price was there when the trade opened
+      final one = e('LONG', 130, 90).withExtremes(high: 118, low: 118);
+      expect((one.highSince, one.lowSince), (118.0, 100.0));
+      // the server says the range was narrower than a tick already saw:
+      // nothing shrinks
+      final same = t.withExtremes(high: 105, low: 98);
+      expect(identical(same, t), isTrue, reason: 'narrower must be a no-op');
+      // and a tick beyond it widens one side without touching the other
+      t = t.withExtremes(high: 127, low: 127);
+      expect((t.highSince, t.lowSince), (127.0, 97.0));
+      // garbage is ignored, not recorded
+      expect(identical(t.withExtremes(high: 0, low: -1), t), isTrue);
+      expect(identical(t.withExtremes(high: double.nan), t), isTrue);
+    });
+
+    test('a live tick widens the bar without a disk write', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(e('LONG', 130, 90));
+      final r = await Trades.instance.checkLive({'BTCUSDT': 118.0});
+      expect(r.extremesMoved, isTrue);
+      expect(r.settled, isEmpty);
+      expect((await Trades.instance.load()).single.highSince, 118.0);
+      // a quiet tick inside the range moves nothing
+      final again = await Trades.instance.checkLive({'BTCUSDT': 110.0});
+      expect(again.extremesMoved, isFalse);
+    });
+
+    test('closing keeps the extremes, so a finished trade still shows them',
+        () {
+      final t = e('LONG', 130, 90, hi: 127, lo: 94).closedAtPrice(125);
+      expect((t.highSince, t.lowSince), (127.0, 94.0));
+    });
+
+    test('they survive being written and read back', () {
+      final t = TradeEntry.fromJson(
+          e('LONG', 130, 90, hi: 127, lo: 94).toJson());
+      expect((t.highSince, t.lowSince), (127.0, 94.0));
+      // and an entry saved before the fields existed reads as unknown
+      final old = e('LONG', 130, 90).toJson()
+        ..remove('high_since')
+        ..remove('low_since');
+      expect(TradeEntry.fromJson(old).highSince, isNull);
+    });
+
+    testWidgets('the lighter band is drawn beyond the live fill', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SizedBox(
+                  width: 300,
+                  child: BarrierBar(
+                      entry: e('LONG', 130, 90, hi: 127, lo: 94),
+                      livePrice: 125.5)))));
+      final colours = t
+          .widgetList<Container>(find.byType(Container))
+          .map((c) => (c.decoration as BoxDecoration?)?.color)
+          .whereType<Color>()
+          .toSet();
+      // solid green for now, light green for where it got to, light red
+      // for the dip -- all three at once
+      expect(colours, contains(Obsidian.green));
+      expect(colours, contains(Obsidian.green.withValues(alpha: 0.28)));
+      expect(colours, contains(Obsidian.red.withValues(alpha: 0.28)));
+      expect(colours, isNot(contains(Obsidian.red)),
+          reason: 'price is on the target side; no solid red');
     });
   });
 }
