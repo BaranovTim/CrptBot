@@ -239,14 +239,24 @@ FAVICON = (
 
 
 def landing_html(state: str) -> str:
-    """The page Stripe sends the customer to. Deliberately self-contained.
+    """The page Stripe sends the customer to. See `landing_html_custom`."""
+    mark, colour, title, body, foot = _COPY.get(state, _COPY[PENDING])
+    return landing_html_custom(mark=mark, colour=colour, title=title,
+                               body=body, foot=foot)
+
+
+def landing_html_custom(*, mark: str, colour: str, title: str, body: str,
+                        foot: str) -> str:
+    """A one-card page for a browser that arrived from somewhere else --
+    Stripe's checkout, or the confirmation link in an email. Deliberately
+    self-contained.
 
     No fonts, no scripts, no CDN. It is the first thing somebody sees after
-    handing over money, on whatever browser their phone opened, possibly on
-    a bad connection -- so it has to render from the one response, with
-    nothing left to fetch that could fail or hang.
+    handing over money or clicking a link in their mail, on whatever browser
+    their phone opened, possibly on a bad connection -- so it has to render
+    from the one response, with nothing left to fetch that could fail or
+    hang. `body` and `title` are trusted server strings, never user input.
     """
-    mark, colour, title, body, foot = _COPY.get(state, _COPY[PENDING])
     return f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">

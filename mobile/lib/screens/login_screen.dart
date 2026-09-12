@@ -18,6 +18,8 @@
 library;
 
 import 'dart:async';
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 
@@ -42,9 +44,20 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _id = TextEditingController();
   final _key = TextEditingController();
+  final _user = TextEditingController();
+  final _confirm = TextEditingController();
   bool _obscure = true;
   bool _register = false;
   bool _busy = false;
+  /// Set after a registration the server is holding for confirmation. The
+  /// screen switches to "check your email" and the address is kept for the
+  /// resend button.
+  String? _awaitingConfirmationFor;
+  /// Providers the server is set up for. Empty until it says otherwise, so
+  /// no button is ever drawn for a sign-in that would fail.
+  List<({String id, String label})> _providers = const [];
+  /// A provider sign-in in progress: the browser has it, we poll.
+  Timer? _oauthPoll;
   bool _probing = true;
   bool _linked = false;
   String _linkDetail = 'checking link...';
@@ -59,8 +72,11 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void dispose() {
     _probeRetry?.cancel();
+    _oauthPoll?.cancel();
     _id.dispose();
     _key.dispose();
+    _user.dispose();
+    _confirm.dispose();
     super.dispose();
   }
 
@@ -97,6 +113,12 @@ class _LoginScreenState extends State<LoginScreen> {
         _probing = false;
         _linkDetail = 'Network Link Secure';
       });
+      // Separately and best-effort: an old server without this route must
+      // not turn a healthy link into "no link".
+      try {
+        final p = await widget.client.authProviders();
+        if (mounted) setState(() => _providers = p);
+      } catch (_) {}
     } catch (_) {
       if (!mounted) return;
       final waited = DateTime.now().difference(_probeSince);
@@ -137,14 +159,47 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _error = 'That does not look like an email address.');
       return;
     }
+    // The same rules the server applies, checked here first so a typo is
+    // caught before a round trip. The server is still the authority.
+    final username = _user.text.trim();
+    if (_register) {
+      if (username.length < 4) {
+        setState(() => _error = 'A username needs at least 4 characters.');
+        return;
+      }
+      if (!RegExp(r'^[A-Za-z][A-Za-z0-9_]*$').hasMatch(username)) {
+        setState(() => _error =
+            'Letters, digits and underscores, starting with a letter.');
+        return;
+      }
+      if (_confirm.text != pw) {
+        setState(() => _error = 'The two passwords do not match.');
+        return;
+      }
+    }
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      final account = _register
-          ? await widget.client.register(id, pw)
-          : await widget.client.login(id, pw);
+      final Account account;
+      if (_register) {
+        final r = await widget.client.register(
+            email: id, username: username, password: pw, confirm: _confirm.text);
+        if (r.pending) {
+          // Held until the link in the email is opened. No token was
+          // issued, so there is nothing to save and nowhere to go yet.
+          if (!mounted) return;
+          setState(() {
+            _busy = false;
+            _awaitingConfirmationFor = id;
+          });
+          return;
+        }
+        account = r.account;
+      } else {
+        account = await widget.client.login(id, pw);
+      }
       // persist the SESSION, not the password — plus the account itself, so
       // a later cold start with no network can still open the app
       await Settings.instance.saveToken(widget.client.token);
@@ -164,6 +219,82 @@ class _LoginScreenState extends State<LoginScreen> {
         _error = '$e';
       });
     }
+  }
+
+  Future<void> _resend() async {
+    final email = _awaitingConfirmationFor;
+    if (email == null) return;
+    setState(() => _busy = true);
+    try {
+      final msg = await widget.client.resendConfirmation(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          backgroundColor: Obsidian.surfaceHigh,
+          content: Text(msg, style: Obsidian.body())));
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Sign in with a provider: hand the browser a URL, then ask the server
+  /// every two seconds whether the browser has finished. No deep link back
+  /// into the app -- see `api/oauth.py` for why polling is the safer
+  /// design on a phone.
+  Future<void> _signInWith(String provider) async {
+    final device = _nonce();
+    final url = Uri.parse(widget.client.oauthStartUrl(provider, device));
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = 'Could not open the browser.';
+        });
+      }
+      return;
+    }
+    var polls = 0;
+    _oauthPoll?.cancel();
+    _oauthPoll = Timer.periodic(const Duration(seconds: 2), (t) async {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      // Five minutes, matching the server's own expiry for the token it
+      // files. After that the person has wandered off, and a poll every
+      // two seconds forever is a battery drain in their pocket.
+      if (++polls > 150) {
+        t.cancel();
+        setState(() {
+          _busy = false;
+          _error = 'Sign-in timed out. Try again.';
+        });
+        return;
+      }
+      try {
+        final token = await widget.client.oauthPoll(device);
+        if (token == null) return;
+        t.cancel();
+        final me = await widget.client.me();
+        await Settings.instance.saveToken(token);
+        await Settings.instance.saveAccount(me);
+        if (!mounted) return;
+        widget.onEnter(me);
+      } catch (_) {
+        // offline blip; keep polling
+      }
+    });
+  }
+
+  static String _nonce() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    final r = Random.secure();
+    return List.generate(32, (_) => chars[r.nextInt(chars.length)]).join();
   }
 
   Future<void> _editHost() async {
@@ -208,6 +339,67 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Widget _confirmPanel() => GlassPanel(
+        padding: const EdgeInsets.all(24),
+        radius: Obsidian.rXl,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Icon(Icons.mark_email_unread_outlined,
+                size: 40, color: Obsidian.green),
+            const SizedBox(height: 14),
+            Text('Check your email',
+                textAlign: TextAlign.center, style: Obsidian.headlineMd()),
+            const SizedBox(height: 8),
+            Text(
+                'We sent a confirmation link to\n$_awaitingConfirmationFor\n\n'
+                'Open it, then come back and sign in. The link works once '
+                'and expires in 24 hours.',
+                textAlign: TextAlign.center,
+                style: Obsidian.body(color: Obsidian.onSurfaceVariant)),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: Obsidian.body(color: Obsidian.redSoft, size: 12.5)),
+            ],
+            const SizedBox(height: 20),
+            SizedBox(
+              height: 48,
+              child: OutlinedButton(
+                onPressed: _busy ? null : _resend,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Obsidian.onSurface,
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(Obsidian.rLg)),
+                ),
+                child: Text('RESEND THE LINK',
+                    style: Obsidian.labelSm(color: Obsidian.onSurface, size: 12)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => setState(() {
+                _awaitingConfirmationFor = null;
+                _register = false;
+                _error = null;
+              }),
+              child: Text('I have confirmed \u2014 sign in',
+                  style: Obsidian.body(color: Obsidian.primary, size: 12.5)),
+            ),
+          ],
+        ),
+      );
+
+  static IconData _providerIcon(String id) => switch (id) {
+        'google' => Icons.g_mobiledata_rounded,
+        'github' => Icons.code_rounded,
+        'facebook' => Icons.facebook_rounded,
+        'apple' => Icons.apple_rounded,
+        _ => Icons.login_rounded,
+      };
+
   Widget _label(IconData icon, String text) => Row(
         children: [
           Icon(icon, size: 15, color: Obsidian.outline),
@@ -240,17 +432,32 @@ class _LoginScreenState extends State<LoginScreen> {
                           : 'Sign in to your account',
                       style: Obsidian.body(color: Obsidian.outline)),
                   const SizedBox(height: 26),
+                  if (_awaitingConfirmationFor != null)
+                    _confirmPanel()
+                  else
                   GlassPanel(
                     padding: const EdgeInsets.all(24),
                     radius: Obsidian.rXl,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _label(Icons.alternate_email_rounded, 'EMAIL'),
+                        if (_register) ...[
+                          _label(Icons.person_outline_rounded, 'USERNAME'),
+                          const SizedBox(height: 10),
+                          GlassField(
+                            controller: _user,
+                            hint: 'at least 4 characters',
+                            capitalization: TextCapitalization.none,
+                            onChanged: (_) => setState(() => _error = null),
+                          ),
+                          const SizedBox(height: 20),
+                        ],
+                        _label(Icons.alternate_email_rounded,
+                            _register ? 'EMAIL' : 'EMAIL OR USERNAME'),
                         const SizedBox(height: 10),
                         GlassField(
                           controller: _id,
-                          hint: 'you@example.com',
+                          hint: _register ? 'you@example.com' : 'you@example.com or username',
                           // The right keyboard matters more than it sounds:
                           // an address typed on a keyboard that capitalises
                           // and hides the @ is an address typed wrong.
@@ -278,6 +485,17 @@ class _LoginScreenState extends State<LoginScreen> {
                                 color: Obsidian.outline),
                           ),
                         ),
+                        if (_register) ...[
+                          const SizedBox(height: 20),
+                          _label(Icons.lock_outline_rounded, 'CONFIRM PASSWORD'),
+                          const SizedBox(height: 10),
+                          GlassField(
+                            controller: _confirm,
+                            hint: 'the same password again',
+                            obscure: _obscure,
+                            onChanged: (_) => setState(() => _error = null),
+                          ),
+                        ],
                         if (_error != null) ...[
                           const SizedBox(height: 16),
                           Text(_error!,
@@ -325,6 +543,43 @@ class _LoginScreenState extends State<LoginScreen> {
                                         size: 12.5)),
                           ),
                         ),
+                        if (_providers.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Row(children: [
+                            Expanded(child: Divider(
+                                color: Colors.white.withValues(alpha: 0.08))),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              child: Text('OR CONTINUE WITH',
+                                  style: Obsidian.labelSm(
+                                      color: Obsidian.outline, size: 10)),
+                            ),
+                            Expanded(child: Divider(
+                                color: Colors.white.withValues(alpha: 0.08))),
+                          ]),
+                          const SizedBox(height: 14),
+                          for (final p in _providers) ...[
+                            SizedBox(
+                              height: 46,
+                              child: OutlinedButton.icon(
+                                onPressed: _busy ? null : () => _signInWith(p.id),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Obsidian.onSurface,
+                                  side: BorderSide(
+                                      color: Colors.white.withValues(alpha: 0.14)),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(Obsidian.rLg)),
+                                ),
+                                icon: Icon(_providerIcon(p.id), size: 18),
+                                label: Text(p.label,
+                                    style: Obsidian.labelSm(
+                                        color: Obsidian.onSurface, size: 12.5)),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                          ],
+                        ],
                       ],
                     ),
                   ),

@@ -578,6 +578,8 @@ class Consensus {
 class Account {
   Account.fromJson(Map<String, dynamic> j)
       : identifier = j['identifier'] as String? ?? '',
+        username = j['username'] as String?,
+        emailVerified = j['email_verified'] as bool? ?? true,
         tier = j['tier'] as String? ?? 'free',
         entitled = j['entitled'] as bool? ?? false,
         operator = j['operator'] as bool? ?? false,
@@ -589,6 +591,8 @@ class Account {
 
   const Account.anonymous()
       : identifier = '',
+        username = null,
+        emailVerified = true,
         tier = 'free',
         entitled = false,
         operator = false,
@@ -596,6 +600,17 @@ class Account {
 
   final String identifier, tier;
   final bool entitled;
+
+  /// Chosen at sign-up. Null on accounts older than the field, which show
+  /// the email where a name would go.
+  final String? username;
+
+  /// False only while a confirmation link is outstanding. Defaults true so
+  /// a server that predates the field reads as "nothing to confirm".
+  final bool emailVerified;
+
+  /// What to call this person on screen.
+  String get displayName => username ?? identifier;
 
   /// Signed in with the shared operator key rather than an account. Full
   /// access, no username to display.

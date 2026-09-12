@@ -40,6 +40,7 @@ import hmac
 import json
 import logging
 import os
+import urllib.parse
 import socket
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -227,7 +228,12 @@ class Handler(BaseHTTPRequestHandler):
     # not this page's -- so being open costs nothing.
     OPEN = ("/", "/api", "/api/health",
             "/api/auth/login", "/api/auth/register", "/api/billing/plans",
-            "/billing/done", "/billing/cancelled")
+            "/billing/done", "/billing/cancelled",
+            # The confirmation link is opened from an email, in a browser,
+            # by somebody who by definition cannot sign in yet. Resend is
+            # open for the same reason, and throttled like sign-in.
+            "/api/auth/verify", "/api/auth/resend", "/api/auth/providers",
+            "/api/auth/oauth/poll")
 
     # Reachable by a signed-in account with no subscription. The chart is
     # here because the paywall is meant to show the graph and withhold the
@@ -276,6 +282,11 @@ class Handler(BaseHTTPRequestHandler):
         you would be buying", 403 would mean "never, for you".
         """
         if route in self.OPEN:
+            return None
+        # Provider redirects arrive with no session and a route that carries
+        # the provider name; the state token inside is the credential.
+        if route.startswith("/api/auth/oauth/") and (
+                route.endswith("/start") or route.endswith("/callback")):
             return None
         if not TOKEN:
             return None                     # loopback-only mode; see serve()
@@ -350,6 +361,30 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(user.public() if user else
                                {"identifier": None, "tier": "free",
                                 "entitled": False})
+            elif route == "/api/auth/verify":
+                from api.accounts import AuthError as _AE
+                from api.billing import landing_html_custom
+                try:
+                    acc = get_accounts()
+                    u = acc.confirm_email(opt("token") or "")
+                    self._send_html(landing_html_custom(
+                        mark="&#10003;", colour="#34d399",
+                        title="Email confirmed",
+                        body=f"{u.username or u.identifier}, your account "
+                             "is ready. Open Vanth and sign in.",
+                        foot="You can close this page."))
+                except _AE as e:
+                    self._send_html(landing_html_custom(
+                        mark="&#8226;", colour="#fbbf24",
+                        title="This link did not work",
+                        body=str(e),
+                        foot="Open Vanth and tap \u201cresend\u201d on the "
+                             "sign-in screen for a fresh one."), status=400)
+            elif route == "/api/auth/providers":
+                from api.oauth import available
+                self._send({"providers": available()})
+            elif route.startswith("/api/auth/oauth/"):
+                self._oauth_get(route, opt)
             elif route in ("/billing/done", "/billing/cancelled"):
                 from api.billing import landing_html, landing_state
                 self._send_html(landing_html(
@@ -627,6 +662,85 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return {}
 
+    def _oauth_get(self, route: str, opt) -> None:
+        from api.billing import landing_html_custom
+        from api.oauth import OAuthError, get_flow
+        parts = route.split("/")           # ['', 'api','auth','oauth', p, action]
+        flow = get_flow()
+        if route == "/api/auth/oauth/poll":
+            tok = flow.poll(opt("device") or "")
+            self._send({"token": tok} if tok else {"token": None})
+            return
+        if len(parts) != 6:
+            self._send({"error": "not found", "path": route}, status=404)
+            return
+        provider, action = parts[4], parts[5]
+        try:
+            if action == "start":
+                url = flow.start(provider, opt("device") or "")
+                self.send_response(302)
+                self.send_header("Location", url)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            if action == "callback":
+                self._finish_oauth(provider, opt("code") or "",
+                                   opt("state") or "", None)
+                return
+        except OAuthError as e:
+            self._send_html(landing_html_custom(
+                mark="&#8226;", colour="#fbbf24",
+                title="Sign-in did not complete", body=str(e),
+                foot="Go back to Vanth and try again."), status=400)
+            return
+        self._send({"error": "not found", "path": route}, status=404)
+
+    def _oauth_post_callback(self, route: str) -> None:
+        from api.billing import landing_html_custom
+        from api.oauth import OAuthError
+        provider = route.split("/")[4]
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        raw = self.rfile.read(n) if 0 < n <= 64 * 1024 else b""
+        form = dict(urllib.parse.parse_qsl(raw.decode(errors="ignore")))
+        try:
+            self._finish_oauth(provider, form.get("code", ""),
+                               form.get("state", ""), form.get("id_token"))
+        except OAuthError as e:
+            self._send_html(landing_html_custom(
+                mark="&#8226;", colour="#fbbf24",
+                title="Sign-in did not complete", body=str(e),
+                foot="Go back to Vanth and try again."), status=400)
+
+    def _finish_oauth(self, provider: str, code: str, state: str,
+                      id_token) -> None:
+        from api.accounts import get_accounts
+        from api.billing import landing_html_custom
+        from api.oauth import get_flow
+        pub = get_flow().callback(provider, code, state, get_accounts(),
+                                  id_token=id_token)
+        who = pub.get("username") or pub.get("identifier") or ""
+        self._send_html(landing_html_custom(
+            mark="&#10003;", colour="#34d399", title="Signed in",
+            body=f"{who}, you are signed in. Go back to Vanth \u2014 it "
+                 "will pick this up on its own.",
+            foot="You can close this page."))
+
+    def _send_confirmation(self, u) -> None:
+        """Best effort. Failure is logged by `mail`, and the response to the
+        registration is the same either way -- the account exists, and the
+        app offers a resend."""
+        from api import mail
+        base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+        if not base:
+            log.error("PUBLIC_BASE_URL is not set; the confirmation link "
+                      "for %s cannot be built", u.identifier)
+            return
+        link = f"{base}/api/auth/verify?token={u.verify_token}"
+        mail.confirmation(u.identifier, link, u.username)
+
     def _stripe_webhook(self) -> None:
         """Stripe's events. Authenticated by signature, not by session."""
         from api.accounts import get_accounts
@@ -668,6 +782,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:                          # noqa: N802
         route = urlparse(self.path).path.rstrip("/") or "/"
 
+        # Apple answers its authorize request with a form POST to the
+        # callback, not a GET. Same handler, the parameters just arrive in
+        # the body. Before `_gate` for the reason the GET is: no session.
+        if route.startswith("/api/auth/oauth/") and route.endswith("/callback"):
+            self._oauth_post_callback(route)
+            return
+
         # Stripe first: before `_gate`, and before `_body`. Both matter.
         #
         # Stripe holds no session token, so its credential is the signature
@@ -700,7 +821,8 @@ class Handler(BaseHTTPRequestHandler):
         # punish normal use to defend against nothing.
         ip = client_ip(self)
         throttle = get_throttle()
-        if route in ("/api/auth/login", "/api/auth/register"):
+        if route in ("/api/auth/login", "/api/auth/register",
+                     "/api/auth/resend"):
             wait = throttle.check(ip, ident)
             if wait is not None:
                 payload, status = retry_payload(wait)
@@ -759,10 +881,32 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(r, status=200 if r.get("ok") else 409)
                 return
             if route == "/api/auth/register":
-                u = acc.register(ident, password)
+                u = acc.register(
+                    ident, password,
+                    username=str(body.get("username") or ""),
+                    confirm=(str(body["confirm"])
+                             if "confirm" in body else None),
+                    require_username=True)
                 throttle.forget(ip, ident)
-                self._send({"token": acc.start_session(u),
-                            "user": u.public()}, status=201)
+                if u.email_verified:
+                    self._send({"token": acc.start_session(u),
+                                "user": u.public()}, status=201)
+                else:
+                    # NO TOKEN. The account exists but cannot be used until
+                    # the link is opened; handing out a session here would
+                    # make the confirmation decorative.
+                    self._send_confirmation(u)
+                    self._send({"pending": True, "user": u.public()},
+                               status=201)
+            elif route == "/api/auth/resend":
+                # Same answer whether the address is unknown, already
+                # confirmed, or freshly re-sent. Anything else is a way to
+                # ask "does this email have an account".
+                u = acc.new_verify_token(ident)
+                if u is not None:
+                    self._send_confirmation(u)
+                self._send({"ok": True, "message": "If that address has an "
+                            "unconfirmed account, a new link is on its way."})
             elif route == "/api/auth/login":
                 u = acc.verify(ident, password)
                 throttle.forget(ip, ident)   # a mistyped password must not

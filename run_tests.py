@@ -35,6 +35,7 @@ MODULES = [
     "tests.test_forming",
     "tests.test_api",
     "tests.test_billing",
+    "tests.test_signup",
     "tests.test_timeframes",
     "tests.test_schedule",
     "tests.test_alerts",

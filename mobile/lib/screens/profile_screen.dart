@@ -798,9 +798,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _topBar(Account a) {
-    final initials = a.identifier.isEmpty
+    final initials = a.displayName.isEmpty
         ? '?'
-        : a.identifier.trim().substring(0, 1).toUpperCase();
+        : a.displayName.trim().substring(0, 1).toUpperCase();
     return Row(
       children: [
         Container(
@@ -824,7 +824,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Row(
                 children: [
                   Flexible(
-                    child: Text(a.identifier,
+                    // The username where there is one; the email on
+                    // accounts older than usernames.
+                    child: Text(a.displayName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Obsidian.headlineMd()),

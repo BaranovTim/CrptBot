@@ -157,6 +157,31 @@ def password_problem(password: str, identifier: str = "") -> Optional[str]:
 _EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(\.[^@\s.]+)+$")
 
 
+MIN_USERNAME, MAX_USERNAME = 4, 24
+_USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def username_problem(username: str) -> Optional[str]:
+    """Why this username is not acceptable, or None if it is.
+
+    Letters, digits and underscore, starting with a letter, 4 to 24 long.
+    No '@' by construction, so a username can never be mistaken for an
+    email at sign-in and the two namespaces cannot collide.
+    """
+    u = (username or "").strip()
+    if len(u) < MIN_USERNAME:
+        return f"a username needs at least {MIN_USERNAME} characters"
+    if len(u) > MAX_USERNAME:
+        return f"a username can be at most {MAX_USERNAME} characters"
+    if not _USERNAME.match(u):
+        return ("a username is letters, digits and underscores, and starts "
+                "with a letter")
+    return None
+
+
+VERIFY_TTL = 24 * 3600
+
+
 def email_problem(identifier: str) -> Optional[str]:
     ident = (identifier or "").strip()
     if not ident:
@@ -187,6 +212,22 @@ class User:
     # epoch seconds; None means "no subscription". Admin ignores it.
     subscription_ends: Optional[float] = None
     stripe_customer: Optional[str] = None
+    # Chosen at registration, unique case-insensitively, usable to sign in.
+    # None on accounts from before it existed; those keep signing in by
+    # email and show the email where a name would go.
+    username: Optional[str] = None
+    # TRUE BY DEFAULT, on purpose. Every account that exists at the moment
+    # this field appears was created without a confirmation step, and
+    # loading them as unverified would lock all of them out at once.
+    # Registration sets it False only when a mailer is configured to send
+    # the link that sets it True again.
+    email_verified: bool = True
+    verify_token: Optional[str] = None
+    verify_sent_at: Optional[float] = None
+    # "google", "github"... when the account was created by an OAuth
+    # sign-in. Such an account has a random unguessable hash and cannot be
+    # signed into with a password; the provider is the password.
+    oauth_provider: Optional[str] = None
 
     @property
     def entitled(self) -> bool:
@@ -205,6 +246,8 @@ class User:
         """What the phone is allowed to know. Never the salt or the hash."""
         return {
             "identifier": self.identifier,
+            "username": self.username,
+            "email_verified": self.email_verified,
             "tier": self.tier,
             "entitled": self.entitled,
             "subscription_ends": self.subscription_ends,
@@ -298,7 +341,28 @@ class Accounts:
 
     # ----------------------------------------------------------- accounts
     def register(self, identifier: str, password: str,
-                 tier: str = "free") -> User:
+                 tier: str = "free", username: Optional[str] = None,
+                 confirm: Optional[str] = None,
+                 require_username: bool = False) -> User:
+        """A new account. Held unverified if, and only if, mail can be sent.
+
+        `confirm` is checked here too, not only in the app. The app is the
+        convenient place to catch a typo; the server is the only place that
+        cannot be bypassed.
+
+        `require_username` is False HERE and True at the registration
+        route: the public form insists on one, while `manage_accounts.py`
+        and the tests, which predate usernames, still work.
+        """
+        if confirm is not None and confirm != password:
+            raise AuthError("the two passwords do not match")
+        uname = (username or "").strip() or None
+        if require_username and uname is None:
+            raise AuthError("choose a username")
+        if uname is not None:
+            bad = username_problem(uname)
+            if bad:
+                raise AuthError(bad)
         # EMAIL, NOT A HANDLE.
         #
         # Stored lower-cased because addresses are compared that way in
@@ -320,19 +384,117 @@ class Accounts:
                 # protects privacy on an email-based system; here the
                 # identifier is a chosen handle, and a registration form that
                 # refuses without saying why is unusable.
-                raise AuthError("that identifier is already taken")
+                raise AuthError("that email already has an account")
+            if uname is not None and self._by_username(uname) is not None:
+                raise AuthError("that username is taken")
+            from api import mail
+            gated = mail.configured()
             salt = secrets.token_bytes(_SALT_BYTES)
             u = User(identifier=ident, salt=salt.hex(),
                      hash=_hash(password, salt), algo=_DEFAULT_ALGO,
-                     tier=tier)
+                     tier=tier, username=uname,
+                     email_verified=not gated,
+                     verify_token=secrets.token_urlsafe(32) if gated else None,
+                     verify_sent_at=time.time() if gated else None)
             self._users[ident.lower()] = u
             self._save()
-            log.info("registered %s (%s)", ident, tier)
+            log.info("registered %s (%s)%s", ident, tier,
+                     "" if u.email_verified else ", awaiting confirmation")
+            return u
+
+    def register_external(self, email: str, *, provider: str,
+                          display_name: Optional[str] = None) -> User:
+        """An account created by an OAuth sign-in. Verified -- the provider
+        vouched for the address -- and password-less."""
+        ident = (email or "").strip().lower()
+        bad = email_problem(ident)
+        if bad:
+            raise AuthError(bad)
+        with self._lock:
+            if ident in self._users:
+                return self._users[ident]
+            # A hash of 32 random bytes nobody has seen. `verify()` runs the
+            # real comparison against it and fails every time, which is the
+            # intent: there is no password to guess.
+            salt = secrets.token_bytes(_SALT_BYTES)
+            u = User(identifier=ident, salt=salt.hex(),
+                     hash=_hash(secrets.token_urlsafe(32), salt),
+                     algo=_DEFAULT_ALGO, tier="free",
+                     username=self._derive_username(display_name, ident),
+                     email_verified=True, oauth_provider=provider)
+            self._users[ident] = u
+            self._save()
+            log.info("registered %s via %s", ident, provider)
+            return u
+
+    def _derive_username(self, display_name: Optional[str],
+                         email: str) -> Optional[str]:
+        """Something that satisfies `username_problem` and is free, from the
+        provider's display name or the email's local part. None if nothing
+        usable survives -- the profile falls back to the email."""
+        seeds = [display_name or "", email.split("@", 1)[0]]
+        for seed in seeds:
+            base = re.sub(r"[^A-Za-z0-9_]", "", seed.replace(" ", "_"))
+            base = re.sub(r"^[^A-Za-z]+", "", base)[:MAX_USERNAME - 3]
+            if len(base) < MIN_USERNAME:
+                continue
+            for n in range(0, 100):
+                cand = base if n == 0 else f"{base}{n}"
+                if username_problem(cand) is None and \
+                        self._by_username(cand) is None:
+                    return cand
+        return None
+
+    def _by_username(self, username: str) -> Optional[User]:
+        want = (username or "").strip().lower()
+        if not want:
+            return None
+        for u in self._users.values():
+            if (u.username or "").lower() == want:
+                return u
+        return None
+
+    def confirm_email(self, token: str) -> User:
+        """Flip an account to verified. The token works once."""
+        tok = (token or "").strip()
+        if not tok:
+            raise AuthError("that confirmation link is not valid")
+        with self._lock:
+            self._maybe_reload()
+            for u in self._users.values():
+                if u.verify_token and hmac.compare_digest(u.verify_token, tok):
+                    if (u.verify_sent_at or 0) + VERIFY_TTL < time.time():
+                        raise AuthError("that confirmation link has expired; "
+                                        "ask for a new one from the app")
+                    u.email_verified = True
+                    u.verify_token = None
+                    self._save()
+                    log.info("confirmed %s", u.identifier)
+                    return u
+        raise AuthError("that confirmation link is not valid")
+
+    def new_verify_token(self, identifier: str) -> Optional[User]:
+        """A fresh token for a resend. None when there is nothing to do --
+        unknown address or already verified -- and the caller says the same
+        thing either way, so this cannot be used to probe for accounts."""
+        with self._lock:
+            u = self.get(identifier)
+            if u is None or u.email_verified:
+                return None
+            u.verify_token = secrets.token_urlsafe(32)
+            u.verify_sent_at = time.time()
+            self._save()
             return u
 
     def get(self, identifier: str) -> Optional[User]:
+        """By email, or by username. Usernames cannot contain '@', so the
+        two lookups can never answer for each other."""
         self._maybe_reload()
-        return self._users.get((identifier or "").strip().lower())
+        key = (identifier or "").strip().lower()
+        u = self._users.get(key)
+        if u is None and "@" not in key:
+            u = self._by_username(key)
+        return u
 
     def verify(self, identifier: str, password: str) -> User:
         u = self.get(identifier)
@@ -345,6 +507,12 @@ class Accounts:
         got = _hash(password or "", bytes.fromhex(u.salt), u.algo)
         if not hmac.compare_digest(got, u.hash):
             raise AuthError("wrong identifier or password")
+        # AFTER the password check, never before: telling somebody with the
+        # wrong password that the account is unconfirmed would confirm the
+        # account exists.
+        if not u.email_verified:
+            raise AuthError("confirm your email first -- open the link we "
+                            "sent, or ask for a new one")
         return u
 
     def set_tier(self, identifier: str, tier: str,

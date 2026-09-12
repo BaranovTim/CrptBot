@@ -173,11 +173,55 @@ class ApiClient {
     return Account.fromJson(j['user'] as Map<String, dynamic>);
   }
 
-  Future<Account> register(String identifier, String password) async {
-    final j = await _post('/api/auth/register',
-        {'identifier': identifier, 'password': password});
+  /// Create an account. `pending` is true when the server is holding it
+  /// until the email link is opened -- in which case there is NO token and
+  /// the caller must not enter the app.
+  Future<({Account account, bool pending})> register({
+    required String email,
+    required String username,
+    required String password,
+    required String confirm,
+  }) async {
+    final j = await _post('/api/auth/register', {
+      'identifier': email,
+      'username': username,
+      'password': password,
+      'confirm': confirm,
+    });
     token = j['token'] as String? ?? '';
-    return Account.fromJson(j['user'] as Map<String, dynamic>);
+    return (
+      account: Account.fromJson(j['user'] as Map<String, dynamic>),
+      pending: j['pending'] == true,
+    );
+  }
+
+  /// Ask for a fresh confirmation link. The server answers the same
+  /// sentence whatever the address is, on purpose.
+  Future<String> resendConfirmation(String email) async {
+    final j = await _post('/api/auth/resend', {'identifier': email});
+    return j['message'] as String? ?? 'Sent.';
+  }
+
+  /// Which sign-in providers the server is set up for. Empty until the
+  /// credentials for one are in the server's .env.
+  Future<List<({String id, String label})>> authProviders() async {
+    final j = await _get('/api/auth/providers');
+    return [
+      for (final p in (j['providers'] as List? ?? const []))
+        (id: p['id'] as String, label: p['label'] as String),
+    ];
+  }
+
+  /// The browser URL that starts a provider sign-in for this device.
+  String oauthStartUrl(String provider, String device) =>
+      '$base/api/auth/oauth/$provider/start?device=$device';
+
+  /// The session token once the browser has finished, else null.
+  Future<String?> oauthPoll(String device) async {
+    final j = await _get('/api/auth/oauth/poll?device=$device');
+    final t = j['token'] as String?;
+    if (t != null && t.isNotEmpty) token = t;
+    return t;
   }
 
   Future<void> logout() async {
