@@ -114,5 +114,15 @@ for name, mult in DENS.items():
                 rounded=False), f"{RES}/drawable-{name}/ic_notification.png")
     made.append(f"drawable-{name}/ic_notification.png {px}px")
 
+# The in-app logo: what the sign-in screen draws above the wordmark. Same
+# mark, on the same rounded dark tile as the launcher icon, at a size that
+# stays crisp on a 3x phone at 76dp. The rename missed this file once --
+# the launcher changed and the sign-in screen kept the old logo -- so it is
+# generated here, from the same geometry, and cannot drift again.
+APP_LOGO = os.path.join(HERE, "..", "mobile", "assets", "logo.png")
+save(render(512, background=True, inset=1.0, flame=GREEN, grey=GREY,
+            rounded=True), APP_LOGO)
+made.append("mobile/assets/logo.png 512px")
+
 print("\n".join(made))
 print("total files:", len(made))

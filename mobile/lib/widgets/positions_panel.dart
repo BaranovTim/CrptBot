@@ -462,11 +462,16 @@ class JournalCard extends StatelessWidget {
     this.livePrice,
     this.onClose,
     this.onDelete,
+    this.onOpen,
   });
 
   final TradeEntry entry;
   final double? livePrice;
   final VoidCallback? onClose, onDelete;
+
+  /// Tap anywhere on the card that is not a button: open this pair's
+  /// dashboard, on the timeframe it was logged from.
+  final VoidCallback? onOpen;
 
   static const _medallion = <String, Color>{
     'BTC': Color(0xFFF7931A), 'ETH': Color(0xFF6F8AE8),
@@ -635,14 +640,23 @@ class JournalCard extends StatelessWidget {
       ),
     );
 
-    if (!entry.isOpen) return card;
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(Obsidian.rLg),
-        border: Border.all(
-            color: Obsidian.green.withValues(alpha: 0.45), width: 1.4),
-      ),
-      child: card,
+    final framed = !entry.isOpen
+        ? card
+        : Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(Obsidian.rLg),
+              border: Border.all(
+                  color: Obsidian.green.withValues(alpha: 0.45), width: 1.4),
+            ),
+            child: card,
+          );
+    if (onOpen == null) return framed;
+    // The buttons inside keep their own handlers; a tap that lands on them
+    // never reaches this. Everything else on the card is "show me this".
+    return InkWell(
+      onTap: onOpen,
+      borderRadius: BorderRadius.circular(Obsidian.rLg),
+      child: framed,
     );
   }
 

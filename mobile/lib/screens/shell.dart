@@ -103,6 +103,14 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     // phone has shipped. The fingerprint in push.dart makes this free when
     // nothing relevant changed.
     Trades.instance.addListener(_onTradesChanged);
+    // A tapped notification, while the app is running...
+    _tapSub = Notifications.instance.taps
+        .listen((r) => _openSymbol(r.symbol, r.interval));
+    // ...and the one that may have STARTED the app, which arrives no other
+    // way. Asked once, here, after the first frame can take a setState.
+    Notifications.instance.launchRequest().then((r) {
+      if (r != null && mounted) _openSymbol(r.symbol, r.interval);
+    });
     _positionsSub = _positions.stream.listen(
         (p) => unawaited(Trades.instance.checkLive(p)));
     _positions.start();
@@ -120,6 +128,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     MarketModeStore.instance.removeListener(_onModeChanged);
     Trades.instance.removeListener(_onTradesChanged);
+    _tapSub?.cancel();
     _positionsSub?.cancel();
     _positions.dispose();
     _alertTimer?.cancel();
@@ -330,6 +339,38 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     _live.switchTo(s);
   }
 
+  /// Show THIS pair on THIS timeframe, from wherever the app is.
+  ///
+  /// The one door for every "take me to DOGEUSDT 4h": a tapped
+  /// notification, a logged entry in Profile, a call on the Market page.
+  /// It works out the market from the symbol -- a USDT pair is crypto,
+  /// anything else is a stock -- and switches the mode if needed, so a
+  /// stock alert opens the stock dashboard even if you were looking at
+  /// coins. A null interval keeps the current one.
+  Future<void> _openSymbol(String symbol, String? interval) async {
+    final sym = symbol.trim().toUpperCase();
+    if (sym.isEmpty) return;
+    final want = marketFor(sym);
+    final crypto = want == MarketMode.crypto;
+    if (MarketModeStore.instance.mode != want) {
+      await MarketModeStore.instance.set(want);
+    }
+    if (interval != null && interval.isNotEmpty) {
+      unawaited(Settings.instance.saveInterval(interval));
+    }
+    if (!mounted) return;
+    setState(() {
+      if (crypto) {
+        _symbol = sym;
+      } else {
+        _stock = sym;
+      }
+      if (interval != null && interval.isNotEmpty) _interval = interval;
+      _tab = NavTab.dashboard;
+    });
+    if (crypto) _live.switchTo(sym);
+  }
+
   /// Swipe to the neighbouring pair, wrapping at both ends.
   ///
   /// The TIMEFRAME IS DELIBERATELY UNTOUCHED. Looking at 15m on BTC and
@@ -477,14 +518,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                       // Symbol AND timeframe. A call belongs to both, so
                       // opening one on the timeframe you happened to be on
                       // last would show a different answer.
-                      onOpenSignal: (sig) {
-                        _setSymbol(sig.symbol);
-                        Settings.instance.saveInterval(sig.interval);
-                        setState(() {
-                          _interval = sig.interval;
-                          _tab = NavTab.dashboard;
-                        });
-                      },
+                      onOpenSignal: (sig) =>
+                          _openSymbol(sig.symbol, sig.interval),
                     ),
                   // "the last page to buy the subscription" — for an
                   // unsubscribed account this tab IS the paywall, and it is
@@ -494,6 +529,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                           client: widget.client,
                           account: widget.account,
                           onSignOut: _signOut,
+                          onOpenSymbol: _openSymbol,
                         )
                       : SubscribeScreen(
                           client: widget.client,
@@ -543,6 +579,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   /// no socket.
   final MarketTicker _positions = MarketTicker();
   StreamSubscription<Map<String, double>>? _positionsSub;
+  StreamSubscription<OpenRequest>? _tapSub;
 
   /// Set when the customer is handed to Stripe, cleared once we stop
   /// looking. Without it every resume on a free account would poll for an
@@ -622,6 +659,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                 client: widget.client,
                 account: widget.account,
                 onSignOut: _signOut,
+                onOpenSymbol: _openSymbol,
               )
             : SubscribeScreen(
                 client: widget.client,
@@ -640,12 +678,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             _loadFollowed();
           },
           onOpenSignal: (sig) {
-            Settings.instance.saveInterval(sig.interval);
-            setState(() {
-              _stock = sig.symbol;
-              _interval = sig.interval;
-              _tab = NavTab.dashboard;
-            });
+            _openSymbol(sig.symbol, sig.interval);
             _loadFollowed();
           },
         );

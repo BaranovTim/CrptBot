@@ -48,7 +48,7 @@ void main() {
     await tester.pump();                                  // kick off restore
     await tester.pump(const Duration(milliseconds: 50));   // let it land
 
-    expect(find.text('VANTH'), findsOneWidget);
+    expect(find.text('Vanth'), findsOneWidget);
     expect(find.text('SIGN IN'), findsOneWidget);
     expect(find.text('Sign in to your account'), findsOneWidget);
   });
@@ -69,7 +69,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Both fields are required.'), findsOneWidget);
-    expect(find.text('VANTH'), findsOneWidget);      // still on sign-in
+    expect(find.text('Vanth'), findsOneWidget);      // still on sign-in
   });
 
   test('absent numbers stay null and never become zero', () {
@@ -1763,6 +1763,57 @@ void main() {
       expect(colours, contains(Obsidian.red.withValues(alpha: 0.28)));
       expect(colours, isNot(contains(Obsidian.red)),
           reason: 'price is on the target side; no solid red');
+    });
+  });
+
+  // TAP TO OPEN
+  //
+  // A notification about DOGEUSDT 4h used to open the app on whatever it
+  // showed last, because no tap handler was registered at all. Now every
+  // "take me there" -- notification, logged entry, call on the market
+  // page -- goes through one door in the shell, carrying symbol AND
+  // timeframe. What can be tested without a device: the payload survives
+  // the round trip, the entry remembers its timeframe, and the market is
+  // worked out correctly from the symbol.
+  group('tapping a thing opens the right pair on the right timeframe', () {
+    test('the notification payload round-trips symbol and timeframe', () {
+      final p = OpenRequest.encode('DOGEUSDT', '4h', 'alert-1');
+      final r = OpenRequest.decode(p)!;
+      expect((r.symbol, r.interval), ('DOGEUSDT', '4h'));
+      // a trade-closed notification has a pair but no timeframe of its own
+      final c = OpenRequest.decode(OpenRequest.encode('BTCUSDT', null, 'x'))!;
+      expect((c.symbol, c.interval), ('BTCUSDT', null));
+      // two alerts on the same pair get distinct payloads, so Android does
+      // not collapse one tap onto the other
+      expect(OpenRequest.encode('DOGEUSDT', '4h', 'a'),
+          isNot(OpenRequest.encode('DOGEUSDT', '4h', 'b')));
+    });
+
+    test('garbage payloads open nothing rather than something wrong', () {
+      for (final bad in [null, '', 'open', 'open||1h|x', 'nope|DOGEUSDT|4h|x',
+                         'a.id']) {
+        expect(OpenRequest.decode(bad), isNull, reason: '$bad');
+      }
+    });
+
+    test('a logged entry remembers the timeframe it was logged from', () {
+      final t = TradeEntry.create(
+          symbol: 'DOGEUSDT', side: 'LONG', size: 1, entryPrice: 0.1,
+          interval: '4h');
+      expect(t.interval, '4h');
+      expect(TradeEntry.fromJson(t.toJson()).interval, '4h');
+      expect(t.closedAtPrice(0.12).interval, '4h');
+      expect(t.withExtremes(high: 0.2, low: 0.05).interval, '4h');
+      // an entry from before the field opens on the current timeframe
+      final old = t.toJson()..remove('interval');
+      expect(TradeEntry.fromJson(old).interval, isNull);
+    });
+
+    test('the market is decided by the symbol, not by where you were', () {
+      expect(marketFor('DOGEUSDT'), MarketMode.crypto);
+      expect(marketFor('1000pepeusdt'), MarketMode.crypto);
+      expect(marketFor('AAPL'), MarketMode.stocks);
+      expect(marketFor('MSTR'), MarketMode.stocks);
     });
   });
 }

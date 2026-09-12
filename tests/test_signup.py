@@ -454,3 +454,87 @@ def test_an_oauth_account_cannot_be_signed_into_with_a_password():
             continue
         raise AssertionError(f"password {guess!r} opened an OAuth account")
     return True
+
+
+# ------------------------------------------------------------- the routes
+#
+# The store and the flow were tested; the HANDLERS were not, and the verify
+# page shipped with a missing import that every test passed straight over.
+# So the two handlers a person reaches from an email or a browser are driven
+# here directly, with a fake connection.
+
+class _FakeConn:
+    """Enough of Handler to call one handler method and capture the reply."""
+
+    def __init__(self, path: str = "/", body: bytes = b""):
+        from api.server import Handler
+        self.path = path
+        self.headers = {"Content-Length": str(len(body))}
+        self.rfile = __import__("io").BytesIO(body)
+        self.wfile = __import__("io").BytesIO()
+        self.status, self.ctype, self.html, self.json = None, None, None, None
+        for name in ("_verify_email_page", "_oauth_get", "_oauth_post_callback",
+                     "_finish_oauth"):
+            setattr(self, name, getattr(Handler, name).__get__(self))
+
+    def _send_html(self, html, status=200):
+        self.status, self.ctype, self.html = status, "text/html", html
+
+    def _send(self, payload, status=200):
+        self.status, self.ctype, self.json = status, "application/json", payload
+
+    def send_response(self, code):
+        self.status = code
+
+    def send_header(self, k, v):
+        setattr(self, "hdr_" + k.lower().replace("-", "_"), v)
+
+    def end_headers(self):
+        pass
+
+
+def test_the_verify_page_renders_for_a_bad_link_and_a_good_one():
+    def go(box):
+        import api.accounts as A
+        acc, path = _acc()
+        was = A._accounts if hasattr(A, "_accounts") else None
+        try:
+            A._accounts = acc
+            u = acc.register("a@x.com", PW, username="timo")
+
+            h = _FakeConn()
+            h._verify_email_page("nope")
+            assert h.status == 400 and h.ctype == "text/html", (h.status, h.ctype)
+            assert "did not work" in h.html
+
+            h = _FakeConn()
+            h._verify_email_page(u.verify_token)
+            assert h.status == 200 and "Email confirmed" in h.html, h.status
+            assert "timo" in h.html
+            assert acc.get("a@x.com").email_verified is True
+        finally:
+            A._accounts = was
+        return True
+    return _with_mailer(go)
+
+
+def test_the_oauth_start_route_redirects_and_a_bad_provider_is_a_page():
+    def go():
+        import api.oauth as O
+        O._flow = None
+        h = _FakeConn()
+        h._oauth_get("/api/auth/oauth/google/start",
+                     lambda k: "device-nonce-0123456789abcdef" if k == "device" else None)
+        assert h.status == 302, h.status
+        assert h.hdr_location.startswith("https://accounts.google.com/"), h.hdr_location
+
+        h = _FakeConn()
+        h._oauth_get("/api/auth/oauth/nosuch/start",
+                     lambda k: "device-nonce-0123456789abcdef" if k == "device" else None)
+        assert h.status == 400 and "not available" in h.html, (h.status, h.html)
+
+        h = _FakeConn()
+        h._oauth_get("/api/auth/oauth/poll", lambda k: "device-nonce-0123456789abcdef")
+        assert h.status == 200 and h.json == {"token": None}, h.json
+        return True
+    return _oauth_env(go)

@@ -19,6 +19,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 enum MarketMode { crypto, stocks }
 
+/// Which market a symbol belongs to, from its name alone.
+///
+/// The convention the whole app rests on: every crypto pair this app trades
+/// is quoted in USDT, and no stock ticker ends in those four letters. Used
+/// wherever a symbol arrives without its market -- a tapped notification, a
+/// logged entry -- and the app has to know which dashboard to open.
+MarketMode marketFor(String symbol) =>
+    symbol.trim().toUpperCase().endsWith('USDT')
+        ? MarketMode.crypto
+        : MarketMode.stocks;
+
 class MarketModeStore extends ChangeNotifier {
   MarketModeStore._();
   static final MarketModeStore instance = MarketModeStore._();

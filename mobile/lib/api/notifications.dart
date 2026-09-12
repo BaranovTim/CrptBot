@@ -34,6 +34,7 @@
 /// long ago it was, plus — for filings — the disclosure lag.
 library;
 
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
@@ -86,6 +87,29 @@ Future<String?> heldLine(String symbol) async {
   return 'Open entry: ${t.side} @ ${priceText(t.entryPrice, prefix: '')}';
 }
 
+/// Where a tapped notification wants the app to go.
+///
+/// `interval` is null when the notification had no timeframe of its own --
+/// a trade closing, say -- and the shell keeps whatever it is on.
+class OpenRequest {
+  const OpenRequest({required this.symbol, this.interval});
+  final String symbol;
+  final String? interval;
+
+  /// The payload string. Symbols and intervals never contain '|', and the
+  /// third field is free for an id so two alerts on one pair still get
+  /// distinct payloads.
+  static String encode(String symbol, String? interval, String id) =>
+      'open|$symbol|${interval ?? ''}|$id';
+
+  static OpenRequest? decode(String? payload) {
+    if (payload == null) return null;
+    final p = payload.split('|');
+    if (p.length < 3 || p[0] != 'open' || p[1].isEmpty) return null;
+    return OpenRequest(symbol: p[1], interval: p[2].isEmpty ? null : p[2]);
+  }
+}
+
 class Notifications {
   Notifications._();
   static final Notifications instance = Notifications._();
@@ -110,6 +134,34 @@ class Notifications {
     importance: Importance.high,
   );
 
+  /// Taps, as they happen. The shell listens and navigates. A broadcast
+  /// stream because the shell can be rebuilt (sign-out, sign-in) and each
+  /// instance subscribes afresh.
+  final _taps = StreamController<OpenRequest>.broadcast();
+  Stream<OpenRequest> get taps => _taps.stream;
+
+  void _onResponse(NotificationResponse r) {
+    final req = OpenRequest.decode(r.payload);
+    if (req != null) _taps.add(req);
+  }
+
+  /// If the app was STARTED by tapping a notification, what it asked for.
+  ///
+  /// A tap on a closed app does not fire `_onResponse` -- there is no
+  /// isolate yet to receive it. The plugin records it instead, and the
+  /// shell asks here once at startup. Null on a normal launch.
+  Future<OpenRequest?> launchRequest() async {
+    if (kIsWeb) return null;
+    if (!_ready) await init();
+    try {
+      final d = await _plugin.getNotificationAppLaunchDetails();
+      if (d?.didNotificationLaunchApp != true) return null;
+      return OpenRequest.decode(d!.notificationResponse?.payload);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> init() async {
     if (_ready || kIsWeb) return;
     tzdata.initializeTimeZones();
@@ -131,14 +183,20 @@ class Notifications {
     // cannot do notifications would show a dead screen rather than an app
     // without alerts. Alerts are a feature; the app is not.
     try {
-      await _plugin.initialize(const InitializationSettings(
-        android: AndroidInitializationSettings('@drawable/ic_notification'),
-        iOS: DarwinInitializationSettings(
-          requestAlertPermission: true,
-          requestBadgePermission: true,
-          requestSoundPermission: true,
+      await _plugin.initialize(
+        const InitializationSettings(
+          android: AndroidInitializationSettings('@drawable/ic_notification'),
+          iOS: DarwinInitializationSettings(
+            requestAlertPermission: true,
+            requestBadgePermission: true,
+            requestSoundPermission: true,
+          ),
         ),
-      ));
+        // THE TAP. Without this a notification about DOGEUSDT 4h opened
+        // the app on whatever it showed last, which is not what a tap on
+        // "DOGEUSDT 4h" means.
+        onDidReceiveNotificationResponse: _onResponse,
+      );
 
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
@@ -243,11 +301,11 @@ class Notifications {
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
-        payload: a.id,
+        payload: OpenRequest.encode(a.symbol, a.interval, a.id),
       );
       return;
     }
-    await _plugin.show(_idFor(a.id), a.title, body, details, payload: a.id);
+    await _plugin.show(_idFor(a.id), a.title, body, details, payload: OpenRequest.encode(a.symbol, a.interval, a.id));
   }
 
   /// A logged trade reached the level you set and was closed in your journal.
@@ -297,6 +355,7 @@ class Notifications {
     // arrive" into "the caller's await failed", which is a different and
     // worse bug.
     try {
+      final payload = OpenRequest.encode(symbol, null, id);
       if (!kIsWeb && Platform.isIOS) {
         final when =
             tz.TZDateTime.now(tz.local).add(const Duration(seconds: 1));
@@ -305,10 +364,11 @@ class Notifications {
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
+          payload: payload,
         );
         return;
       }
-      await _plugin.show(nid, title, body, details);
+      await _plugin.show(nid, title, body, details, payload: payload);
     } catch (e) {
       debugPrint('[notify] trade close for $symbol not shown: $e');
     }
@@ -401,7 +461,7 @@ class Notifications {
         a.title,
         '${a.body}\n${a.whenLine()}',
         _details(a.kind, a.severity),
-        payload: a.id,
+        payload: OpenRequest.encode(a.symbol, a.interval, a.id),
       );
       if (i < samples.length - 1) {
         await Future<void>.delayed(const Duration(milliseconds: 1400));

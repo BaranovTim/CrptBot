@@ -43,11 +43,16 @@ class ProfileScreen extends StatefulWidget {
     required this.client,
     required this.account,
     required this.onSignOut,
+    this.onOpenSymbol,
   });
 
   final ApiClient client;
   final Account account;
   final VoidCallback onSignOut;
+
+  /// "Show me this pair on this timeframe" -- the shell's one navigation
+  /// door. Null interval means keep the current one.
+  final void Function(String symbol, String? interval)? onOpenSymbol;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -1197,6 +1202,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             livePrice: _prices[t.symbol],
             onClose: t.isOpen ? () => _closeTrade(t) : null,
             onDelete: () => _deleteTrade(t),
+            onOpen: widget.onOpenSymbol == null
+                ? null
+                : () => widget.onOpenSymbol!(t.symbol, t.interval),
           ),
           const SizedBox(height: 10),
         ],

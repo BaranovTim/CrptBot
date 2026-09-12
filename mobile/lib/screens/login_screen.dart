@@ -359,9 +359,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 style: Obsidian.body(color: Obsidian.onSurfaceVariant)),
             if (_error != null) ...[
               const SizedBox(height: 12),
-              Text(_error!,
-                  textAlign: TextAlign.center,
-                  style: Obsidian.body(color: Obsidian.redSoft, size: 12.5)),
+              _errorBanner(_error!),
             ],
             const SizedBox(height: 20),
             SizedBox(
@@ -391,6 +389,43 @@ class _LoginScreenState extends State<LoginScreen> {
           ],
         ),
       );
+
+  /// A message from the server or from validation, presented rather than
+  /// dumped. Server errors arrive as lower-case fragments ("choose a
+  /// username"); on screen they read as a sentence, inside a tinted panel
+  /// with an icon, so an error is visibly an error and not stray red text.
+  Widget _errorBanner(String message) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Obsidian.red.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(Obsidian.rMd),
+          border: Border.all(color: Obsidian.red.withValues(alpha: 0.30)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 1),
+              child: Icon(Icons.error_outline_rounded,
+                  size: 16, color: Obsidian.redSoft),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(_sentence(message),
+                  style: Obsidian.body(color: Obsidian.redSoft, size: 12.5)),
+            ),
+          ],
+        ),
+      );
+
+  /// "choose a username" -> "Choose a username." Leaves a message that
+  /// already ends in punctuation alone.
+  static String _sentence(String m) {
+    final t = m.trim();
+    if (t.isEmpty) return t;
+    final cap = t[0].toUpperCase() + t.substring(1);
+    return RegExp(r'[.!?]$').hasMatch(cap) ? cap : '$cap.';
+  }
 
   static IconData _providerIcon(String id) => switch (id) {
         'google' => Icons.g_mobiledata_rounded,
@@ -422,9 +457,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   Image.asset('assets/logo.png',
                       width: 76, height: 76, filterQuality: FilterQuality.high),
                   const SizedBox(height: 14),
-                  Text('VANTH',
+                  Text('Vanth',
                       textAlign: TextAlign.center,
-                      style: Obsidian.displayLg().copyWith(letterSpacing: 6)),
+                      style: Obsidian.displayLg().copyWith(letterSpacing: 1.5)),
                   const SizedBox(height: 6),
                   Text(
                       _register
@@ -498,9 +533,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                         if (_error != null) ...[
                           const SizedBox(height: 16),
-                          Text(_error!,
-                              style: Obsidian.body(
-                                  color: Obsidian.redSoft, size: 12.5)),
+                          _errorBanner(_error!),
                         ],
                         const SizedBox(height: 24),
                         SizedBox(

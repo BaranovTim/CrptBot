@@ -62,6 +62,7 @@ class TradeEntry {
     this.note = '',
     this.highSince,
     this.lowSince,
+    this.interval,
   });
 
   factory TradeEntry.create({
@@ -71,6 +72,7 @@ class TradeEntry {
     required double entryPrice,
     double? takeProfit,
     double? stopLoss,
+    String? interval,
     String note = '',
   }) {
     final r = Random.secure();
@@ -86,6 +88,7 @@ class TradeEntry {
       openedAt: DateTime.now().toUtc(),
       takeProfit: takeProfit,
       stopLoss: stopLoss,
+      interval: interval,
       note: note,
     );
   }
@@ -107,6 +110,7 @@ class TradeEntry {
         note: j['note'] as String? ?? '',
         highSince: (j['high_since'] as num?)?.toDouble(),
         lowSince: (j['low_since'] as num?)?.toDouble(),
+        interval: j['interval'] as String?,
       );
 
   final String id, symbol, side, note;
@@ -135,6 +139,12 @@ class TradeEntry {
   /// Profile opens rather than after the first round trip.
   final double? highSince, lowSince;
 
+  /// The timeframe the dashboard was on when this was logged -- "4h" -- so
+  /// tapping the entry later reopens the same view, not whichever
+  /// timeframe you happened to be on last. Null on entries older than the
+  /// field; those open on the current timeframe.
+  final String? interval;
+
   bool get isOpen => closedAt == null;
   bool get isShort => side == 'SHORT';
 
@@ -153,6 +163,7 @@ class TradeEntry {
         'note': note,
         'high_since': highSince,
         'low_since': lowSince,
+        'interval': interval,
       };
 
   /// The price this position is marked against: its close for a finished
@@ -257,6 +268,7 @@ class TradeEntry {
         note: note,
         highSince: highSince,
         lowSince: lowSince,
+        interval: interval,
       );
 
   /// This entry with the extremes widened to include `high`/`low`.
@@ -276,7 +288,7 @@ class TradeEntry {
       id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
       openedAt: openedAt, takeProfit: takeProfit, stopLoss: stopLoss,
       closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
-      note: note, highSince: h, lowSince: l,
+      note: note, highSince: h, lowSince: l, interval: interval,
     );
   }
 

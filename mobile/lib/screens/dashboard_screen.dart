@@ -675,6 +675,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           // cannot be — there is no key on this device.
           LogEntryCard(
             symbol: d.symbol,
+            interval: widget.interval,
             short: d.symbol.endsWith('USDT')
                 ? d.symbol.substring(0, d.symbol.length - 4)
                 : d.symbol,

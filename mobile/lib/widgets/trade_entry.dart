@@ -33,6 +33,7 @@ class LogEntryCard extends StatefulWidget {
     super.key,
     required this.symbol,
     required this.short,
+    this.interval,
     this.livePrice,
     this.suggestedSide,
     this.suggestedTp,
@@ -41,6 +42,10 @@ class LogEntryCard extends StatefulWidget {
   });
 
   final String symbol, short;
+
+  /// The timeframe this card sits under, stamped onto the entry so it can
+  /// be reopened on the same view from Profile.
+  final String? interval;
   final double? livePrice;
 
   /// What the dashboard is currently advising, used only as a starting
@@ -170,6 +175,7 @@ class _LogEntryCardState extends State<LogEntryCard> {
       entryPrice: entry,
       takeProfit: double.tryParse(_tp.text.replaceAll(',', '')),
       stopLoss: double.tryParse(_sl.text.replaceAll(',', '')),
+      interval: widget.interval,
     ));
     if (!mounted) return;
     _size.clear();

@@ -362,24 +362,7 @@ class Handler(BaseHTTPRequestHandler):
                                {"identifier": None, "tier": "free",
                                 "entitled": False})
             elif route == "/api/auth/verify":
-                from api.accounts import AuthError as _AE
-                from api.billing import landing_html_custom
-                try:
-                    acc = get_accounts()
-                    u = acc.confirm_email(opt("token") or "")
-                    self._send_html(landing_html_custom(
-                        mark="&#10003;", colour="#34d399",
-                        title="Email confirmed",
-                        body=f"{u.username or u.identifier}, your account "
-                             "is ready. Open Vanth and sign in.",
-                        foot="You can close this page."))
-                except _AE as e:
-                    self._send_html(landing_html_custom(
-                        mark="&#8226;", colour="#fbbf24",
-                        title="This link did not work",
-                        body=str(e),
-                        foot="Open Vanth and tap \u201cresend\u201d on the "
-                             "sign-in screen for a fresh one."), status=400)
+                self._verify_email_page(opt("token") or "")
             elif route == "/api/auth/providers":
                 from api.oauth import available
                 self._send({"providers": available()})
@@ -661,6 +644,25 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(self.rfile.read(n) or b"{}")
         except (ValueError, UnicodeDecodeError):
             return {}
+
+    def _verify_email_page(self, token: str) -> None:
+        """The page behind the link in the confirmation email."""
+        from api.accounts import AuthError, get_accounts
+        from api.billing import landing_html_custom
+        try:
+            u = get_accounts().confirm_email(token)
+        except AuthError as e:
+            self._send_html(landing_html_custom(
+                mark="&#8226;", colour="#fbbf24",
+                title="This link did not work", body=str(e),
+                foot="Open Vanth and tap \u201cresend\u201d on the sign-in "
+                     "screen for a fresh one."), status=400)
+            return
+        self._send_html(landing_html_custom(
+            mark="&#10003;", colour="#34d399", title="Email confirmed",
+            body=f"{u.username or u.identifier}, your account is ready. "
+                 "Open Vanth and sign in.",
+            foot="You can close this page."))
 
     def _oauth_get(self, route: str, opt) -> None:
         from api.billing import landing_html_custom
