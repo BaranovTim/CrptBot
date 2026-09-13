@@ -694,7 +694,13 @@ class TradingService:
             if hit:
                 if time.time() - hit.at >= ttl:
                     self._refresh_soon(key)
-                return _expire_if_old(hit.value)
+                # Both guards at SERVE time, on the cached copy. A verdict
+                # written today must gate a payload built yesterday -- the
+                # 1d cache lives six hours, and the first version applied
+                # the gate only when building, so three daily SELLs kept
+                # being served for hours after their models were found to
+                # know nothing.
+                return _gate_payload(_expire_if_old(hit.value))
         return self._build_and_store(key)
 
     def trained_symbols(self) -> List[str]:
@@ -1806,6 +1812,20 @@ def _gate_by_verdict(symbol: str, interval: str,
     return {"action": "FLAT", "tone": "flat", "detail": why,
             "strength": "", "gated": True,
             "window_ends": rec.get("window_ends")}
+
+
+def _gate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """`_gate_by_verdict` applied to a whole cached payload, copy-on-write."""
+    rec = payload.get("recommendation") or {}
+    if rec.get("action") not in ("BUY", "SELL"):
+        return payload
+    gated = _gate_by_verdict(str(payload.get("symbol") or ""),
+                             str(payload.get("interval") or ""), rec)
+    if gated is rec:
+        return payload
+    out = dict(payload)
+    out["recommendation"] = gated
+    return out
 
 
 def _expire_if_old(payload: Dict[str, Any]) -> Dict[str, Any]:

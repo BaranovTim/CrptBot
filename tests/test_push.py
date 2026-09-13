@@ -463,3 +463,37 @@ def test_the_position_list_survives_a_restart():
     again = PushRelay(state_path=d, opener=rec)
     assert again.for_account("tim")["positions"][0]["symbol"] == "BTCUSDT"
     return True
+
+
+# ------------------------------------------------ per-coin strength override
+#
+# The general sensitivity applies to every coin; the bell on one coin's
+# dashboard can set that coin's own level. Mirrored here so the lock screen
+# agrees with the app -- the same "silent disagreement" every other setting
+# in this file guards against.
+
+def test_a_coin_with_an_override_uses_it_and_the_rest_use_the_general():
+    r, rec = _relay()
+    r.register(new_topic(), account="tim", sensitivity="strong",
+               overrides={"btcusdt": "small"})
+    r.deliver([
+        FakeAlert(id="b", symbol="BTCUSDT", strength="small",
+                  title="BTCUSDT: 1h; FLAT -> BUY", extra={"from": "FLAT", "to": "BUY"}),
+        FakeAlert(id="e", symbol="ETHUSDT", strength="small",
+                  title="ETHUSDT: 1h; FLAT -> BUY", extra={"from": "FLAT", "to": "BUY"}),
+    ])
+    titles = [m["title"] for m in rec.sent]
+    assert any("BTCUSDT" in t for t in titles), "BTC's override was ignored"
+    assert not any("ETHUSDT" in t for t in titles), "ETH escaped the general setting"
+    return True
+
+
+def test_overrides_are_cleaned_and_replaced():
+    r, _ = _relay()
+    t = new_topic()
+    r.register(t, account="tim", overrides={"btcusdt": "SMALL", "eth": "loud",
+                                            "": "strong", 7: "medium"})
+    assert r.for_account("tim")["overrides"] == {"BTCUSDT": "small"}
+    r.register(t, account="tim", overrides={})
+    assert r.for_account("tim")["overrides"] == {}, "clearing did not clear"
+    return True

@@ -1905,4 +1905,48 @@ void main() {
           'window closed');
     });
   });
+
+  // GENERAL SETTINGS APPLY TO EVERY COIN; THE BELL OVERRIDES ONE COIN
+  //
+  // Absence is stored as absence. If setting an override copied the general
+  // level into the map, changing the general setting later would silently
+  // stop applying to that coin. The relay mirrors this map, so a coin that
+  // buzzes on the lock screen is the same coin that buzzes in the app.
+  group('per-coin signal strength', () {
+    test('a coin with no override follows the general setting', () async {
+      SharedPreferences.setMockInitialValues({});
+      await Settings.instance.saveSensitivity('medium');
+      expect(await Settings.instance.sensitivityFor('BTCUSDT'), 'medium');
+      await Settings.instance.saveSensitivityOverride('BTCUSDT', 'small');
+      expect(await Settings.instance.sensitivityFor('BTCUSDT'), 'small');
+      expect(await Settings.instance.sensitivityFor('ETHUSDT'), 'medium');
+      // the general setting still moves every coin without an override
+      await Settings.instance.saveSensitivity('strong');
+      expect(await Settings.instance.sensitivityFor('ETHUSDT'), 'strong');
+      expect(await Settings.instance.sensitivityFor('BTCUSDT'), 'small');
+      // clearing returns the coin to the general setting
+      await Settings.instance.saveSensitivityOverride('BTCUSDT', null);
+      expect(await Settings.instance.sensitivityFor('BTCUSDT'), 'strong');
+      expect(await Settings.instance.sensitivityOverrides(), isEmpty);
+    });
+
+    test('the delivery filter uses the override for that coin only', () {
+      Alert small(String sym) => Alert.fromJson({
+            'id': 'a-$sym', 'kind': 'signal', 'symbol': sym,
+            'interval': '1h', 'strength': 'small',
+            'title': '$sym: 1h; FLAT \u2192 BUY', 'body': '',
+            'severity': 'high', 'at': DateTime.now().toIso8601String(),
+            'detected_at': DateTime.now().toIso8601String(),
+            'extra': {'from': 'FLAT', 'to': 'BUY'},
+          });
+      final out = selectDeliverable(
+        [small('BTCUSDT'), small('ETHUSDT')],
+        sensitivity: 'strong',
+        overrides: const {'BTCUSDT': 'small'},
+        isMuted: (_, __) => false,
+      );
+      expect(out.map((a) => a.symbol), ['BTCUSDT'],
+          reason: 'BTC allowed by its override; ETH held to the general');
+    });
+  });
 }

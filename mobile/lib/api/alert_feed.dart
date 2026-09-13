@@ -88,6 +88,9 @@ List<Alert> selectDeliverable(
   required bool Function(String symbol, String interval) isMuted,
   bool Function(String kind)? isKindMuted,
   String newsLevel = 'all',
+  /// Per-coin strength levels, SYMBOL -> level. A coin not in here uses
+  /// `sensitivity`. Mirrored on the relay as `overrides`.
+  Map<String, String> overrides = const {},
   DateTime? now,
   int limit = maxCatchUp,
 }) {
@@ -122,7 +125,8 @@ List<Alert> selectDeliverable(
     // while you are holding something.
     if (a.kind == 'signal' &&
         !a.isExit &&
-        !clearsSensitivity(a.strength, sensitivity)) {
+        !clearsSensitivity(
+            a.strength, overrides[a.symbol.toUpperCase()] ?? sensitivity)) {
       continue;
     }
 
@@ -194,6 +198,7 @@ Future<AlertBatch> collectAlerts(ApiClient client) async {
 
   await Muted.instance.load();
   final sensitivity = await Settings.instance.sensitivity();
+  final overrides = await Settings.instance.sensitivityOverrides();
   final newsLevel = await Settings.instance.newsAlerts();
 
   // A first run has no cursor, so the server returns nothing and this simply
@@ -203,6 +208,7 @@ Future<AlertBatch> collectAlerts(ApiClient client) async {
       ? const <Alert>[]
       : selectDeliverable(r.alerts,
           sensitivity: sensitivity,
+          overrides: overrides,
           isMuted: (s, i) => Muted.instance.isMuted(s, i),
           isKindMuted: Muted.instance.isKindMuted,
           newsLevel: newsLevel);

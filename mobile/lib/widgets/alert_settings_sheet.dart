@@ -17,6 +17,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api/muted.dart';
+import '../api/notifications.dart';
 import '../api/settings.dart';
 import '../theme/liquid_obsidian.dart';
 import 'glass.dart';
@@ -43,27 +44,11 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
   /// — they ride along as context on an action change. Switches for kinds
   /// that can never fire would be controls that do nothing, which reads as a
   /// broken app rather than a simplified one.
-  static const _kinds = [
-    ('signal', 'When the call changes'),
-    ('calendar', 'Scheduled releases'),
-  ];
-
-  /// News is FOUR CHOICES, not a switch, unlike every other kind.
-  ///
-  /// The others arrive a few times a day and the only sensible question is
-  /// whether you want them. News arrives about seventy times a day, so the
-  /// same switch would be answered "off" by almost everyone — and off means
-  /// missing the one release that mattered. The middle two settings exist so
-  /// that "less" is available without "none".
-  static const _newsLevels = [
-    ('all', 'Everything', 'About 70 headlines a day'),
-    ('directional', 'Only BULL or BEAR', 'Skips what the scorer cannot read'),
-    ('strong', 'Strong influence only', 'STRONG IMPACT, either direction'),
-    ('none', 'None', 'Silent — still all in the News tab'),
-  ];
-
-  String _newsLevel = 'all';
+  /// This coin's strength override; null means it follows the general one.
+  String? _override;
+  String _general = 'strong';
   bool _ready = false;
+  bool _granted = true;
 
   @override
   void initState() {
@@ -71,8 +56,12 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
     Muted.instance.load().then((_) {
       if (mounted) setState(() => _ready = true);
     });
-    Settings.instance.newsAlerts().then(
-        (v) => mounted ? setState(() => _newsLevel = v) : null);
+    Settings.instance.sensitivity().then(
+        (v) => mounted ? setState(() => _general = v) : null);
+    Settings.instance.sensitivityOverrides().then((m) => mounted
+        ? setState(() => _override = m[widget.symbol.toUpperCase()])
+        : null);
+    _granted = Notifications.instance.granted;
   }
 
   List<String> get _intervals => widget.intervals ?? _all;
@@ -105,6 +94,38 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
               Text('ALERTS · ${widget.symbol}',
                   style: Obsidian.labelSm(size: 11)),
               const SizedBox(height: 14),
+              if (!_granted) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Obsidian.amber.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(Obsidian.rMd),
+                    border: Border.all(
+                        color: Obsidian.amber.withValues(alpha: 0.30)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(Icons.notifications_off_rounded,
+                            size: 16, color: Obsidian.amber),
+                      ),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                            'Notifications are off for Vanth in your phone\'s '
+                            'settings. Nothing below will reach you until '
+                            'they are turned on there.',
+                            style: Obsidian.body(
+                                color: Obsidian.amber, size: 12)),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
               if (!_ready)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 28),
@@ -153,39 +174,27 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
                         Obsidian.body(color: Obsidian.outline, size: 11)),
                 Divider(
                     height: 26, color: Colors.white.withValues(alpha: 0.06)),
-                Text('EVERY COIN', style: Obsidian.labelSm(size: 11)),
+                Text('SIGNAL STRENGTH · THIS COIN ONLY',
+                    style: Obsidian.labelSm(size: 11)),
                 const SizedBox(height: 4),
                 Text(
-                    'Which kinds are allowed to buzz, everywhere. Separated '
-                    'because news runs at about seventy items a day — enough '
-                    'that silencing it has to be easier than silencing the '
-                    'trade signals with it.',
-                    style: Obsidian.body(color: Obsidian.outline, size: 11)),
+                    'The general setting in Profile \u2192 Preferences applies '
+                    'to every coin. Pick a level here and ${widget.symbol} '
+                    'uses it instead \u2014 nothing else changes.',
+                    style:
+                        Obsidian.body(color: Obsidian.outline, size: 11)),
                 const SizedBox(height: 6),
-                for (final k in _kinds)
-                  _row(
-                    title: k.$2,
-                    subtitle: null,
-                    dense: true,
-                    value: !Muted.instance.isKindMuted(k.$1),
-                    onChanged: (_) async {
-                      await Muted.instance.toggleKind(k.$1);
-                      if (mounted) setState(() {});
-                    },
-                  ),
-                const SizedBox(height: 14),
-                Text('NEWS IN CONTEXT', style: Obsidian.labelSm(size: 11)),
-                const SizedBox(height: 6),
-                for (final n in _newsLevels) _newsRow(n.$1, n.$2, n.$3),
-                const SizedBox(height: 8),
+                _levelRow(null, 'Use the general setting',
+                    'Currently ${_levelName(_general)}'),
+                _levelRow('strong', 'Strong only',
+                    'Only the highest-conviction calls'),
+                _levelRow('medium', 'Strong and medium', ''),
+                _levelRow('small', 'Everything', 'Every call, however small'),
+                const SizedBox(height: 10),
                 Text(
-                    'Headlines no longer buzz on their own — they are '
-                    'attached to a notification when the call changes. This '
-                    'chooses which ones are worth attaching.\n\n'
-                    'BULL, BEAR and impact come from a keyword scorer that '
-                    'stays silent on about half of all headlines, and it is '
-                    'not an input to the model — so an attached headline is '
-                    'what was happening at the time, never the reason.',
+                    'Which kinds of alert buzz, and how much news, are '
+                    'general settings \u2014 Profile \u2192 Preferences \u2192 '
+                    'Notifications.',
                     style: Obsidian.body(color: Obsidian.outline, size: 11)),
               ],
               const SizedBox(height: 6),
@@ -205,15 +214,18 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
     );
   }
 
-  /// A radio row, because these four are exclusive and a column of switches
-  /// would let you turn all of them off — a state with no meaning, and no way
-  /// back except guessing which one used to be on.
-  Widget _newsRow(String value, String title, String subtitle) {
-    final on = _newsLevel == value;
+  static String _levelName(String v) => switch (v) {
+        'medium' => 'strong and medium',
+        'small' => 'everything',
+        _ => 'strong only',
+      };
+
+  Widget _levelRow(String? value, String title, String subtitle) {
+    final on = _override == value;
     return InkWell(
       onTap: () async {
-        setState(() => _newsLevel = value);
-        await Settings.instance.saveNewsAlerts(value);
+        setState(() => _override = value);
+        await Settings.instance.saveSensitivityOverride(widget.symbol, value);
       },
       borderRadius: BorderRadius.circular(Obsidian.rMd),
       child: Padding(
@@ -223,22 +235,19 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
             Icon(
                 on
                     ? Icons.radio_button_checked_rounded
-                    : Icons.radio_button_unchecked_rounded,
+                    : Icons.radio_button_off_rounded,
                 size: 18,
                 color: on ? Obsidian.primary : Obsidian.outline),
-            const SizedBox(width: 11),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title,
-                      style: Obsidian.body(
-                          size: 13.5,
-                          color: on ? Obsidian.primary : null)),
-                  const SizedBox(height: 2),
-                  Text(subtitle,
-                      style:
-                          Obsidian.body(color: Obsidian.outline, size: 11)),
+                  Text(title, style: Obsidian.body(size: 13)),
+                  if (subtitle.isNotEmpty)
+                    Text(subtitle,
+                        style: Obsidian.body(
+                            color: Obsidian.outline, size: 11)),
                 ],
               ),
             ),
@@ -247,6 +256,7 @@ class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
       ),
     );
   }
+
 
   Widget _row({
     required String title,

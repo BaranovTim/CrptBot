@@ -1531,5 +1531,40 @@ def test_beats_shuffle_is_about_the_control_not_about_0_5():
     assert beats_shuffle(0.515, 0.500, 0.020) is False
     # a "clean" 0.52 against a shuffle that also sits at 0.52 is nothing
     assert beats_shuffle(0.520, 0.520, 0.010) is False
+    # 1000PEPE 1d: beats its control, and is still below a coin flip
+    assert beats_shuffle(0.470, 0.465, 0.003) is False
     assert beats_shuffle(float("nan"), 0.5, 0.01) is False
+    return True
+
+
+def test_the_gate_applies_to_a_cached_payload_at_serve_time():
+    """A verdict written today must gate a dashboard built yesterday. The
+    1d cache lives six hours; gating only at build time left three daily
+    SELLs on screen for hours after their models were measured at chance."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    import core.timeframes as T
+    from api.service import _gate_payload
+
+    payload = {"symbol": "DOGEUSDT", "interval": "1d",
+               "recommendation": {"action": "SELL", "tone": "down",
+                                  "strength": "strong", "detail": "x",
+                                  "window_ends": "2030-01-01T00:00:00+00:00"}}
+    with tempfile.TemporaryDirectory() as d:
+        real = T.eval_path
+        T.eval_path = lambda s, i, output_dir=None: real(s, i, Path(d))
+        try:
+            assert _gate_payload(payload)["recommendation"]["action"] == "SELL"
+            T.eval_path("DOGEUSDT", "1d").write_text(json.dumps({"horizons": {
+                "h1": {"auc": 0.482, "shuffle": 0.507, "spread": 0.019},
+                "h2": {"auc": 0.464, "shuffle": 0.494, "spread": 0.016}}}))
+            T._VERDICTS.clear()
+            got = _gate_payload(payload)
+            assert got["recommendation"]["action"] == "FLAT", got
+            assert payload["recommendation"]["action"] == "SELL", "cache mutated"
+        finally:
+            T.eval_path = real
+            T._VERDICTS.clear()
     return True

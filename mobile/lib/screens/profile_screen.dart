@@ -109,6 +109,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   double? _balance;
   bool _lockOn = false, _lockAvailable = false;
   bool _timeLimit = true;
+  String _newsLevel = 'all';
+  int _overrideCount = 0;
+  bool _mutedLoaded = false;
   bool _batteryExempt = true;
   DateTime? _bgLastRun;
   int _bgRuns = 0;
@@ -146,6 +149,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         (v) => mounted ? setState(() => _dailyStopPct = v) : null);
     Settings.instance.timeLimit().then(
         (v) => mounted ? setState(() => _timeLimit = v) : null);
+    Settings.instance.newsAlerts().then(
+        (v) => mounted ? setState(() => _newsLevel = v) : null);
+    Settings.instance.sensitivityOverrides().then(
+        (m) => mounted ? setState(() => _overrideCount = m.length) : null);
+    Muted.instance.load().then(
+        (_) => mounted ? setState(() => _mutedLoaded = true) : null);
     Settings.instance.sensitivity().then(
         (v) => mounted ? setState(() => _sensitivity = v) : null);
   }
@@ -546,6 +555,73 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'fees at all. Most calls, thinnest edge.'),
   };
 
+  static const _newsNames = <String, String>{
+    'all': 'Everything — about 70 headlines a day',
+    'directional': 'Only BULL or BEAR',
+    'strong': 'Strong influence only',
+    'none': 'None — still all in the News tab',
+  };
+
+  Future<void> _pickNewsLevel() async {
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(Obsidian.containerPadding),
+          child: GlassPanel(
+            active: true,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('NEWS IN CONTEXT', style: Obsidian.labelSm(size: 10.5)),
+                const SizedBox(height: 6),
+                Text(
+                    'Headlines do not buzz on their own — one is attached to '
+                    'a notification when the call changes. This chooses which '
+                    'are worth attaching. The scorer is not an input to the '
+                    'model: an attached headline is what was happening, never '
+                    'the reason.',
+                    style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+                const SizedBox(height: 10),
+                for (final e in _newsNames.entries)
+                  InkWell(
+                    onTap: () => Navigator.pop(ctx, e.key),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      child: Row(
+                        children: [
+                          Icon(
+                              e.key == _newsLevel
+                                  ? Icons.radio_button_checked_rounded
+                                  : Icons.radio_button_unchecked_rounded,
+                              size: 20,
+                              color: e.key == _newsLevel
+                                  ? Obsidian.primary
+                                  : Obsidian.outline),
+                          const SizedBox(width: 14),
+                          Expanded(
+                              child: Text(e.value,
+                                  style: Obsidian.bodyLg())),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    await Settings.instance.saveNewsAlerts(chosen);
+    unawaited(PushDelivery.instance.sync(widget.client));
+    if (mounted) setState(() => _newsLevel = chosen);
+  }
+
   Future<void> _pickSensitivity() async {
     final chosen = await showModalBottomSheet<String>(
       context: context,
@@ -619,6 +695,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
     if (chosen == null || !mounted) return;
     await Settings.instance.saveSensitivity(chosen);
+    unawaited(PushDelivery.instance.sync(widget.client));
     if (mounted) setState(() => _sensitivity = chosen);
   }
 
@@ -1469,12 +1546,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ]),
         const SizedBox(height: Obsidian.gutter),
-        _section('SIGNALS', [
+        // GENERAL SETTINGS. These apply to every coin. The bell on the
+        // dashboard holds the per-coin ones -- mute this coin, mute a
+        // timeframe of it, or give it its own strength level -- and those
+        // win over what is set here, for that coin only.
+        _section('NOTIFICATIONS', [
           _tile(
             icon: Icons.tune_rounded,
             title: 'Signal strength',
-            subtitle: _levels[_sensitivity]?.$1 ?? 'Strong only',
+            subtitle: (_levels[_sensitivity]?.$1 ?? 'Strong only') +
+                (_overrideCount == 0
+                    ? ' — every coin'
+                    : ' — $_overrideCount coin${_overrideCount == 1 ? '' : 's'} '
+                        'set differently from the bell'),
             onTap: _pickSensitivity,
+          ),
+          _tile(
+            icon: Icons.swap_vert_rounded,
+            title: 'When the call changes',
+            subtitle: _mutedLoaded && Muted.instance.isKindMuted('signal')
+                ? 'Off — entries and exits do not buzz'
+                : 'On — an entry or exit on any coin buzzes',
+            trailing: Switch(
+              value: !(_mutedLoaded && Muted.instance.isKindMuted('signal')),
+              activeThumbColor: Obsidian.primary,
+              onChanged: (_) async {
+                await Muted.instance.toggleKind('signal');
+                unawaited(PushDelivery.instance.sync(widget.client));
+                if (mounted) setState(() {});
+              },
+            ),
+          ),
+          _tile(
+            icon: Icons.event_rounded,
+            title: 'Scheduled releases',
+            subtitle: _mutedLoaded && Muted.instance.isKindMuted('calendar')
+                ? 'Off'
+                : 'On — a warning before FOMC, payrolls, CPI',
+            trailing: Switch(
+              value: !(_mutedLoaded && Muted.instance.isKindMuted('calendar')),
+              activeThumbColor: Obsidian.primary,
+              onChanged: (_) async {
+                await Muted.instance.toggleKind('calendar');
+                unawaited(PushDelivery.instance.sync(widget.client));
+                if (mounted) setState(() {});
+              },
+            ),
+          ),
+          _tile(
+            icon: Icons.newspaper_rounded,
+            title: 'News attached to a call',
+            subtitle: _newsNames[_newsLevel] ?? 'Everything',
+            onTap: _pickNewsLevel,
           ),
           _tile(
             icon: Icons.timer_outlined,

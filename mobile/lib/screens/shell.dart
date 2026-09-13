@@ -810,14 +810,13 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   /// same undiscoverable gesture that made swipe-to-delete invisible on the
   /// market screen. One tap, everything visible.
   Future<void> _openBell() async {
-    if (!Notifications.instance.granted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        backgroundColor: Obsidian.surfaceHigh,
-        content: Text('Notifications are off for this app in system settings.',
-            style: Obsidian.body()),
-      ));
-      return;
-    }
+    // Always opens. It used to stop at a snackbar when the OS permission
+    // looked missing -- and on phones where the permission check was
+    // misread, that made the bell a button that did nothing. The sheet
+    // itself now says at the top if the OS has notifications off, with a
+    // way to fix it, and the per-coin settings below it still work.
+    await Notifications.instance.refreshGranted();
+    if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -827,7 +826,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       isScrollControlled: true,
       builder: (_) => AlertSettingsSheet(symbol: _symbol),
     );
-    if (mounted) setState(() {});          // the bell reflects the new state
+    if (!mounted) return;
+    setState(() {});                       // the bell reflects the new state
+    // and the relay learns the new per-coin settings now, not at the next
+    // poll -- a coin muted here must be silent on the lock screen too
+    unawaited(PushDelivery.instance.sync(widget.client));
   }
 
   Widget _topBar() {

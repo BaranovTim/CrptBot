@@ -181,6 +181,33 @@ def _clean_positions(raw) -> List[Dict[str, Any]]:
     return list(out.values())
 
 
+LEVELS = ("strong", "medium", "small")
+
+
+def _clean_overrides(raw) -> Dict[str, str]:
+    """SYMBOL -> level, and only levels the filter understands. Anything
+    else off the wire is dropped rather than stored, so a garbage value can
+    never make `clears_sensitivity` answer for a setting that does not
+    exist."""
+    out: Dict[str, str] = {}
+    for k, v in (raw or {}).items() if isinstance(raw, dict) else ():
+        sym = str(k).strip().upper()
+        lvl = str(v).strip().lower()
+        if _SYMBOL.match(sym) and lvl in LEVELS and len(out) < 200:
+            out[sym] = lvl
+    return out
+
+
+# Letters and digits, at least one letter, 3-20 long -- what a pair looks
+# like. Anything else off the wire is not a coin and is not stored.
+_SYMBOL = re.compile(r"^(?=.*[A-Z])[A-Z0-9]{3,20}$")
+
+
+def level_for(sub, symbol: str) -> str:
+    """The level that applies to this coin on this phone."""
+    return sub.overrides.get((symbol or "").upper(), sub.sensitivity)
+
+
 def entry_line(side: str, entry: float) -> str:
     """The line the phone shows too. Mirrored in `notifications.dart`, and
     the price goes through the same formatter the rest of the alert uses so
@@ -217,6 +244,11 @@ class Subscription:
     # phone and the notification text is built here, so the relay cannot
     # know otherwise. Re-shipped whenever an entry opens or closes.
     positions: List[Dict[str, Any]] = field(default_factory=list)
+    # Per-coin signal-strength overrides, SYMBOL -> level. The general
+    # `sensitivity` applies to every coin not in here. Same reason as the
+    # rest of this record: the phone decides, the relay applies the same
+    # decision to the alerts the phone is not awake to see.
+    overrides: Dict[str, str] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     # Observability, because a relay that silently stops is worse than one
@@ -265,7 +297,8 @@ def _wants(sub: Subscription, a) -> bool:
     # would reject every one of them. The app learned this the hard way; the
     # relay is not going to learn it again.
     if kind == "signal" and not _is_exit(a):
-        if not clears_sensitivity(getattr(a, "strength", ""), sub.sensitivity):
+        if not clears_sensitivity(getattr(a, "strength", ""),
+                                  level_for(sub, getattr(a, "symbol", ""))):
             return False
     if kind == "news":
         if not clears_news_level(getattr(a, "bias", ""),
@@ -332,7 +365,8 @@ class PushRelay:
                  server: str = DEFAULT_SERVER,
                  sensitivity: str = "strong", news: str = "all",
                  muted: Optional[List[str]] = None,
-                 positions: Optional[List[Dict[str, Any]]] = None
+                 positions: Optional[List[Dict[str, Any]]] = None,
+                 overrides: Optional[Dict[str, str]] = None
                  ) -> Dict[str, Any]:
         topic = (topic or "").strip()
         if not TOPIC_RE.match(topic):
@@ -363,6 +397,7 @@ class PushRelay:
                 sensitivity=sensitivity or "strong", news=news or "all",
                 muted=list(muted or ()),
                 positions=_clean_positions(positions),
+                overrides=_clean_overrides(overrides),
                 created_at=existing.created_at if existing else time.time(),
                 last_ok=existing.last_ok if existing else None,
                 sent=existing.sent if existing else 0,

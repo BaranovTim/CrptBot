@@ -201,10 +201,20 @@ def beats_shuffle(auc: float, shuffle: float, spread: float) -> bool:
     shuffle of 0.481 and a spread of 0.019, which is precisely "nothing".
     """
     try:
-        return (float(auc) - float(shuffle)) > float(spread) and \
-            float(auc) == float(auc)
+        a, sh, sp = float(auc), float(shuffle), float(spread)
     except (TypeError, ValueError):
         return False
+    if a != a or sp != sp:
+        return False
+    # BOTH, not either. 1000PEPE 1d scored 0.470 against a shuffle of 0.465
+    # -- "beat" its control while being worse than a coin flip, because the
+    # control itself had wandered below 0.5 on a small daily sample. A model
+    # earns a call only if it is above 0.5 by more than the fold noise AND
+    # above its scrambled control by more than the fold noise.
+    return (a - 0.5) > sp and (a - sh) > sp
+
+
+_VERDICTS: dict = {}
 
 
 def model_usable(symbol: str, interval: str,
@@ -217,16 +227,29 @@ def model_usable(symbol: str, interval: str,
     import json
 
     path = eval_path(symbol, interval, output_dir)
-    if not path.exists():
-        return True, ""
     try:
-        v = json.loads(path.read_text())
-    except (ValueError, OSError):
+        mtime = path.stat().st_mtime
+    except OSError:
         return True, ""
+    # Read once per file version. This runs on every dashboard serve, and
+    # a JSON parse per request on a one-core box is a cost worth skipping.
+    cached = _VERDICTS.get(path)
+    if cached and cached[0] == mtime:
+        v = cached[1]
+    else:
+        try:
+            v = json.loads(path.read_text())
+        except (ValueError, OSError):
+            return True, ""
+        _VERDICTS[path] = (mtime, v)
     hs = v.get("horizons") or {}
     if not hs:
         return True, ""
-    if any(h.get("beats_shuffle") for h in hs.values()):
+    # Recomputed from the numbers, never read from the stored flag: the rule
+    # is `beats_shuffle`, in one place, and tightening it must not require
+    # rewriting every verdict file already on disk.
+    if any(beats_shuffle(h.get("auc"), h.get("shuffle"), h.get("spread"))
+           for h in hs.values()):
         return True, ""
     best = max(hs.values(), key=lambda h: h.get("auc") or 0)
     return False, (

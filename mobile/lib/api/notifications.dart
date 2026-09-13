@@ -118,6 +118,21 @@ class Notifications {
   bool _ready = false;
   bool granted = false;
 
+  /// Re-read the OS state. Cheap, never prompts, and the thing to call
+  /// when a screen that shows the state comes back into view -- the person
+  /// may have just changed it in system settings.
+  Future<bool> refreshGranted() async {
+    if (kIsWeb) return granted;
+    try {
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (android != null) {
+        granted = await android.areNotificationsEnabled() ?? granted;
+      }
+    } catch (_) {}
+    return granted;
+  }
+
   static const _channelSignals = AndroidNotificationChannel(
     'signals', 'Trade signals',
     description: 'When the recommended action changes to BUY or SELL',
@@ -204,7 +219,17 @@ class Notifications {
         for (final c in [_channelSignals, _channelMarket, _channelCalendar]) {
           await android.createNotificationChannel(c);
         }
-        granted = await android.requestNotificationsPermission() ?? false;
+        // ASK THE OS WHAT IS TRUE, not what the request returned.
+        //
+        // `requestNotificationsPermission()` is null on any Android with no
+        // runtime notification permission, and `?? false` read that null
+        // as "denied". On those phones the bell showed a snackbar forever
+        // and the sheet behind it could never be opened -- while
+        // notifications were, in fact, arriving. `areNotificationsEnabled`
+        // answers the real question on every Android version.
+        final requested = await android.requestNotificationsPermission();
+        final enabled = await android.areNotificationsEnabled();
+        granted = enabled ?? requested ?? true;
       }
       final ios = _plugin.resolvePlatformSpecificImplementation<
           IOSFlutterLocalNotificationsPlugin>();

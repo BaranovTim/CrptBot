@@ -87,6 +87,45 @@ class Settings {
 
   Future<void> saveSensitivity(String v) => _put(_signalKey, v);
 
+  /// Per-coin overrides of the signal strength. The general setting applies
+  /// to every coin; a coin in this map uses its own level instead. Absent
+  /// means "use the general setting", and that absence is stored as
+  /// absence -- never as a copy of the general value, or changing the
+  /// general setting later would silently stop applying to that coin.
+  Future<Map<String, String>> sensitivityOverrides() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_overridesKey);
+      if (raw == null || raw.isEmpty) return const {};
+      final m = json.decode(raw) as Map<String, dynamic>;
+      return {
+        for (final e in m.entries)
+          if (e.value == 'strong' || e.value == 'medium' || e.value == 'small')
+            e.key.toUpperCase(): e.value as String,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// The level that applies to THIS coin: its override, else the general.
+  Future<String> sensitivityFor(String symbol) async =>
+      (await sensitivityOverrides())[symbol.toUpperCase()] ??
+      await sensitivity();
+
+  /// null clears the override, so the coin follows the general setting.
+  Future<void> saveSensitivityOverride(String symbol, String? level) async {
+    final m = Map<String, String>.from(await sensitivityOverrides());
+    if (level == null) {
+      m.remove(symbol.toUpperCase());
+    } else {
+      m[symbol.toUpperCase()] = level;
+    }
+    await _put(_overridesKey, json.encode(m));
+  }
+
+  static const _overridesKey = 'alerts.sensitivity.overrides.v1';
+
   /// Close a logged entry when the model's window closes, at the price then.
   ///
   /// ON BY DEFAULT, because it is what the model was measured on. Every

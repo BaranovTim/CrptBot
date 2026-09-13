@@ -193,9 +193,11 @@ class PushDelivery {
     final news = await Settings.instance.newsAlerts();
     final muted = (await Muted.instance.load()).toList()..sort();
     final positions = await openPositions();
+    final overrides = await Settings.instance.sensitivityOverrides();
     final srv = await server();
 
-    final print = json.encode([t, srv, sensitivity, news, muted, positions]);
+    final print = json.encode(
+        [t, srv, sensitivity, news, muted, positions, overrides]);
     if (!force && print == await _read(_fingerprintKey)) return true;
 
     try {
@@ -206,6 +208,7 @@ class PushDelivery {
         news: news,
         muted: muted,
         positions: positions,
+        overrides: overrides,
       );
       if (r['ok'] != true) {
         debugPrint('[push] register refused: ${r['error']}');

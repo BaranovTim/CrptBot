@@ -356,6 +356,7 @@ class ApiClient {
     required String news,
     required List<String> muted,
     required List<Map<String, Object>> positions,
+    Map<String, String> overrides = const {},
   }) =>
       _post('/api/push/subscribe', {
         'topic': topic,
@@ -364,6 +365,7 @@ class ApiClient {
         'news': news,
         'muted': muted,
         'positions': positions,
+        'overrides': overrides,
       });
 
   Future<Map<String, dynamic>> pushUnsubscribe(String topic) =>
