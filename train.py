@@ -287,7 +287,52 @@ def main(argv=None) -> int:
                 print(f"  h{slot}: SKIPPED - {r.note}", flush=True)
 
     _summary(results)
+    _write_verdicts(a.symbol, results, dry_run=a.dry_run)
     return 0
+
+
+def _write_verdicts(symbol: str, results, *, dry_run: bool) -> None:
+    """The evaluation, persisted beside the models it describes.
+
+    Written on a dry run too. A dry run refits the same data with the same
+    config, so its numbers describe the shipped model as closely as
+    anything can without the shipped model's own fold results -- and it is
+    the only way to evaluate a model that was trained before verdicts
+    existed. `source` records which it was.
+
+    The server reads this to decide whether a timeframe may make a call at
+    all; see `core.model_usable`. A timeframe none of whose horizons beat
+    the shuffled control is shown FLAT with the reason, rather than emitting
+    a BUY or SELL that is, measurably, a coin flip.
+    """
+    import json
+
+    from core import beats_shuffle, eval_path
+
+    by_iv = {}
+    for r in results:
+        if not r.ok:
+            continue
+        by_iv.setdefault(r.interval, {})[f"h{r.horizon}"] = {
+            "auc": round(float(r.auc), 4),
+            "shuffle": round(float(r.shuffle), 4),
+            "spread": round(float(r.spread), 4),
+            "effective_n": int(r.effective_n),
+            "beats_shuffle": beats_shuffle(r.auc, r.shuffle, r.spread),
+        }
+    for iv, hs in by_iv.items():
+        path = eval_path(symbol, iv)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "symbol": symbol, "interval": iv,
+            "evaluated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "source": "dry-run" if dry_run else "fit",
+            "usable": any(h["beats_shuffle"] for h in hs.values()),
+            "horizons": hs,
+        }, indent=1))
+        verdict = "usable" if any(h["beats_shuffle"] for h in hs.values()) \
+            else "NOT USABLE - no horizon beats its shuffle"
+        print(f"  verdict {iv}: {verdict}  -> {path}")
 
 
 def _summary(results: List[Outcome]) -> None:

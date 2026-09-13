@@ -108,6 +108,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   double _dailyStopPct = 5.0;
   double? _balance;
   bool _lockOn = false, _lockAvailable = false;
+  bool _timeLimit = true;
   bool _batteryExempt = true;
   DateTime? _bgLastRun;
   int _bgRuns = 0;
@@ -143,6 +144,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         (v) => mounted ? setState(() => _balance = v) : null);
     Settings.instance.dailyStopPct().then(
         (v) => mounted ? setState(() => _dailyStopPct = v) : null);
+    Settings.instance.timeLimit().then(
+        (v) => mounted ? setState(() => _timeLimit = v) : null);
     Settings.instance.sensitivity().then(
         (v) => mounted ? setState(() => _sensitivity = v) : null);
   }
@@ -1472,6 +1475,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
             title: 'Signal strength',
             subtitle: _levels[_sensitivity]?.$1 ?? 'Strong only',
             onTap: _pickSensitivity,
+          ),
+          _tile(
+            icon: Icons.timer_outlined,
+            title: "Close entries at the model's time limit",
+            subtitle: _timeLimit
+                ? 'On — 2h on 1h, 8h on 4h, 2 days on 1d. An entry that '
+                    'reaches neither level by then is closed at the price '
+                    'it is at, the way the model was measured.'
+                : 'Off — entries stay open until a level is hit, however '
+                    'long that takes. Past the window, that is a coin flip.',
+            trailing: Switch(
+              value: _timeLimit,
+              activeThumbColor: Obsidian.primary,
+              onChanged: (v) async {
+                await Settings.instance.saveTimeLimit(v);
+                if (mounted) setState(() => _timeLimit = v);
+              },
+            ),
           ),
         ]),
         const SizedBox(height: Obsidian.gutter),

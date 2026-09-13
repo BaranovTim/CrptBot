@@ -372,17 +372,19 @@ class TradeRow extends StatelessWidget {
                       // whether you took that price or your stop did, and
                       // the difference is the whole point of logging it.
                       Text(
-                          entry.closedBy == 'take_profit'
-                              ? 'HIT TP'
-                              : entry.closedBy == 'stop_loss'
-                                  ? 'HIT SL'
-                                  : 'CLOSED',
+                          switch (entry.closedBy) {
+                            'take_profit' => 'HIT TP',
+                            'stop_loss' => 'HIT SL',
+                            'time_limit' => 'TIME LIMIT',
+                            _ => 'CLOSED',
+                          },
                           style: Obsidian.labelSm(
-                              color: entry.closedBy == 'take_profit'
-                                  ? Obsidian.greenDim
-                                  : entry.closedBy == 'stop_loss'
-                                      ? Obsidian.redSoft
-                                      : Obsidian.outline,
+                              color: switch (entry.closedBy) {
+                                'take_profit' => Obsidian.greenDim,
+                                'stop_loss' => Obsidian.redSoft,
+                                'time_limit' => Obsidian.amber,
+                                _ => Obsidian.outline,
+                              },
                               size: 9.5)),
                     ],
                   ],
@@ -668,7 +670,25 @@ class JournalCard extends StatelessWidget {
     if (entry.closedBy == 'stop_loss') {
       return _chip('CLOSED SL', Obsidian.redSoft);
     }
+    if (entry.closedBy == 'time_limit') {
+      return _chip('TIME LIMIT', Obsidian.amber);
+    }
     return _chip('CLOSED', Obsidian.outline);
+  }
+
+  /// "1d 6h left" / "window closed" -- how much of the model's horizon is
+  /// left on an open entry. Null when the entry predates timeframes or the
+  /// limit is off, in which case nothing is drawn rather than a dash that
+  /// looks like a broken value.
+  static String? timeLeftText(TradeEntry e, DateTime now) {
+    final limit = e.timeLimit;
+    if (limit == null || !e.isOpen) return null;
+    final left = limit.difference(now);
+    if (left.isNegative) return 'window closed';
+    final h = left.inHours, m = left.inMinutes % 60;
+    if (h >= 24) return '${h ~/ 24}d ${h % 24}h left';
+    if (h >= 1) return '${h}h ${m}m left';
+    return '${left.inMinutes}m left';
   }
 
   static Widget _chip(String text, Color c, {bool filled = false}) =>
@@ -735,10 +755,16 @@ class JournalCard extends StatelessWidget {
 /// The two halves are scaled independently (see `barrierPosition`), so the
 /// ends ARE the levels you set, whatever their distances from the entry.
 class BarrierBar extends StatelessWidget {
-  const BarrierBar({super.key, required this.entry, this.livePrice});
+  const BarrierBar(
+      {super.key, required this.entry, this.livePrice,
+      this.showTimeLeft = true});
 
   final TradeEntry entry;
   final double? livePrice;
+
+  /// The countdown under the percentage. Off when the time limit is
+  /// switched off in Preferences -- a countdown to nothing is a lie.
+  final bool showTimeLeft;
 
   @override
   Widget build(BuildContext context) {
@@ -758,6 +784,9 @@ class BarrierBar extends StatelessWidget {
         : pos < 0
             ? Obsidian.red
             : Obsidian.green;
+    final timeLeft = showTimeLeft
+        ? JournalCard.timeLeftText(entry, DateTime.now())
+        : null;
     final pct = pos == null ? null : (pos.abs() * 100).round();
     final caption = pct == null
         ? '\u2014'
@@ -816,8 +845,17 @@ class BarrierBar extends StatelessWidget {
               style: Obsidian.dataTable(size: 9.5, color: Obsidian.red),
             ),
             const Spacer(),
-            Text(caption,
-                style: Obsidian.dataTable(size: 10, color: tone)),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(caption,
+                    style: Obsidian.dataTable(size: 10, color: tone)),
+                if (timeLeft != null)
+                  Text(timeLeft,
+                      style: Obsidian.dataTable(
+                          size: 9, color: Obsidian.outline)),
+              ],
+            ),
             const Spacer(),
             Text(
               entry.takeProfit == null

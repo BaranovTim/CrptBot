@@ -41,7 +41,7 @@ import pandas as pd
 
 import config as project_config
 from core import (TIMEFRAMES, htf_for, interval_seconds, is_trained,
-                  model_paths, utc_now)
+                  model_paths, model_usable, utc_now)
 
 log = logging.getLogger(__name__)
 
@@ -136,9 +136,18 @@ class TradingService:
                 raise FileNotFoundError(
                     f"no fitted model for {key[0]} {key[1]}. "
                     f"train it:  python3 train.py --intervals {key[1]}")
+            # EVICT FIRST, AND NEVER THE ONE BEING ASKED FOR.
+            #
+            # This used to insert, then evict by last-seen, then return the
+            # inserted key -- and with 60 pairs polled round-robin against a
+            # limit of 10, the just-built monitor was usually the "oldest" and
+            # was dropped before the return line, which raised KeyError.
+            # Every refresh of 50 pairs failed that way, once a second, for
+            # days, while the stale dashboards kept being served. 21,988
+            # failures in six hours, and a SELL call 100 hours old on screen.
+            self._evict_monitors(keep=key)
             self._monitors[key] = Monitor(key[0], key[1], h1, h2,
                                           asset=self.asset)
-            self._evict_monitors()
         return self._monitors[key]
 
     # Each Monitor holds two fitted LightGBM models. Unbounded, this grew one
@@ -146,18 +155,21 @@ class TradingService:
     # of them, all resident, on a box with 967MB.
     MAX_MONITORS = int(os.environ.get("MAX_MONITORS", "10"))
 
-    def _evict_monitors(self) -> None:
-        """Keep the most recently asked-for monitors, drop the rest.
+    def _evict_monitors(self, keep=None) -> None:
+        """Make room for one more, dropping the least recently asked-for.
 
         Rebuilding one is a `joblib.load` of two small files, so losing a
         cold pair costs milliseconds the next time it is asked for — far
         cheaper than the alternative, which was the whole process dying.
+        `keep` is never evicted: it is the pair about to be used.
         """
-        if len(self._monitors) <= self.MAX_MONITORS:
+        room = self.MAX_MONITORS - (1 if keep is not None else 0)
+        if len(self._monitors) < max(room, 1) + (0 if keep is None else 0):
             return
-        order = sorted(self._monitors,
+        order = sorted((k for k in self._monitors if k != keep),
                        key=lambda k: self._last_seen.get(k, 0.0))
-        for k in order[:len(self._monitors) - self.MAX_MONITORS]:
+        excess = len(self._monitors) - room
+        for k in order[:max(excess, 0)]:
             self._monitors.pop(k, None)
 
     def _bars(self, symbol: Optional[str] = None,
@@ -682,7 +694,7 @@ class TradingService:
             if hit:
                 if time.time() - hit.at >= ttl:
                     self._refresh_soon(key)
-                return hit.value
+                return _expire_if_old(hit.value)
         return self._build_and_store(key)
 
     def trained_symbols(self) -> List[str]:
@@ -826,7 +838,8 @@ class TradingService:
             "live": live,
             "indicators": _indicators(snap, interval=interval, htf=htf),
             "analyses": [_analysis(a), _analysis(b)],
-            "recommendation": _recommendation(b, a, stale),
+            "recommendation": _gate_by_verdict(
+                symbol, interval, _recommendation(b, a, stale)),
             "levels": _levels(chosen, price),
             "calibration_note": (
                 "Probability is the chance a long entered at this bar's close "
@@ -1770,6 +1783,65 @@ def _choose(primary, secondary):
     if primary.action.startswith("ENTER"):
         return primary
     return secondary if secondary.action.startswith("ENTER") else primary
+
+
+def _gate_by_verdict(symbol: str, interval: str,
+                     rec: Dict[str, Any]) -> Dict[str, Any]:
+    """A timeframe whose fit does not beat its shuffled control makes no
+    call. The evaluation is written by train.py beside the models; this
+    reads it. No verdict on disk means the status quo -- the model is
+    trusted -- so shipping this gates nothing until an evaluation has
+    actually been run.
+
+    FLAT, with the reason in `detail`, rather than hiding the timeframe:
+    the person looking at the chart should see WHY there is no call, and a
+    silently missing call reads as "nothing is happening" rather than
+    "this model has been measured and found to know nothing".
+    """
+    if rec.get("action") not in ("BUY", "SELL"):
+        return rec
+    usable, why = model_usable(symbol, interval)
+    if usable:
+        return rec
+    return {"action": "FLAT", "tone": "flat", "detail": why,
+            "strength": "", "gated": True,
+            "window_ends": rec.get("window_ends")}
+
+
+def _expire_if_old(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """A cached call whose window has closed is served as STALE, whatever
+    the payload says about itself.
+
+    Staleness is judged at BUILD time and written into the payload. That is
+    right for a payload that is rebuilt every bar, and wrong for one that
+    is not: when the refresh path broke, dashboards built as "fresh" on a
+    Friday were served as fresh the following Wednesday, and a SELL call
+    stayed on screen for a hundred hours. This is the guard for the next
+    time the refresh path breaks for a reason nobody has thought of yet.
+    Copied, not mutated: the cached object is what the refresh compares to.
+    """
+    rec = payload.get("recommendation") or {}
+    ends = rec.get("window_ends")
+    if not ends or rec.get("action") in ("STALE", None):
+        return payload
+    try:
+        end_at = pd.Timestamp(ends)
+        if end_at.tzinfo is None:
+            end_at = end_at.tz_localize("UTC")
+    except (ValueError, TypeError):
+        return payload
+    if end_at >= utc_now():
+        return payload
+    out = dict(payload)
+    out["recommendation"] = {
+        "action": "STALE", "tone": "flat",
+        "detail": ("This call's window closed at "
+                   f"{end_at.strftime('%H:%M UTC')} and the dashboard has "
+                   "not been rebuilt since. Waiting for the next bar."),
+        "window_ends": ends,
+        "strength": "",
+    }
+    return out
 
 
 def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:

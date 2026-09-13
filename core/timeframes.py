@@ -176,3 +176,60 @@ def is_trained(symbol: str, interval: str,
                output_dir: Optional[Path] = None) -> bool:
     h1, h2 = model_paths(symbol, interval, output_dir)
     return h1.exists() and h2.exists()
+
+
+def eval_path(symbol: str, interval: str,
+              output_dir: Optional[Path] = None) -> Path:
+    """Where the evaluation verdict for a pair and timeframe lives.
+
+    A sidecar beside the models, not inside them: the models are joblib
+    blobs read by one loader, and the verdict is a few numbers a human, a
+    test and the API all want to read without unpickling anything.
+    """
+    out = Path(output_dir) if output_dir else Path("output")
+    return out / f"eval_{symbol.upper()}_{interval}.json"
+
+
+def beats_shuffle(auc: float, shuffle: float, spread: float) -> bool:
+    """Does this fit know something a fit on scrambled labels does not?
+
+    NOT `auc > 0.5`. The honest control is the same model trained on the
+    same features with the labels shuffled -- it lands near 0.5 but not on
+    it, and the fold spread says how far a fit can wander by luck. A model
+    only earns a call if it clears BOTH: it beats the scrambled control by
+    more than the noise between folds. BTCUSDT 1d scored 0.480 against a
+    shuffle of 0.481 and a spread of 0.019, which is precisely "nothing".
+    """
+    try:
+        return (float(auc) - float(shuffle)) > float(spread) and \
+            float(auc) == float(auc)
+    except (TypeError, ValueError):
+        return False
+
+
+def model_usable(symbol: str, interval: str,
+                 output_dir: Optional[Path] = None) -> Tuple[bool, str]:
+    """(usable, reason). Usable when no verdict exists -- an unevaluated
+    model is the status quo, and gating it on a file nobody has written
+    would silence every pair on the day this ships. Usable when at least
+    one horizon beats its shuffle. Otherwise not, and the reason says so
+    in words the dashboard can show."""
+    import json
+
+    path = eval_path(symbol, interval, output_dir)
+    if not path.exists():
+        return True, ""
+    try:
+        v = json.loads(path.read_text())
+    except (ValueError, OSError):
+        return True, ""
+    hs = v.get("horizons") or {}
+    if not hs:
+        return True, ""
+    if any(h.get("beats_shuffle") for h in hs.values()):
+        return True, ""
+    best = max(hs.values(), key=lambda h: h.get("auc") or 0)
+    return False, (
+        f"No call on {interval}: this model does not beat a control trained "
+        f"on scrambled labels (AUC {best.get('auc', 0):.3f} vs shuffle "
+        f"{best.get('shuffle', 0):.3f}). A call from it would be a coin flip.")

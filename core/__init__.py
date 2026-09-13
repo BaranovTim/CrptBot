@@ -19,7 +19,7 @@ from .timeframes import (
     htf_for,
     interval_seconds,
     is_trained,
-    model_paths,
+    model_paths, eval_path, beats_shuffle, model_usable,
     pandas_rule,
 )
 from .validation import (

@@ -87,6 +87,32 @@ class Settings {
 
   Future<void> saveSensitivity(String v) => _put(_signalKey, v);
 
+  /// Close a logged entry when the model's window closes, at the price then.
+  ///
+  /// ON BY DEFAULT, because it is what the model was measured on. Every
+  /// model answers "which barrier is touched first WITHIN N bars, else what
+  /// is the sign at N" -- two bars on 1h, 4h and 1d. An entry held past that
+  /// is a symmetric coin flip the model never claimed to predict, and on
+  /// 1d, where a barrier is 4% away, half of all entries end up decided in
+  /// that unmodelled tail. Off, an entry stays open until a barrier is hit.
+  Future<bool> timeLimit() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(_timeLimitKey) ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<void> saveTimeLimit(bool v) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_timeLimitKey, v);
+    } catch (_) {}
+  }
+
+  static const _timeLimitKey = 'trades.time_limit.v1';
+
   /// How much of the news is allowed to buzz.
   ///
   /// Four levels rather than a switch, because "news" is not one thing. These

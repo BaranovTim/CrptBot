@@ -328,19 +328,26 @@ class Notifications {
   Future<void> showTradeClosed({
     required String id,
     required String symbol,
-    required bool takeProfit,
+    required String by,
     required String level,
     required String pnl,
   }) async {
     if (!_ready) await init();
     final short =
         symbol.endsWith('USDT') ? symbol.substring(0, symbol.length - 4) : symbol;
-    final title = takeProfit
-        ? '$short hit your take profit'
-        : '$short hit your stop loss';
-    final body = 'Closed in your log at $level · $pnl\n'
+    final takeProfit = by == 'take_profit';
+    final title = switch (by) {
+      'take_profit' => '$short hit your take profit',
+      'stop_loss' => '$short hit your stop loss',
+      _ => "$short reached the model's time limit",
+    };
+    final why = by == 'time_limit'
+        ? ' — neither level was reached inside the window the model '
+            'predicts for'
+        : '';
+    final body = 'Closed in your log at $level · $pnl$why\n'
         'Vanth places no orders — check your exchange.';
-    final details = _details('signal', takeProfit ? 'medium' : 'high');
+    final details = _details('signal', by == 'stop_loss' ? 'high' : 'medium');
     // Keyed by the ENTRY, not by symbol and level. Two entries on the same
     // coin at the same target shared an id, and Android treats a repeated
     // id as an update -- so the second close silently replaced the first

@@ -1816,4 +1816,93 @@ void main() {
       expect(marketFor('MSTR'), MarketMode.stocks);
     });
   });
+
+  // THE MODEL'S TIME LIMIT
+  //
+  // Every model answers "which barrier first, WITHIN N bars". An entry held
+  // past N is a symmetric coin flip it never predicted, and on 1d -- where a
+  // barrier is ~4% away and N is two days -- half of all entries were being
+  // decided in that tail. The horizon table mirrors `BARRIERS` in
+  // core/timeframes.py; a mismatch means the app closes trades on a window
+  // the model was not trained on.
+  group("the model's time limit", () {
+    test('the horizon per timeframe matches core/timeframes.py BARRIERS', () {
+      expect(TradeEntry.horizonOf('1m'), const Duration(hours: 4));
+      expect(TradeEntry.horizonOf('5m'), const Duration(hours: 2, minutes: 40));
+      expect(TradeEntry.horizonOf('15m'), const Duration(hours: 2));
+      expect(TradeEntry.horizonOf('1h'), const Duration(hours: 2));
+      expect(TradeEntry.horizonOf('4h'), const Duration(hours: 8));
+      expect(TradeEntry.horizonOf('1d'), const Duration(hours: 48));
+      expect(TradeEntry.horizonOf(null), isNull);
+      expect(TradeEntry.horizonOf('3h'), isNull);
+    });
+
+    TradeEntry aged(String iv, Duration age) => TradeEntry(
+        id: 'x-$iv', symbol: 'BTCUSDT', side: 'LONG', size: 1,
+        entryPrice: 100, openedAt: DateTime.now().subtract(age),
+        takeProfit: 130, stopLoss: 90, interval: iv);
+
+    test('an expired entry closes at the current price, not at a level',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(aged('1d', const Duration(hours: 49)));
+      final r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
+      expect(r.settled, hasLength(1));
+      final t = r.settled.single;
+      expect(t.closedBy, 'time_limit');
+      expect(t.closePrice, 103.0, reason: 'must close where price IS');
+      expect(t.pnlPct(null), closeTo(3, 1e-9));
+    });
+
+    test('inside the window nothing happens; a level still wins on the same tick',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(aged('1d', const Duration(hours: 10)));
+      expect((await Trades.instance.checkLive({'BTCUSDT': 103.0})).settled,
+          isEmpty);
+      // expired AND the tick is through the target: the level is the more
+      // specific fact and takes precedence
+      Trades.instance.resetForTest();
+      SharedPreferences.setMockInitialValues({});
+      await Trades.instance.add(aged('1d', const Duration(hours: 49)));
+      final r = await Trades.instance.checkLive({'BTCUSDT': 131.0});
+      expect(r.settled.single.closedBy, 'take_profit');
+      expect(r.settled.single.closePrice, 130.0);
+    });
+
+    test('an entry with no timeframe recorded is never expired', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(TradeEntry(
+          id: 'old', symbol: 'BTCUSDT', side: 'LONG', size: 1,
+          entryPrice: 100,
+          openedAt: DateTime.now().subtract(const Duration(days: 30)),
+          takeProfit: 130, stopLoss: 90));
+      expect((await Trades.instance.checkLive({'BTCUSDT': 103.0})).settled,
+          isEmpty);
+    });
+
+    test('switched off in Preferences, the window is ignored', () async {
+      SharedPreferences.setMockInitialValues({'trades.time_limit.v1': false});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(aged('1h', const Duration(days: 3)));
+      expect((await Trades.instance.checkLive({'BTCUSDT': 103.0})).settled,
+          isEmpty);
+    });
+
+    test('the countdown reads in days and hours, and says when it has closed', () {
+      final now = DateTime(2026, 9, 13, 12);
+      TradeEntry at(Duration age) => TradeEntry(
+          id: 'c', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 1,
+          openedAt: now.subtract(age), interval: '1d');
+      expect(JournalCard.timeLeftText(at(const Duration(hours: 6)), now),
+          '1d 18h left');
+      expect(JournalCard.timeLeftText(at(const Duration(hours: 47)), now),
+          '1h 0m left');
+      expect(JournalCard.timeLeftText(at(const Duration(hours: 50)), now),
+          'window closed');
+    });
+  });
 }

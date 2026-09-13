@@ -44,6 +44,7 @@ import 'dart:async';
 import 'client.dart';
 import 'format.dart';
 import 'notifications.dart';
+import 'settings.dart';
 
 /// One logged position.
 class TradeEntry {
@@ -123,7 +124,8 @@ class TradeEntry {
   /// have been closed by you at that price; the journal should not guess.
   final String closedBy;
 
-  bool get autoClosed => closedBy == 'take_profit' || closedBy == 'stop_loss';
+  bool get autoClosed => closedBy == 'take_profit' ||
+      closedBy == 'stop_loss' || closedBy == 'time_limit';
   final double size, entryPrice;
   final DateTime openedAt;
   final double? takeProfit, stopLoss;
@@ -144,6 +146,30 @@ class TradeEntry {
   /// timeframe you happened to be on last. Null on entries older than the
   /// field; those open on the current timeframe.
   final String? interval;
+
+  /// The model's outer window for this timeframe. Mirrors `BARRIERS` in
+  /// `core/timeframes.py` -- the h2 hold, in bars, times the bar length.
+  /// Null for an entry logged before timeframes were recorded on entries.
+  static Duration? horizonOf(String? interval) => switch (interval) {
+        '1m' => const Duration(hours: 4),            // 240 bars
+        '5m' => const Duration(hours: 2, minutes: 40), // 32 bars
+        '15m' => const Duration(hours: 2),            // 8 bars
+        '1h' => const Duration(hours: 2),             // 2 bars
+        '4h' => const Duration(hours: 8),             // 2 bars
+        '1d' => const Duration(hours: 48),            // 2 bars
+        _ => null,
+      };
+
+  /// When the model stops having an opinion about this entry.
+  DateTime? get timeLimit {
+    final h = horizonOf(interval);
+    return h == null ? null : openedAt.add(h);
+  }
+
+  bool expiredAt(DateTime now) {
+    final t = timeLimit;
+    return isOpen && t != null && !now.isBefore(t);
+  }
 
   bool get isOpen => closedAt == null;
   bool get isShort => side == 'SHORT';
@@ -447,12 +473,20 @@ class Trades extends ChangeNotifier {
   ///
   /// Manual closes do not come through here on purpose: you did that
   /// yourself and do not need telling.
-  Future<TradeEntry?> autoClose(String id, String hit) async {
+  Future<TradeEntry?> autoClose(String id, String hit,
+      {double? price}) async {
     final all = List<TradeEntry>.from(await load());
     final i = all.indexWhere((t) => t.id == id);
     if (i < 0 || !all[i].isOpen) return null;
     final t = all[i];
-    final level = hit == 'take_profit' ? t.takeProfit : t.stopLoss;
+    // A barrier closes AT the level you set; the time limit closes at
+    // whatever price it is when the window shuts -- there is no level.
+    final level = switch (hit) {
+      'take_profit' => t.takeProfit,
+      'stop_loss' => t.stopLoss,
+      'time_limit' => price,
+      _ => null,
+    };
     if (level == null) return null;
     final closed = t.closedAtPrice(level, by: hit);
     all[i] = closed;
@@ -460,7 +494,7 @@ class Trades extends ChangeNotifier {
     unawaited(Notifications.instance.showTradeClosed(
       id: t.id,
       symbol: t.symbol,
-      takeProfit: hit == 'take_profit',
+      by: hit,
       level: priceText(level),
       pnl: '${(closed.pnlPct(null) ?? 0) >= 0 ? '+' : ''}'
           '${(closed.pnlPct(null) ?? 0).toStringAsFixed(2)}%  '
@@ -521,13 +555,18 @@ class Trades extends ChangeNotifier {
     // second entry, wrote that list -- with the first entry still open in
     // it -- over the cache. Two entries hitting on one tick lost a close.
     final settled = <TradeEntry>[];
+    final limitOn = await Settings.instance.timeLimit();
+    final now = DateTime.now();
     for (final t in all) {
       if (!t.isOpen) continue;
       final p = tick(t);
       if (p == null) continue;
-      final hit = levelHitBy(t, high: p, low: p);
+      // A barrier first: if the tick that closed the window also touched
+      // a level, the level is the more specific fact.
+      var hit = levelHitBy(t, high: p, low: p);
+      if (hit == null && limitOn && t.expiredAt(now)) hit = 'time_limit';
       if (hit == null) continue;
-      final closed = await autoClose(t.id, hit);
+      final closed = await autoClose(t.id, hit, price: p);
       if (closed != null) settled.add(closed);
     }
     return (settled: settled, extremesMoved: moved);
@@ -580,12 +619,18 @@ class Trades extends ChangeNotifier {
     if (widened) await _save(all);
 
     final settled = <TradeEntry>[];
+    final limitOn = await Settings.instance.timeLimit();
+    final now = DateTime.now();
     for (final e in ranges) {
-      final hit = levelHitBy(e.key,
+      var hit = levelHitBy(e.key,
           high: (e.value['high'] as num?)?.toDouble(),
           low: (e.value['low'] as num?)?.toDouble());
+      final last = (e.value['last'] as num?)?.toDouble();
+      if (hit == null && limitOn && e.key.expiredAt(now) && last != null) {
+        hit = 'time_limit';
+      }
       if (hit == null) continue;
-      final closed = await autoClose(e.key.id, hit);
+      final closed = await autoClose(e.key.id, hit, price: last);
       if (closed != null) settled.add(closed);
     }
     return settled;

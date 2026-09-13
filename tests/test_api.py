@@ -1412,3 +1412,124 @@ def test_an_email_is_required_and_a_weak_password_is_refused():
         assert u.identifier == "tim@example.com"
         assert acc.verify("TIM@example.com", "a-good-long-password") is not None
     return True
+
+
+def test_the_monitor_being_built_is_never_the_one_evicted():
+    """THE BUG: insert, evict by last-seen, return the inserted key. With
+    more pairs polled than the limit, the one just built was the "oldest"
+    and got dropped before the return, raising KeyError on every refresh
+    for every pair outside the limit -- 21,988 times in six hours, while
+    dashboards built days earlier were served as fresh."""
+    import time as _t
+
+    from api.service import TradingService
+
+    svc = TradingService.__new__(TradingService)
+    svc._monitors = {}
+    svc._last_seen = {}
+    svc.MAX_MONITORS = 3
+
+    class _M:
+        def __init__(self, k): self.k = k
+
+    # simulate _mon's insert path for 12 keys, each "seen" earlier than the
+    # ones already resident -- the worst case, and the common one under a
+    # round-robin poll
+    keys = [(f"S{i}", "1h") for i in range(12)]
+    for i, k in enumerate(keys):
+        svc._last_seen[k] = _t.time() - (100 - i)        # newer each time
+    for k in reversed(keys):                              # oldest last
+        svc._evict_monitors(keep=k)
+        svc._monitors[k] = _M(k)
+        assert k in svc._monitors, f"{k} evicted while being built"
+        assert len(svc._monitors) <= svc.MAX_MONITORS
+    return True
+
+
+def test_a_cached_call_whose_window_closed_is_served_stale():
+    import datetime as dt
+
+    from api.service import _expire_if_old
+    from core import utc_now
+
+    past = (utc_now() - dt.timedelta(hours=3)).isoformat()
+    future = (utc_now() + dt.timedelta(hours=3)).isoformat()
+
+    live = {"recommendation": {"action": "SELL", "tone": "down",
+                               "strength": "strong", "window_ends": future},
+            "symbol": "SUIUSDT"}
+    assert _expire_if_old(live)["recommendation"]["action"] == "SELL"
+
+    old = {"recommendation": {"action": "SELL", "tone": "down",
+                              "strength": "strong", "window_ends": past},
+           "symbol": "SUIUSDT"}
+    got = _expire_if_old(old)
+    assert got["recommendation"]["action"] == "STALE", got
+    assert got["recommendation"]["strength"] == "", "a stale call kept its strength"
+    # the cached object itself is untouched -- the refresh compares to it
+    assert old["recommendation"]["action"] == "SELL"
+    # a payload with no window (FLAT, untrained) is left alone
+    assert _expire_if_old({"recommendation": {"action": "FLAT"}})["recommendation"]["action"] == "FLAT"
+    return True
+
+
+def test_a_timeframe_that_does_not_beat_its_shuffle_makes_no_call():
+    """The daily models: AUC 0.480 against a shuffled control of 0.481.
+    A BUY or SELL from that is a coin flip presented as a call, and the
+    trades taken on it hit the stop like coin flips do. The verdict is
+    written beside the model and the server refuses to call from it."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from api.service import _gate_by_verdict
+
+    sell = {"action": "SELL", "tone": "down", "strength": "strong",
+            "detail": "x", "window_ends": "2030-01-01T00:00:00+00:00"}
+    with tempfile.TemporaryDirectory() as d:
+        import core.timeframes as T
+        real = T.eval_path
+        T.eval_path = lambda s, i, output_dir=None: real(s, i, Path(d))
+        eval_path = T.eval_path            # AFTER the patch, or the file
+        try:                               # lands in the real output/
+            # no verdict on disk: status quo, the call stands
+            assert _gate_by_verdict("XXXUSDT", "1d", dict(sell))["action"] == "SELL"
+
+            # a verdict that fails on both horizons: FLAT, with the reason
+            eval_path("XXXUSDT", "1d").write_text(json.dumps({
+                "horizons": {"h1": {"auc": 0.480, "shuffle": 0.481,
+                                    "spread": 0.019, "beats_shuffle": False},
+                             "h2": {"auc": 0.491, "shuffle": 0.485,
+                                    "spread": 0.023, "beats_shuffle": False}}}))
+            got = _gate_by_verdict("XXXUSDT", "1d", dict(sell))
+            assert got["action"] == "FLAT", got
+            assert got["strength"] == ""
+            assert "scrambled" in got["detail"] and "0.491" in got["detail"], got
+            assert got.get("gated") is True
+
+            # one horizon beating its shuffle is enough to keep the call
+            eval_path("XXXUSDT", "1d").write_text(json.dumps({
+                "horizons": {"h1": {"auc": 0.480, "shuffle": 0.481,
+                                    "spread": 0.019, "beats_shuffle": False},
+                             "h2": {"auc": 0.540, "shuffle": 0.500,
+                                    "spread": 0.020, "beats_shuffle": True}}}))
+            assert _gate_by_verdict("XXXUSDT", "1d", dict(sell))["action"] == "SELL"
+
+            # FLAT is never touched, gated or not
+            assert _gate_by_verdict("XXXUSDT", "1d", {"action": "FLAT"})["action"] == "FLAT"
+        finally:
+            T.eval_path = real
+    return True
+
+
+def test_beats_shuffle_is_about_the_control_not_about_0_5():
+    from core import beats_shuffle
+
+    assert beats_shuffle(0.540, 0.500, 0.020) is True
+    assert beats_shuffle(0.480, 0.481, 0.019) is False    # BTC 1d, exactly
+    # above 0.5 but not beyond the noise: not a finding
+    assert beats_shuffle(0.515, 0.500, 0.020) is False
+    # a "clean" 0.52 against a shuffle that also sits at 0.52 is nothing
+    assert beats_shuffle(0.520, 0.520, 0.010) is False
+    assert beats_shuffle(float("nan"), 0.5, 0.01) is False
+    return True
