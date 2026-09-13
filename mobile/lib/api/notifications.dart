@@ -43,6 +43,9 @@ import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
 import 'models.dart';
+import 'dart:ui' show DartPluginRegistrant;
+import 'settings.dart';
+import 'client.dart';
 import 'format.dart';
 import 'trades.dart';
 
@@ -110,6 +113,73 @@ class OpenRequest {
   }
 }
 
+/// The "keep or close?" question: its payload, its advice, its answer.
+class LimitQuestion {
+  /// `limit|<symbol>|<interval>|<tradeId>|<price>`. Distinct prefix from
+  /// `open|...` so a body tap still opens the coin and an action does not.
+  static String encode(TradeEntry t, double price) =>
+      'limit|${t.symbol}|${t.interval ?? ''}|${t.id}|$price';
+
+  static bool isAnswer(NotificationResponse r) =>
+      (r.payload ?? '').startsWith('limit|') &&
+      (r.actionId == 'keep' || r.actionId == 'close');
+
+  /// The line that makes the question answerable: what the model says NOW.
+  /// Honest by construction -- it is the live call, not a forecast of how
+  /// the trade will end, which nothing here can make.
+  static String advice(TradeEntry t, String? call) {
+    if (call == null) {
+      return 'The model has no call on this pair right now \u2014 no view '
+          'either way.';
+    }
+    final same = (t.isShort && call == 'SELL') || (!t.isShort && call == 'BUY');
+    return same
+        ? 'The current call is still $call \u2014 keeping is consistent '
+            'with the model.'
+        : 'The current call has turned to $call, against this entry \u2014 '
+            'closing is consistent with the model.';
+  }
+
+  static Future<void> answer(NotificationResponse r, {ApiClient? client}) async {
+    final p = (r.payload ?? '').split('|');
+    if (p.length < 5) return;
+    final id = p[3];
+    final asked = double.tryParse(p[4]);
+    if (r.actionId == 'keep') {
+      await Trades.instance.answerLimit(id, close: false);
+      return;
+    }
+    // Close at the live price if we can get one, else at the price the
+    // question was asked at -- the honest fallback, and never a level.
+    double? price;
+    if (client != null) {
+      try {
+        final coins = await client.coins(symbols: [p[1]]);
+        price = coins.firstWhere((c) => c.symbol == p[1]).price;
+      } catch (_) {}
+    }
+    await Trades.instance.answerLimit(id, close: true, price: price ?? asked);
+  }
+}
+
+/// Runs in a fresh isolate when an action is tapped with the app closed.
+///
+/// `vm:entry-point` is load-bearing, exactly as in `background.dart`:
+/// nothing in Dart calls this, the plugin does, by name, and without the
+/// pragma the tree shaker removes it from a release build -- the symptom
+/// being buttons that work in debug and silently do nothing in the APK.
+@pragma('vm:entry-point')
+void onLimitAnswerInBackground(NotificationResponse r) {
+  unawaited(() async {
+    DartPluginRegistrant.ensureInitialized();
+    final client = ApiClient();
+    try {
+      await Settings.instance.restore(client);
+    } catch (_) {}
+    await LimitQuestion.answer(r, client: client.token.isEmpty ? null : client);
+  }());
+}
+
 class Notifications {
   Notifications._();
   static final Notifications instance = Notifications._();
@@ -156,6 +226,12 @@ class Notifications {
   Stream<OpenRequest> get taps => _taps.stream;
 
   void _onResponse(NotificationResponse r) {
+    // An answer to "keep or close?" is an ACTION, not a tap: it must not
+    // open the coin, and it must be honoured even from the shade.
+    if (LimitQuestion.isAnswer(r)) {
+      unawaited(LimitQuestion.answer(r));
+      return;
+    }
     final req = OpenRequest.decode(r.payload);
     if (req != null) _taps.add(req);
   }
@@ -211,6 +287,9 @@ class Notifications {
         // the app on whatever it showed last, which is not what a tap on
         // "DOGEUSDT 4h" means.
         onDidReceiveNotificationResponse: _onResponse,
+        // The app may be closed when "Close now" is tapped. This runs in
+        // its own isolate then; see `onLimitAnswerInBackground`.
+        onDidReceiveBackgroundNotificationResponse: onLimitAnswerInBackground,
       );
 
       final android = _plugin.resolvePlatformSpecificImplementation<
@@ -333,6 +412,55 @@ class Notifications {
     await _plugin.show(_idFor(a.id), a.title, body, details, payload: OpenRequest.encode(a.symbol, a.interval, a.id));
   }
 
+  /// "Keep or close?" -- the model's window on a logged entry has closed
+  /// and no level was reached. Two buttons, answerable from the shade.
+  Future<void> askTimeLimit({
+    required TradeEntry entry,
+    required double price,
+    String? currentCall,
+  }) async {
+    if (!_ready) await init();
+    final short = entry.symbol.endsWith('USDT')
+        ? entry.symbol.substring(0, entry.symbol.length - 4)
+        : entry.symbol;
+    final pct = entry.pnlPct(price) ?? 0;
+    final pnl = '${pct >= 0 ? 'Up' : 'Down'} ${pct.abs().toStringAsFixed(2)}% '
+        'at ${priceText(price, prefix: '')}';
+    final title = "$short: the model's ${entry.interval ?? ''} window closed";
+    final body = '$pnl. ${LimitQuestion.advice(entry, currentCall)}\n'
+        'Keep it open, or close it now marked TIME LIMIT?';
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelSignals.id, _channelSignals.name,
+        channelDescription: _channelSignals.description,
+        importance: Importance.high, priority: Priority.high,
+        icon: '@drawable/ic_notification',
+        styleInformation: BigTextStyleInformation(body),
+        // Handled without opening the app, and the notification goes away
+        // once answered -- a question that stays on screen after being
+        // answered looks unanswered.
+        actions: const [
+          AndroidNotificationAction('keep', 'Keep open',
+              showsUserInterface: false, cancelNotification: true),
+          AndroidNotificationAction('close', 'Close now',
+              showsUserInterface: false, cancelNotification: true),
+        ],
+      ),
+    );
+    try {
+      await _plugin.show(_idFor('limit:${entry.id}'), title, body, details,
+          payload: LimitQuestion.encode(entry, price));
+    } catch (e) {
+      debugPrint('[notify] time-limit question for ${entry.symbol} not shown: $e');
+    }
+  }
+
+  Future<void> dismissTimeLimitQuestion(String tradeId) async {
+    try {
+      await _plugin.cancel(_idFor('limit:$tradeId'));
+    } catch (_) {}
+  }
+
   /// A logged trade reached the level you set and was closed in your journal.
   ///
   /// WHY THIS IS ITS OWN METHOD RATHER THAN AN `Alert`
@@ -367,8 +495,8 @@ class Notifications {
       _ => "$short reached the model's time limit",
     };
     final why = by == 'time_limit'
-        ? ' — neither level was reached inside the window the model '
-            'predicts for'
+        ? ' — the model\'s window closed, neither level was reached, and '
+            'no answer came in time'
         : '';
     final body = 'Closed in your log at $level · $pnl$why\n'
         'Vanth places no orders — check your exchange.';

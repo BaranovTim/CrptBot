@@ -1504,7 +1504,11 @@ def test_a_timeframe_that_does_not_beat_its_shuffle_makes_no_call():
             got = _gate_by_verdict("XXXUSDT", "1d", dict(sell))
             assert got["action"] == "FLAT", got
             assert got["strength"] == ""
-            assert "scrambled" in got["detail"] and "0.491" in got["detail"], got
+            # The card gets a sentence a person can read; the numbers go to
+            # `diagnostic`, for the training screen.
+            assert "no better than chance" in got["detail"], got
+            assert "0.491" not in got["detail"], "arithmetic leaked onto the card"
+            assert "scrambled" in got["diagnostic"] and "0.491" in got["diagnostic"], got
             assert got.get("gated") is True
 
             # one horizon beating its shuffle is enough to keep the call
@@ -1564,6 +1568,47 @@ def test_the_gate_applies_to_a_cached_payload_at_serve_time():
             got = _gate_payload(payload)
             assert got["recommendation"]["action"] == "FLAT", got
             assert payload["recommendation"]["action"] == "SELL", "cache mutated"
+        finally:
+            T.eval_path = real
+            T._VERDICTS.clear()
+    return True
+
+
+def test_calls_right_now_applies_the_same_guards_as_the_dashboard():
+    """A call the gate turned FLAT on the coin's own dashboard was still
+    listed as a live SELL here, because this read the raw cache. The list
+    that says "these are the calls right now" must not show calls that are
+    not."""
+    import json
+    import tempfile
+    import time as _t
+    from pathlib import Path
+
+    import core.timeframes as T
+    from api.service import TradingService, _Cached
+
+    svc = TradingService.__new__(TradingService)
+    svc._lock = __import__("threading").Lock()
+    svc.RECORD_INTERVALS = ("1h",)
+    fresh = {"symbol": "DOGEUSDT", "interval": "1h", "generated_at": "x",
+             "recommendation": {"action": "SELL", "tone": "down",
+                                "strength": "strong",
+                                "window_ends": "2030-01-01T00:00:00+00:00"},
+             "levels": {}}
+    svc._dash = {("DOGEUSDT", "1h"): _Cached(at=_t.time(), value=fresh)}
+    svc.record_symbols = lambda: ["DOGEUSDT"]
+
+    with tempfile.TemporaryDirectory() as d:
+        real = T.eval_path
+        T.eval_path = lambda s, i, output_dir=None: real(s, i, Path(d))
+        T._VERDICTS.clear()
+        try:
+            listed = svc.live_signals()["signals"]
+            assert [r["symbol"] for r in listed] == ["DOGEUSDT"], listed
+            T.eval_path("DOGEUSDT", "1h").write_text(json.dumps({"horizons": {
+                "h1": {"auc": 0.49, "shuffle": 0.50, "spread": 0.01}}}))
+            T._VERDICTS.clear()
+            assert svc.live_signals()["signals"] == [], "a gated call was listed"
         finally:
             T.eval_path = real
             T._VERDICTS.clear()

@@ -1842,34 +1842,133 @@ void main() {
         entryPrice: 100, openedAt: DateTime.now().subtract(age),
         takeProfit: 130, stopLoss: 90, interval: iv);
 
-    test('an expired entry closes at the current price, not at a level',
-        () async {
+    test('an expired entry is ASKED about, not closed', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
       await Trades.instance.add(aged('1d', const Duration(hours: 49)));
       final r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
-      expect(r.settled, hasLength(1));
-      final t = r.settled.single;
-      expect(t.closedBy, 'time_limit');
-      expect(t.closePrice, 103.0, reason: 'must close where price IS');
-      expect(t.pnlPct(null), closeTo(3, 1e-9));
+      expect(r.settled, isEmpty, reason: 'the window closing must not close it');
+      final t = (await Trades.instance.load()).single;
+      expect(t.isOpen, isTrue);
+      expect(t.limitAskedAt, isNotNull, reason: 'the question was not sent');
+      // and it is asked ONCE: the next tick past the window asks nothing
+      final asked = t.limitAskedAt;
+      await Trades.instance.checkLive({'BTCUSDT': 104.0});
+      expect((await Trades.instance.load()).single.limitAskedAt, asked);
     });
 
-    test('inside the window nothing happens; a level still wins on the same tick',
+    test('"close now" closes at the price given, marked TIME LIMIT', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      final e = aged('1d', const Duration(hours: 49));
+      await Trades.instance.add(e);
+      await Trades.instance.checkLive({'BTCUSDT': 103.0});
+      final closed = await Trades.instance.answerLimit(e.id, close: true, price: 103.5);
+      expect(closed, isNotNull);
+      expect(closed!.closedBy, 'time_limit');
+      expect(closed.closePrice, 103.5, reason: 'must close where price IS');
+      expect(closed.pnlPct(null), closeTo(3.5, 1e-9));
+    });
+
+    test('"keep open" leaves it open and it is never asked again', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      final e = aged('1d', const Duration(hours: 49));
+      await Trades.instance.add(e);
+      await Trades.instance.checkLive({'BTCUSDT': 103.0});
+      final kept = await Trades.instance.answerLimit(e.id, close: false);
+      expect(kept!.isOpen, isTrue);
+      expect(kept.keptPastLimit, isTrue);
+      expect(kept.needsLimitQuestion(DateTime.now()), isFalse);
+      // a level still closes a kept entry
+      final r = await Trades.instance.checkLive({'BTCUSDT': 131.0});
+      expect(r.settled.single.closedBy, 'take_profit');
+    });
+
+    test('a level on the same tick as expiry wins, and no question is sent',
         () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      await Trades.instance.add(aged('1d', const Duration(hours: 10)));
-      expect((await Trades.instance.checkLive({'BTCUSDT': 103.0})).settled,
-          isEmpty);
-      // expired AND the tick is through the target: the level is the more
-      // specific fact and takes precedence
-      Trades.instance.resetForTest();
-      SharedPreferences.setMockInitialValues({});
       await Trades.instance.add(aged('1d', const Duration(hours: 49)));
       final r = await Trades.instance.checkLive({'BTCUSDT': 131.0});
       expect(r.settled.single.closedBy, 'take_profit');
       expect(r.settled.single.closePrice, 130.0);
+      expect(r.settled.single.limitAskedAt, isNull);
+    });
+
+    test('the grace per timeframe is 5m / 10m / 1h, then it closes itself',
+        () async {
+      expect(TradeEntry.graceOf('1h'), const Duration(minutes: 5));
+      expect(TradeEntry.graceOf('4h'), const Duration(minutes: 10));
+      expect(TradeEntry.graceOf('1d'), const Duration(hours: 1));
+
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      // asked 4 minutes ago on 1h: still waiting for an answer
+      var e = aged('1h', const Duration(hours: 3)).withLimitState(
+          asked: DateTime.now().subtract(const Duration(minutes: 4)));
+      await Trades.instance.add(e);
+      var r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
+      expect(r.settled, isEmpty);
+      expect((await Trades.instance.load()).single.isOpen, isTrue);
+
+      // asked 6 minutes ago on 1h, no answer: closed at the tick, TIME LIMIT
+      Trades.instance.resetForTest();
+      SharedPreferences.setMockInitialValues({});
+      e = aged('1h', const Duration(hours: 3)).withLimitState(
+          asked: DateTime.now().subtract(const Duration(minutes: 6)));
+      await Trades.instance.add(e);
+      r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
+      expect(r.settled.single.closedBy, 'time_limit');
+      expect(r.settled.single.closePrice, 103.0);
+
+      // asked 50 minutes ago on 1d: inside its hour, still open
+      Trades.instance.resetForTest();
+      SharedPreferences.setMockInitialValues({});
+      e = aged('1d', const Duration(hours: 49)).withLimitState(
+          asked: DateTime.now().subtract(const Duration(minutes: 50)));
+      await Trades.instance.add(e);
+      expect((await Trades.instance.checkLive({'BTCUSDT': 103.0})).settled,
+          isEmpty);
+    });
+
+    test('"keep open" is final: the grace never closes a kept entry',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      final e = aged('1h', const Duration(days: 2)).withLimitState(
+          asked: DateTime.now().subtract(const Duration(days: 1)), kept: true);
+      await Trades.instance.add(e);
+      final r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
+      expect(r.settled, isEmpty);
+      expect((await Trades.instance.load()).single.isOpen, isTrue);
+    });
+
+    test('inside the window nothing is asked', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(aged('1d', const Duration(hours: 10)));
+      await Trades.instance.checkLive({'BTCUSDT': 103.0});
+      expect((await Trades.instance.load()).single.limitAskedAt, isNull);
+    });
+
+    test('the advice is the live call, read against the side', () {
+      final long = aged('1h', Duration.zero);
+      final short = TradeEntry(id: 's', symbol: 'BTCUSDT', side: 'SHORT',
+          size: 1, entryPrice: 100, openedAt: DateTime.now(), interval: '1h');
+      expect(LimitQuestion.advice(long, 'BUY'), contains('keeping is consistent'));
+      expect(LimitQuestion.advice(long, 'SELL'), contains('closing is consistent'));
+      expect(LimitQuestion.advice(short, 'SELL'), contains('keeping is consistent'));
+      expect(LimitQuestion.advice(short, 'BUY'), contains('closing is consistent'));
+      expect(LimitQuestion.advice(long, null), contains('no view'));
+    });
+
+    test('the question and its answers survive a write and a read', () {
+      final t = TradeEntry.fromJson(aged('1d', const Duration(hours: 49))
+          .withLimitState(asked: DateTime(2026, 9, 13), kept: true)
+          .toJson());
+      expect(t.limitAskedAt, DateTime(2026, 9, 13));
+      expect(t.keptPastLimit, isTrue);
     });
 
     test('an entry with no timeframe recorded is never expired', () async {
@@ -1884,12 +1983,14 @@ void main() {
           isEmpty);
     });
 
-    test('switched off in Preferences, the window is ignored', () async {
+    test('switched off in Preferences, nothing is asked', () async {
       SharedPreferences.setMockInitialValues({'trades.time_limit.v1': false});
       Trades.instance.resetForTest();
       await Trades.instance.add(aged('1h', const Duration(days: 3)));
-      expect((await Trades.instance.checkLive({'BTCUSDT': 103.0})).settled,
-          isEmpty);
+      await Trades.instance.checkLive({'BTCUSDT': 103.0});
+      final t = (await Trades.instance.load()).single;
+      expect(t.isOpen, isTrue);
+      expect(t.limitAskedAt, isNull);
     });
 
     test('the countdown reads in days and hours, and says when it has closed', () {
@@ -1943,7 +2044,7 @@ void main() {
         [small('BTCUSDT'), small('ETHUSDT')],
         sensitivity: 'strong',
         overrides: const {'BTCUSDT': 'small'},
-        isMuted: (_, __) => false,
+        isMuted: (_, _) => false,
       );
       expect(out.map((a) => a.symbol), ['BTCUSDT'],
           reason: 'BTC allowed by its override; ETH held to the general');

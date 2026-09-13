@@ -112,7 +112,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       if (r != null && mounted) _openSymbol(r.symbol, r.interval);
     });
     _positionsSub = _positions.stream.listen(
-        (p) => unawaited(Trades.instance.checkLive(p)));
+        (p) => unawaited(Trades.instance.checkLive(p, client: widget.client)));
     _positions.start();
     unawaited(_watchPositions());
     MarketModeStore.instance.load();

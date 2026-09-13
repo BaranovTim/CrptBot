@@ -510,8 +510,16 @@ class AlertEngine:
         # told to close a position never notified, only being told to open
         # one. An exit is a decision too, and the one you most want to hear
         # about while you are holding something.
-        actionable = ("BUY", "SELL", "FLAT")
-        if action == prev or action not in actionable or prev is None:
+        # A transition is worth a buzz when it is a DECISION: a call
+        # appearing or flipping (anything -> BUY/SELL), or a call being
+        # withdrawn (BUY/SELL -> FLAT, the exit). It is NOT one when the
+        # dashboard merely came back to life: STALE -> FLAT, or the first
+        # reading after a restart, says nothing about the market and used to
+        # arrive as "STALE -> FLAT" on every coin after every deploy.
+        calls = ("BUY", "SELL")
+        is_entry = action in calls and action != prev
+        is_exit = action == "FLAT" and prev in calls
+        if prev is None or not (is_entry or is_exit):
             return out
         if self._last_signal_bar.get(key) == bar:
             return out                              # one signal per bar, max

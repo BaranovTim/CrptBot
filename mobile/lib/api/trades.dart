@@ -64,6 +64,8 @@ class TradeEntry {
     this.highSince,
     this.lowSince,
     this.interval,
+    this.limitAskedAt,
+    this.keptPastLimit = false,
   });
 
   factory TradeEntry.create({
@@ -112,6 +114,10 @@ class TradeEntry {
         highSince: (j['high_since'] as num?)?.toDouble(),
         lowSince: (j['low_since'] as num?)?.toDouble(),
         interval: j['interval'] as String?,
+        limitAskedAt: j['limit_asked_at'] == null
+            ? null
+            : DateTime.parse(j['limit_asked_at'] as String),
+        keptPastLimit: j['kept_past_limit'] as bool? ?? false,
       );
 
   final String id, symbol, side, note;
@@ -140,6 +146,34 @@ class TradeEntry {
   /// extend it in real time). Persisted, so the bar is right the instant
   /// Profile opens rather than after the first round trip.
   final double? highSince, lowSince;
+
+  /// When the "keep or close?" question was sent, and whether the answer
+  /// was "keep". Asked once: an entry kept past its window is not asked
+  /// again -- the next thing the app says about it is the next call change
+  /// on that coin, which already names the open entry.
+  final DateTime? limitAskedAt;
+  final bool keptPastLimit;
+
+  /// Due for the question: open, past its window, never asked, not kept.
+  bool needsLimitQuestion(DateTime now) =>
+      expiredAt(now) && limitAskedAt == null && !keptPastLimit;
+
+  /// How long an unanswered question stays open before the app decides.
+  /// Chosen per timeframe: a few minutes on 1h, an hour on 1d -- long
+  /// enough to see the notification, short enough that "I never saw it"
+  /// does not turn into a week-long unmodelled position.
+  static Duration graceOf(String? interval) => switch (interval) {
+        '1d' => const Duration(hours: 1),
+        '4h' => const Duration(minutes: 10),
+        '1h' => const Duration(minutes: 5),
+        '15m' => const Duration(minutes: 2),
+        _ => const Duration(minutes: 1),
+      };
+
+  /// Asked, not answered, and the grace has run out: close it.
+  bool graceExpiredAt(DateTime now) =>
+      isOpen && !keptPastLimit && limitAskedAt != null &&
+      !now.isBefore(limitAskedAt!.add(graceOf(interval)));
 
   /// The timeframe the dashboard was on when this was logged -- "4h" -- so
   /// tapping the entry later reopens the same view, not whichever
@@ -190,6 +224,8 @@ class TradeEntry {
         'high_since': highSince,
         'low_since': lowSince,
         'interval': interval,
+        'limit_asked_at': limitAskedAt?.toIso8601String(),
+        'kept_past_limit': keptPastLimit,
       };
 
   /// The price this position is marked against: its close for a finished
@@ -295,6 +331,25 @@ class TradeEntry {
         highSince: highSince,
         lowSince: lowSince,
         interval: interval,
+        limitAskedAt: limitAskedAt,
+        keptPastLimit: keptPastLimit,
+      );
+
+  /// This entry with the question state changed. Public because tests
+  /// build these states directly; the app reaches them through
+  /// `askAtLimit` and `answerLimit`.
+  TradeEntry withLimitState({DateTime? asked, bool? kept}) =>
+      _copy(limitAskedAt: asked, keptPastLimit: kept);
+
+  TradeEntry _copy({DateTime? limitAskedAt, bool? keptPastLimit}) =>
+      TradeEntry(
+        id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
+        openedAt: openedAt, takeProfit: takeProfit, stopLoss: stopLoss,
+        closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
+        note: note, highSince: highSince, lowSince: lowSince,
+        interval: interval,
+        limitAskedAt: limitAskedAt ?? this.limitAskedAt,
+        keptPastLimit: keptPastLimit ?? this.keptPastLimit,
       );
 
   /// This entry with the extremes widened to include `high`/`low`.
@@ -315,6 +370,7 @@ class TradeEntry {
       openedAt: openedAt, takeProfit: takeProfit, stopLoss: stopLoss,
       closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
       note: note, highSince: h, lowSince: l, interval: interval,
+      limitAskedAt: limitAskedAt, keptPastLimit: keptPastLimit,
     );
   }
 
@@ -491,6 +547,10 @@ class Trades extends ChangeNotifier {
     final closed = t.closedAtPrice(level, by: hit);
     all[i] = closed;
     await _save(all);
+    // The question is moot once the entry is closed, by any path. Leaving
+    // it in the shade with two live buttons would be a question about a
+    // trade that no longer exists.
+    unawaited(Notifications.instance.dismissTimeLimitQuestion(t.id));
     unawaited(Notifications.instance.showTradeClosed(
       id: t.id,
       symbol: t.symbol,
@@ -518,7 +578,7 @@ class Trades extends ChangeNotifier {
   /// touch. Nothing at or below zero is believed: a reconnecting socket can
   /// emit one, and closing a real position on it would be permanent.
   Future<({List<TradeEntry> settled, bool extremesMoved})> checkLive(
-      Map<String, double> prices) async {
+      Map<String, double> prices, {ApiClient? client}) async {
     if (prices.isEmpty) {
       return (settled: const <TradeEntry>[], extremesMoved: false);
     }
@@ -563,11 +623,26 @@ class Trades extends ChangeNotifier {
       if (p == null) continue;
       // A barrier first: if the tick that closed the window also touched
       // a level, the level is the more specific fact.
-      var hit = levelHitBy(t, high: p, low: p);
-      if (hit == null && limitOn && t.expiredAt(now)) hit = 'time_limit';
-      if (hit == null) continue;
-      final closed = await autoClose(t.id, hit, price: p);
-      if (closed != null) settled.add(closed);
+      final hit = levelHitBy(t, high: p, low: p);
+      if (hit != null) {
+        final closed = await autoClose(t.id, hit, price: p);
+        if (closed != null) settled.add(closed);
+        continue;
+      }
+      // The window has closed and no level was reached. ASK, do not act:
+      // the model has no opinion past this point, and the decision is the
+      // person's. The question carries what the model says NOW, so it is
+      // made with the same information the app has.
+      if (!limitOn) continue;
+      if (t.needsLimitQuestion(now)) {
+        await askAtLimit(t.id, price: p, client: client);
+      } else if (t.graceExpiredAt(now)) {
+        // Asked, and no answer came. The default is to close: an entry
+        // sitting unanswered past the model's window is the exact case
+        // that produced the losses this exists to prevent.
+        final closed = await autoClose(t.id, 'time_limit', price: p);
+        if (closed != null) settled.add(closed);
+      }
     }
     return (settled: settled, extremesMoved: moved);
   }
@@ -622,18 +697,69 @@ class Trades extends ChangeNotifier {
     final limitOn = await Settings.instance.timeLimit();
     final now = DateTime.now();
     for (final e in ranges) {
-      var hit = levelHitBy(e.key,
+      final hit = levelHitBy(e.key,
           high: (e.value['high'] as num?)?.toDouble(),
           low: (e.value['low'] as num?)?.toDouble());
       final last = (e.value['last'] as num?)?.toDouble();
-      if (hit == null && limitOn && e.key.expiredAt(now) && last != null) {
-        hit = 'time_limit';
+      if (hit != null) {
+        final closed = await autoClose(e.key.id, hit, price: last);
+        if (closed != null) settled.add(closed);
+        continue;
       }
-      if (hit == null) continue;
-      final closed = await autoClose(e.key.id, hit, price: last);
-      if (closed != null) settled.add(closed);
+      if (!limitOn || last == null) continue;
+      if (e.key.needsLimitQuestion(now)) {
+        await askAtLimit(e.key.id, price: last, client: client);
+      } else if (e.key.graceExpiredAt(now)) {
+        final closed = await autoClose(e.key.id, 'time_limit', price: last);
+        if (closed != null) settled.add(closed);
+      }
     }
     return settled;
+  }
+
+  /// Send "keep or close?" for an entry whose window has closed. Once.
+  ///
+  /// The recommendation in the message is not invented: it is the model's
+  /// CURRENT call on that coin and timeframe, read from the server. A call
+  /// on the same side says keeping is consistent with the model; the
+  /// opposite side says closing is; FLAT says the model has no view.
+  Future<void> askAtLimit(String id,
+      {required double price, ApiClient? client}) async {
+    final all = List<TradeEntry>.from(await load());
+    final i = all.indexWhere((t) => t.id == id);
+    if (i < 0 || !all[i].isOpen || all[i].limitAskedAt != null) return;
+    final t = all[i];
+    all[i] = t._copy(limitAskedAt: DateTime.now());
+    await _save(all);
+
+    String? call;
+    if (client != null && t.interval != null) {
+      try {
+        call = (await client.signals()).callFor(t.symbol, t.interval!);
+      } catch (_) {
+        // offline: the question still goes out, without the model's view
+      }
+    }
+    unawaited(Notifications.instance.askTimeLimit(
+      entry: t,
+      price: price,
+      currentCall: call,
+    ));
+  }
+
+  /// The answer. `close` closes at `price` -- the live price when the
+  /// caller has one, else the price the question was asked at -- marked
+  /// TIME LIMIT. Keep leaves it open and stops the asking.
+  Future<TradeEntry?> answerLimit(String id,
+      {required bool close, double? price}) async {
+    if (close) return autoClose(id, 'time_limit', price: price);
+    final all = List<TradeEntry>.from(await load());
+    final i = all.indexWhere((t) => t.id == id);
+    if (i < 0 || !all[i].isOpen) return null;
+    all[i] = all[i]._copy(keptPastLimit: true);
+    await _save(all);
+    unawaited(Notifications.instance.dismissTimeLimitQuestion(id));
+    return all[i];
   }
 
   Future<void> close(String id, double price, {String by = ''}) async {

@@ -546,3 +546,27 @@ def test_an_exit_notification_carries_no_target_or_stop():
     assert "Stop loss" not in a.body, a.body
     assert "News that could affect:" in a.body, a.body
     return True
+
+
+def test_a_dashboard_coming_back_to_life_is_not_a_signal():
+    """STALE -> FLAT is the cache being rebuilt, not the market moving. It
+    arrived as a notification on every coin after every deploy."""
+    svc = StubService(action="STALE")
+    e = _engine(svc)
+    svc.action = "FLAT"
+    svc._bar = "2026-08-28T13:59:59.999000+00:00"
+    assert e.refresh() == [], "STALE -> FLAT buzzed"
+    # and FLAT -> FLAT across a rebuild is equally silent
+    svc._bar = "2026-08-28T14:59:59.999000+00:00"
+    assert e.refresh() == []
+    # but STALE -> a real call is exactly what you want to hear
+    svc.action = "BUY"
+    svc._bar = "2026-08-28T15:59:59.999000+00:00"
+    fired = e.refresh()
+    assert len(fired) == 1 and "BUY" in fired[0].title, fired
+    # and a call being withdrawn still buzzes as the exit it is
+    svc.action = "FLAT"
+    svc._bar = "2026-08-28T16:59:59.999000+00:00"
+    fired = e.refresh()
+    assert len(fired) == 1 and "FLAT" in fired[0].title, fired
+    return True

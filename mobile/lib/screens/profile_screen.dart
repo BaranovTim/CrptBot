@@ -168,7 +168,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _settleLive(Map<String, double> live) async {
-    final r = await Trades.instance.checkLive(live);
+    final r = await Trades.instance.checkLive(live, client: widget.client);
     if (!mounted) return;
     if (r.settled.isNotEmpty) {
       await _loadTrades();
@@ -1601,13 +1601,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           _tile(
             icon: Icons.timer_outlined,
-            title: "Close entries at the model's time limit",
+            title: "Ask at the model's time limit",
             subtitle: _timeLimit
                 ? 'On — 2h on 1h, 8h on 4h, 2 days on 1d. An entry that '
-                    'reaches neither level by then is closed at the price '
-                    'it is at, the way the model was measured.'
-                : 'Off — entries stay open until a level is hit, however '
-                    'long that takes. Past the window, that is a coin flip.',
+                    'reaches neither level by then gets a notification: '
+                    'keep it open, or close it now marked TIME LIMIT. It '
+                    'tells you what the model says at that moment.'
+                : 'Off — nothing is asked; entries stay open until a level '
+                    'is hit. Past the window, that is a coin flip.',
             trailing: Switch(
               value: _timeLimit,
               activeThumbColor: Obsidian.primary,

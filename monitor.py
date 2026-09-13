@@ -338,6 +338,7 @@ class Analysis:
     ev_short: float = float("nan")
     action: str = "WAIT"
     reason: str = ""
+    diagnostic: str = ""
     size_pct: float = 0.0
 
     # the barriers BEFORE the short flip, so resolution() does not have to
@@ -475,8 +476,12 @@ def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
         if a.size_pct > 0:
             a.action = f"ENTER {side} NOW"
             a.side = side
-            a.reason = (f"EV {best_ev:+.3f}% after costs — a {a.strength} "
-                        f"signal at this timeframe")
+            # WHAT THE CARD SAYS. For a person, not for the person who wrote
+            # the model: the strength, and what the trade is expected to
+            # make per trade after fees. Everything else is `diagnostic`.
+            a.reason = (f"A {a.strength} signal — expected "
+                        f"{best_ev:+.2f}% per trade after fees.")
+            a.diagnostic = f"EV {best_ev:+.3f}% after costs"
             if side == "SHORT":
                 a.tp_price = entry * (1 - tp_pct / 100.0)
                 a.sl_price = entry * (1 + sl_pct / 100.0)
@@ -504,14 +509,28 @@ def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
         needed = 0.5 + (cfg.ev_threshold_pct + cfg.round_trip_cost_pct) / span
         a.p_needed = float(needed)
         side_word = "up" if side == "LONG" else "down"
-        a.reason = (
+        # The card: one sentence a person can act on. The arithmetic that
+        # justifies it -- the probability this timeframe would need, the
+        # span, why shorter timeframes need more -- was on the card for a
+        # long time and read as noise to everyone but its author. It is
+        # kept, in `diagnostic`, for the terminal and the training screen.
+        lean = "up" if p_side >= 0.5 else "down"
+        if abs(p_side - 0.5) < 0.02:
+            a.reason = ("No entry: the model sees no clear direction here "
+                        "right now.")
+        else:
+            a.reason = (f"No entry: the model leans {lean} "
+                        f"({p_side:.0%}), but not by enough to be worth "
+                        f"the fees at this timeframe.")
+        a.diagnostic = (
             f"p({side_word}) {p_side:.3f}; this timeframe needs {needed:.3f} "
             f"to cover {cfg.round_trip_cost_pct:.2f}% costs across a "
             f"{span:.2f}% barrier span. Shorter timeframes need MORE, not "
             f"less - the same fee is a bigger share of a smaller move")
     else:
-        a.reason = (f"best EV {best_ev:+.3f}% is below the "
-                    f"{cfg.ev_threshold_pct:+.2f}% threshold")
+        a.reason = "No entry: not enough edge to be worth the fees here."
+        a.diagnostic = (f"best EV {best_ev:+.3f}% is below the "
+                        f"{cfg.ev_threshold_pct:+.2f}% threshold")
     return a
 
 

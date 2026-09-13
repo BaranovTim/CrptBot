@@ -104,7 +104,7 @@ class _MarketScreenState extends State<MarketScreen> {
       setState(() => _live = p);
       // Whichever screen is open is the one that has to notice a level
       // being hit; this one sees every listed coin.
-      unawaited(Trades.instance.checkLive(p));
+      unawaited(Trades.instance.checkLive(p, client: widget.client));
       // Cheap: writes a small blob and asks the launcher to redraw. Android
       // coalesces these, and it is the only path that keeps a widget current
       // while the app is open.

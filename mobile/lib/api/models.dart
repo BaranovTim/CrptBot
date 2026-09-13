@@ -1233,6 +1233,16 @@ class LiveSignals {
 
   final List<LiveSignal> signals;
 
+  /// The current call on one pair, or null when the server has none. The
+  /// list only carries pairs with a live non-FLAT call, so absence means
+  /// FLAT (or STALE, or gated) -- "no view", either way.
+  String? callFor(String symbol, String interval) {
+    for (final s in signals) {
+      if (s.symbol == symbol && s.interval == interval) return s.action;
+    }
+    return null;
+  }
+
   /// How many pairs the server actually had a current reading for. Shown so
   /// an empty list reads as "nothing is calling right now" rather than
   /// "something is broken".

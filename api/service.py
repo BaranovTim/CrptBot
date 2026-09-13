@@ -979,7 +979,12 @@ class TradingService:
                     hit = self._dash.get((sym, iv))
                 if hit is None:
                     continue
-                d = hit.value or {}
+                # THE SAME GUARDS `dashboard()` APPLIES. This read the raw
+                # cache, so a call the gate had turned FLAT on the coin's own
+                # dashboard was still listed here as a live SELL -- the list
+                # that exists to say "these are the calls right now" showing
+                # calls that were not.
+                d = _gate_payload(_expire_if_old(hit.value or {}))
                 if d.get("stale"):
                     continue
                 rec = d.get("recommendation") or {}
@@ -1809,7 +1814,13 @@ def _gate_by_verdict(symbol: str, interval: str,
     usable, why = model_usable(symbol, interval)
     if usable:
         return rec
-    return {"action": "FLAT", "tone": "flat", "detail": why,
+    return {"action": "FLAT", "tone": "flat",
+            "detail": f"No calls on {interval}: when tested, this "
+                      "timeframe's model was no better than chance, so it "
+                      "does not make calls here.",
+            # the numbers, for the training screen and for anyone curious;
+            # the card shows `detail`
+            "diagnostic": why,
             "strength": "", "gated": True,
             "window_ends": rec.get("window_ends")}
 
@@ -1855,9 +1866,9 @@ def _expire_if_old(payload: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(payload)
     out["recommendation"] = {
         "action": "STALE", "tone": "flat",
-        "detail": ("This call's window closed at "
-                   f"{end_at.strftime('%H:%M UTC')} and the dashboard has "
-                   "not been rebuilt since. Waiting for the next bar."),
+        "detail": "This call's window has closed. Waiting for the next bar.",
+        "diagnostic": (f"window ended {end_at.strftime('%H:%M UTC')}; "
+                       "the dashboard has not been rebuilt since"),
         "window_ends": ends,
         "strength": "",
     }
@@ -1868,13 +1879,17 @@ def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
     """The big card. Whatever the backend actually decided - never a default BUY."""
     if stale:
         return {"action": "STALE", "tone": "flat",
-                "detail": ("The newest bar is older than its follower. These "
-                           "windows have expired - start the collector.")}
+                "detail": "This call's window has closed. Waiting for the "
+                          "next bar.",
+                "diagnostic": ("the newest bar is older than its follower; "
+                               "these windows have expired - is the "
+                               "collector running?")}
     a = _choose(primary, secondary)
     if a.action.startswith("ENTER"):
         tone = "up" if a.side == "LONG" else "down"
         word = "BUY" if a.side == "LONG" else "SELL"
         return {"action": word, "tone": tone, "detail": a.reason,
+                "diagnostic": getattr(a, "diagnostic", "") or "",
                 "size_pct": _num(a.size_pct),
                 "ev": _num(max(a.ev_long, a.ev_short)),
                 "window_bars": a.bars_left,
@@ -1887,7 +1902,8 @@ def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
                 "p_needed": _num(getattr(a, "p_needed", float("nan"))),
                 "window_ends": a.ends_at.isoformat()}
     return {"action": "FLAT", "tone": "flat",
-            "detail": a.reason or "No window clears the EV threshold after costs.",
+            "detail": a.reason or "No entry right now.",
+            "diagnostic": getattr(a, "diagnostic", "") or "",
             "strength": "",
             "p_needed": _num(getattr(a, "p_needed", float("nan"))),
             "ev": _num(max(a.ev_long, a.ev_short)),

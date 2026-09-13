@@ -440,7 +440,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// list rather than stacked above the news on the pair you are reading
   /// about right now.
   Future<void> _settleLive(Map<String, double> live) async {
-    final r = await Trades.instance.checkLive(live);
+    final r = await Trades.instance.checkLive(live, client: widget.client);
     if (mounted && (r.settled.isNotEmpty || r.extremesMoved)) {
       await _loadPositions();
     }

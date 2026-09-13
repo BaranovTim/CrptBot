@@ -126,14 +126,15 @@ class Settings {
 
   static const _overridesKey = 'alerts.sensitivity.overrides.v1';
 
-  /// Close a logged entry when the model's window closes, at the price then.
+  /// Ask "keep or close?" when the model's window closes on a logged entry.
   ///
-  /// ON BY DEFAULT, because it is what the model was measured on. Every
-  /// model answers "which barrier is touched first WITHIN N bars, else what
-  /// is the sign at N" -- two bars on 1h, 4h and 1d. An entry held past that
-  /// is a symmetric coin flip the model never claimed to predict, and on
-  /// 1d, where a barrier is 4% away, half of all entries end up decided in
-  /// that unmodelled tail. Off, an entry stays open until a barrier is hit.
+  /// ON BY DEFAULT. Every model answers "which barrier is touched first
+  /// WITHIN N bars" -- two bars on 1h, 4h and 1d. An entry held past that is
+  /// a symmetric coin flip the model never claimed to predict, and on 1d,
+  /// where a barrier is 4% away, half of all entries end up decided in that
+  /// unmodelled tail. The first version closed the entry there; this asks
+  /// instead, with the model's current call in the question, and the answer
+  /// is the person's. Off, nothing is asked.
   Future<bool> timeLimit() async {
     try {
       final prefs = await SharedPreferences.getInstance();
