@@ -194,11 +194,25 @@ def test_the_short_horizon_is_genuinely_shorter():
 
 
 def test_day_trading_holds_are_hours_not_days_on_fast_timeframes():
-    """1m/5m/15m should land in the hours — that is what day trading is."""
-    for tf in ("1m", "5m", "15m", "1h"):
+    """15m and 1h should land in the hours — that is what day trading is.
+    1m and 5m are gone as timeframes: at chance on every coin, and needing
+    p > 0.6 to cover fees on a 1% span."""
+    from core import TIMEFRAMES
+
+    assert "1m" not in TIMEFRAMES and "5m" not in TIMEFRAMES
+    for tf in ("15m", "1h"):
         _, _, h2 = barriers_for(tf)
         hours = interval_seconds(tf) * h2 / 3600
         assert 1 <= hours <= 8, f"{tf} holds {hours:.1f}h"
+    return True
+
+
+def test_daily_holds_ten_days_because_two_measured_at_chance():
+    """The window curve: 0.498 at 2 days, 0.508 at 5, 0.519 at 10; a pooled
+    ten-day model scored 0.530 on a held-out year against controls at 0.50.
+    Shortening this would put a model at chance back on the daily card."""
+    k, h1, h2 = barriers_for("1d")
+    assert (k, h1, h2) == (1.0, 5, 10), (k, h1, h2)
     return True
 
 

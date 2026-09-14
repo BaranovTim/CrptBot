@@ -1,0 +1,83 @@
+{
+ "cutoff": "2025-09-13",
+ "results": {
+  "10 days x 1 ATR": {
+   "train": 17836,
+   "holdout": 4863,
+   "auc": 0.5301,
+   "controls": [
+    0.4997,
+    0.4691,
+    0.4654
+   ],
+   "per_coin": {
+    "1000PEPEUSDT": 0.541,
+    "ADAUSDT": 0.537,
+    "ARBUSDT": 0.53,
+    "BNBUSDT": 0.591,
+    "BTCUSDT": 0.495,
+    "DOGEUSDT": 0.547,
+    "ENAUSDT": 0.531,
+    "ETHUSDT": 0.543,
+    "NEARUSDT": 0.535,
+    "SOLUSDT": 0.515,
+    "SUIUSDT": 0.575,
+    "UNIUSDT": 0.521,
+    "XRPUSDT": 0.533,
+    "ZECUSDT": 0.504
+   }
+  },
+  "20 days x 1 ATR": {
+   "train": 17828,
+   "holdout": 4723,
+   "auc": 0.5087,
+   "controls": [
+    0.4737,
+    0.503,
+    0.5155
+   ],
+   "per_coin": {
+    "1000PEPEUSDT": 0.5,
+    "ADAUSDT": 0.444,
+    "ARBUSDT": 0.468,
+    "BNBUSDT": 0.54,
+    "BTCUSDT": 0.491,
+    "DOGEUSDT": 0.464,
+    "ENAUSDT": 0.533,
+    "ETHUSDT": 0.562,
+    "NEARUSDT": 0.553,
+    "SOLUSDT": 0.512,
+    "SUIUSDT": 0.52,
+    "UNIUSDT": 0.534,
+    "XRPUSDT": 0.506,
+    "ZECUSDT": 0.482
+   }
+  },
+  "2 days x 1 ATR": {
+   "train": 17848,
+   "holdout": 4975,
+   "auc": 0.516,
+   "controls": [
+    0.4979,
+    0.4898,
+    0.4821
+   ],
+   "per_coin": {
+    "1000PEPEUSDT": 0.509,
+    "ADAUSDT": 0.562,
+    "ARBUSDT": 0.549,
+    "BNBUSDT": 0.478,
+    "BTCUSDT": 0.47,
+    "DOGEUSDT": 0.554,
+    "ENAUSDT": 0.528,
+    "ETHUSDT": 0.511,
+    "NEARUSDT": 0.486,
+    "SOLUSDT": 0.468,
+    "SUIUSDT": 0.515,
+    "UNIUSDT": 0.546,
+    "XRPUSDT": 0.539,
+    "ZECUSDT": 0.542
+   }
+  }
+ }
+}

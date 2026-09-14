@@ -33,7 +33,13 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 # The intervals the app offers, fastest first.
-TIMEFRAMES: List[str] = ["1m", "5m", "15m", "1h", "4h", "1d"]
+# THE TRADING TIMEFRAMES. 1m and 5m were removed as timeframes the app
+# offers: their fits sat at chance on every coin and the fee arithmetic
+# needed p > 0.6 to break even on a 1% span. 1m BARS are still collected --
+# `price_range` reads them to see whether a level was touched, and the
+# collector's health check watches them -- so the lookup tables below keep
+# their 1m and 5m rows. Only this list decides what is offered and trained.
+TIMEFRAMES: List[str] = ["15m", "1h", "4h", "1d"]
 
 # Binance notation -> pandas offset alias.
 _PANDAS_RULE: Dict[str, str] = {
@@ -96,12 +102,16 @@ HISTORY_START: Dict[str, str] = {
 # day trading actually is. 1h/4h/1d keep +1/-1: their spans already clear
 # costs comfortably, and 1h's frozen models were fitted that way.
 BARRIERS: Dict[str, Tuple[float, int]] = {
-    "1m": (11.0, 240),      # span ~1.01%, hold 4h
-    "5m": (4.0, 32),        # span ~1.11%, hold 2h40
     "15m": (2.0, 8),        # span ~1.11%, hold 2h
     "1h": (1.0, 2),         # span ~1.28%, hold 2h
     "4h": (1.0, 2),         # span ~3.06%, hold 8h
-    "1d": (1.0, 2),         # span ~8.27%, hold 2d
+    # TEN DAYS, NOT TWO. Measured, not chosen: with a 2-day window every
+    # daily model on every coin sat at its shuffled control (0 of 15). The
+    # window curve rose monotonically -- 0.498 at 2 days, 0.508 at 5,
+    # 0.519 at 10 -- and a pooled 10-day model scored 0.530 on a held-out
+    # year against controls at 0.50. Whatever the daily features know, it
+    # is slow. See research/pooled_daily.py and research/pooled_holdout.py.
+    "1d": (1.0, 10),        # span ~8.27%, hold 10d
 }
 
 

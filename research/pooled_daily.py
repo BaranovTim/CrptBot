@@ -56,7 +56,7 @@ from train import compute_frames                        # noqa: E402
 
 INTERVAL = "1d"
 CACHE = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("research/results/cache")
-OUT = Path("research/results/pooled_daily.json")
+OUT = Path(sys.argv[1]).parent / "pooled_daily_curve.json" if len(sys.argv) > 1 else Path("research/results/pooled_daily_curve.json")
 EPOCH = pd.Timestamp("2015-01-01", tz="UTC")
 
 
@@ -65,10 +65,12 @@ def symbols():
                    for f in Path("output").glob("judge_*_1d_h1.joblib")})
 
 
-def build_one(sym: str, hold: int, k: float) -> Dataset | None:
-    """The per-coin dataset, exactly as train.py builds it. Cached: the
-    feature build fetches derivatives data and is the slow part."""
-    p = CACHE / f"{sym}_{INTERVAL}_h{hold}.pkl"
+def frames_for(sym: str):
+    """The detector features for one coin, computed once and cached. The
+    features do not depend on the label, so every barrier geometry and
+    every window is built from the same cached frames -- this is the slow,
+    network-bound step, and it now runs once per coin, ever."""
+    p = CACHE / f"{sym}_{INTERVAL}_frames.pkl"
     if p.exists():
         return pickle.load(open(p, "rb"))
     bars = BarStore(sym, INTERVAL).load()
@@ -79,9 +81,23 @@ def build_one(sym: str, hold: int, k: float) -> Dataset | None:
     if frames is None:
         print(f"  {sym}: skipped ({why})", flush=True)
         return None
+    CACHE.mkdir(parents=True, exist_ok=True)
+    pickle.dump((bars, frames, warm), open(p, "wb"))
+    return bars, frames, warm
+
+
+def build_one(sym: str, hold: int, k: float) -> Dataset | None:
+    """The per-coin dataset, exactly as train.py builds it, for any
+    (window, barrier) from the cached frames."""
+    p = CACHE / f"{sym}_{INTERVAL}_h{hold}_k{k:g}.pkl"
+    if p.exists():
+        return pickle.load(open(p, "rb"))
+    got = frames_for(sym)
+    if got is None:
+        return None
+    bars, frames, warm = got
     judge = JudgeAgent(Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k))
     ds = judge.build(bars, warmup=warm, **frames)
-    CACHE.mkdir(parents=True, exist_ok=True)
     pickle.dump(ds, open(p, "wb"))
     return ds
 
@@ -132,25 +148,29 @@ def per_coin_auc(fit, ds: Dataset, coin: pd.Series) -> dict:
 
 
 def main() -> int:
-    k, h1, h2 = barriers_for(INTERVAL)
+    k0, h1, h2 = barriers_for(INTERVAL)
+    # geometries: "hold:k" on the command line, else the shipped h1/h2
+    geoms = [(int(a.split(":")[0]), float(a.split(":")[1]))
+             for a in sys.argv[2:]] or [(h1, k0), (h2, k0)]
     syms = symbols()
-    print(f"pooling {len(syms)} coins on {INTERVAL}, barriers +/-{k} ATR, "
-          f"holds {h1}/{h2}", flush=True)
+    print(f"pooling {len(syms)} coins on {INTERVAL}; geometries "
+          f"{', '.join(f'{h} bars x {k:g} ATR' for h, k in geoms)}", flush=True)
     results = {"interval": INTERVAL, "coins": syms, "horizons": {},
                "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
-    for slot, hold in ((1, h1), (2, h2)):
+    for hold, k in geoms:
+        slot = f"{hold}bars_x{k:g}atr"
         t0 = time.time()
         parts = {}
         for sym in syms:
             ds = build_one(sym, hold, k)
             if ds is not None and len(ds) > 200:
                 parts[sym] = ds
-                print(f"  h{slot} {sym:<14} {len(ds):>6,} samples", flush=True)
+                print(f"  {slot} {sym:<14} {len(ds):>6,} samples", flush=True)
         dropped = scale_bound_columns(parts)
         pooled, coin = pool(parts)
         cols = [c for c in pooled.X.columns if c not in dropped]
-        print(f"  h{slot}: pooled {len(pooled):,} samples, {len(cols)} columns "
+        print(f"  {slot}: pooled {len(pooled):,} samples, {len(cols)} columns "
               f"({len(dropped)} scale-bound dropped: {dropped[:6]}"
               f"{'...' if len(dropped) > 6 else ''})", flush=True)
 
@@ -164,7 +184,7 @@ def main() -> int:
         ok = beats_shuffle(ev.auc, sh, fit.auc_spread)
         by_coin = per_coin_auc(fit, pooled, coin)
 
-        print(f"  h{slot} ({hold} bar{'s' if hold > 1 else ''}): "
+        print(f"  {slot} ({hold} bar{'s' if hold > 1 else ''}, +/-{k:g} ATR): "
               f"AUC {ev.auc:.3f}  folds [{' '.join(f'{a:.3f}' for a in fit.fold_auc)}]  "
               f"spread {fit.auc_spread:.3f}  shuffle {sh:.3f}  "
               f"-> {'CLEARS THE BAR' if ok else 'does not clear the bar'}  "
@@ -174,8 +194,8 @@ def main() -> int:
         for s, a in sorted(by_coin.items(), key=lambda kv: -kv[1]):
             print(f"       {s:<14} {a:.3f}", flush=True)
 
-        results["horizons"][f"h{slot}"] = {
-            "hold": hold, "samples": int(len(pooled)), "columns": len(cols),
+        results["horizons"][slot] = {
+            "hold": hold, "k": k, "samples": int(len(pooled)), "columns": len(cols),
             "dropped_scale_bound": dropped,
             "auc": round(float(ev.auc), 4), "folds": [round(a, 4) for a in fit.fold_auc],
             "spread": round(float(fit.auc_spread), 4), "shuffle": round(float(sh), 4),

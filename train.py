@@ -229,6 +229,8 @@ def main(argv=None) -> int:
                    help="comma separated, e.g. 15m,4h")
     p.add_argument("--no-seed", action="store_true",
                    help="do not download history; use the live store as-is")
+    p.add_argument("--allow-per-coin-daily", action="store_true",
+                   help="fit 1d per coin anyway, overwriting the pooled model")
     p.add_argument("--dry-run", action="store_true",
                    help="fit and report, but write no model files")
     p.add_argument("--no-tape", action="store_true",
@@ -268,6 +270,18 @@ def main(argv=None) -> int:
               f"({sum(f.shape[1] for f in frames.values())} detector columns)",
               flush=True)
 
+        if interval == "1d" and not a.dry_run and not a.allow_per_coin_daily:
+            # The daily models are POOLED -- one fit across every coin,
+            # installed under each coin's name by train_daily_pooled.py. A
+            # per-coin daily fit here would overwrite that with a model that
+            # sits at chance (0 of 15 coins cleared the bar per coin). A dry
+            # run is still allowed: it evaluates and writes nothing.
+            why = ("1d is trained pooled: run train_daily_pooled.py "
+                   "(or pass --allow-per-coin-daily to override)")
+            print(f"  SKIPPED - {why}", flush=True)
+            for h in (1, 2):
+                results.append(Outcome(a.symbol, interval, h, ok=False, note=why))
+            continue
         k, hold1, hold2 = barriers_for(interval)
         print(f"  barriers +/-{k:g} ATR   holds {hold1}/{hold2} bars", flush=True)
         for slot, hold in ((1, hold1), (2, hold2)):

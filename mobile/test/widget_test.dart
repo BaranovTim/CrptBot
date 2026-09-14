@@ -1827,14 +1827,14 @@ void main() {
   // the model was not trained on.
   group("the model's time limit", () {
     test('the horizon per timeframe matches core/timeframes.py BARRIERS', () {
-      expect(TradeEntry.horizonOf('1m'), const Duration(hours: 4));
-      expect(TradeEntry.horizonOf('5m'), const Duration(hours: 2, minutes: 40));
       expect(TradeEntry.horizonOf('15m'), const Duration(hours: 2));
       expect(TradeEntry.horizonOf('1h'), const Duration(hours: 2));
       expect(TradeEntry.horizonOf('4h'), const Duration(hours: 8));
-      expect(TradeEntry.horizonOf('1d'), const Duration(hours: 48));
+      expect(TradeEntry.horizonOf('1d'), const Duration(days: 10));
+      // no longer trading timeframes: an old entry on them is never expired
+      expect(TradeEntry.horizonOf('1m'), isNull);
+      expect(TradeEntry.horizonOf('5m'), isNull);
       expect(TradeEntry.horizonOf(null), isNull);
-      expect(TradeEntry.horizonOf('3h'), isNull);
     });
 
     TradeEntry aged(String iv, Duration age) => TradeEntry(
@@ -1845,7 +1845,7 @@ void main() {
     test('an expired entry is ASKED about, not closed', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      await Trades.instance.add(aged('1d', const Duration(hours: 49)));
+      await Trades.instance.add(aged('1d', const Duration(hours: 241)));
       final r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
       expect(r.settled, isEmpty, reason: 'the window closing must not close it');
       final t = (await Trades.instance.load()).single;
@@ -1860,7 +1860,7 @@ void main() {
     test('"close now" closes at the price given, marked TIME LIMIT', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      final e = aged('1d', const Duration(hours: 49));
+      final e = aged('1d', const Duration(hours: 241));
       await Trades.instance.add(e);
       await Trades.instance.checkLive({'BTCUSDT': 103.0});
       final closed = await Trades.instance.answerLimit(e.id, close: true, price: 103.5);
@@ -1873,7 +1873,7 @@ void main() {
     test('"keep open" leaves it open and it is never asked again', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      final e = aged('1d', const Duration(hours: 49));
+      final e = aged('1d', const Duration(hours: 241));
       await Trades.instance.add(e);
       await Trades.instance.checkLive({'BTCUSDT': 103.0});
       final kept = await Trades.instance.answerLimit(e.id, close: false);
@@ -1889,7 +1889,7 @@ void main() {
         () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      await Trades.instance.add(aged('1d', const Duration(hours: 49)));
+      await Trades.instance.add(aged('1d', const Duration(hours: 241)));
       final r = await Trades.instance.checkLive({'BTCUSDT': 131.0});
       expect(r.settled.single.closedBy, 'take_profit');
       expect(r.settled.single.closePrice, 130.0);
@@ -1925,7 +1925,7 @@ void main() {
       // asked 50 minutes ago on 1d: inside its hour, still open
       Trades.instance.resetForTest();
       SharedPreferences.setMockInitialValues({});
-      e = aged('1d', const Duration(hours: 49)).withLimitState(
+      e = aged('1d', const Duration(hours: 241)).withLimitState(
           asked: DateTime.now().subtract(const Duration(minutes: 50)));
       await Trades.instance.add(e);
       expect((await Trades.instance.checkLive({'BTCUSDT': 103.0})).settled,
@@ -1947,7 +1947,7 @@ void main() {
     test('inside the window nothing is asked', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      await Trades.instance.add(aged('1d', const Duration(hours: 10)));
+      await Trades.instance.add(aged('1d', const Duration(hours: 100)));
       await Trades.instance.checkLive({'BTCUSDT': 103.0});
       expect((await Trades.instance.load()).single.limitAskedAt, isNull);
     });
@@ -1964,7 +1964,7 @@ void main() {
     });
 
     test('the question and its answers survive a write and a read', () {
-      final t = TradeEntry.fromJson(aged('1d', const Duration(hours: 49))
+      final t = TradeEntry.fromJson(aged('1d', const Duration(hours: 241))
           .withLimitState(asked: DateTime(2026, 9, 13), kept: true)
           .toJson());
       expect(t.limitAskedAt, DateTime(2026, 9, 13));
@@ -1999,10 +1999,10 @@ void main() {
           id: 'c', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 1,
           openedAt: now.subtract(age), interval: '1d');
       expect(JournalCard.timeLeftText(at(const Duration(hours: 6)), now),
-          '1d 18h left');
-      expect(JournalCard.timeLeftText(at(const Duration(hours: 47)), now),
+          '9d 18h left');
+      expect(JournalCard.timeLeftText(at(const Duration(hours: 239)), now),
           '1h 0m left');
-      expect(JournalCard.timeLeftText(at(const Duration(hours: 50)), now),
+      expect(JournalCard.timeLeftText(at(const Duration(hours: 241)), now),
           'window closed');
     });
   });

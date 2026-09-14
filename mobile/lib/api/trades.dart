@@ -167,7 +167,7 @@ class TradeEntry {
         '4h' => const Duration(minutes: 10),
         '1h' => const Duration(minutes: 5),
         '15m' => const Duration(minutes: 2),
-        _ => const Duration(minutes: 1),
+        _ => const Duration(minutes: 2),
       };
 
   /// Asked, not answered, and the grace has run out: close it.
@@ -185,12 +185,12 @@ class TradeEntry {
   /// `core/timeframes.py` -- the h2 hold, in bars, times the bar length.
   /// Null for an entry logged before timeframes were recorded on entries.
   static Duration? horizonOf(String? interval) => switch (interval) {
-        '1m' => const Duration(hours: 4),            // 240 bars
-        '5m' => const Duration(hours: 2, minutes: 40), // 32 bars
         '15m' => const Duration(hours: 2),            // 8 bars
         '1h' => const Duration(hours: 2),             // 2 bars
         '4h' => const Duration(hours: 8),             // 2 bars
-        '1d' => const Duration(hours: 48),            // 2 bars
+        // TEN days. The daily model is a pooled ten-day fit; two days sat
+        // at chance on every coin. See core/timeframes.py BARRIERS.
+        '1d' => const Duration(days: 10),             // 10 bars
         _ => null,
       };
 

@@ -1,0 +1,125 @@
+{
+ "interval": "1d",
+ "coins": [
+  "1000PEPEUSDT",
+  "ADAUSDT",
+  "ARBUSDT",
+  "BNBUSDT",
+  "BTCUSDT",
+  "DOGEUSDT",
+  "ENAUSDT",
+  "ETHUSDT",
+  "HYPEUSDT",
+  "NEARUSDT",
+  "SOLUSDT",
+  "SUIUSDT",
+  "UNIUSDT",
+  "XRPUSDT",
+  "ZECUSDT"
+ ],
+ "horizons": {
+  "5bars_x1atr": {
+   "hold": 5,
+   "k": 1.0,
+   "samples": 22804,
+   "columns": 88,
+   "dropped_scale_bound": [],
+   "auc": 0.5077,
+   "folds": [
+    0.5148,
+    0.5069,
+    0.535,
+    0.5169,
+    0.53
+   ],
+   "spread": 0.0103,
+   "shuffle": 0.4974,
+   "beats_shuffle": false,
+   "per_coin_auc": {
+    "1000PEPEUSDT": 0.5005,
+    "ADAUSDT": 0.5023,
+    "ARBUSDT": 0.5193,
+    "BNBUSDT": 0.5198,
+    "BTCUSDT": 0.5039,
+    "DOGEUSDT": 0.4919,
+    "ENAUSDT": 0.5214,
+    "ETHUSDT": 0.4979,
+    "NEARUSDT": 0.5179,
+    "SOLUSDT": 0.4994,
+    "SUIUSDT": 0.5384,
+    "UNIUSDT": 0.5055,
+    "XRPUSDT": 0.5073,
+    "ZECUSDT": 0.5229
+   }
+  },
+  "10bars_x1atr": {
+   "hold": 10,
+   "k": 1.0,
+   "samples": 22734,
+   "columns": 88,
+   "dropped_scale_bound": [],
+   "auc": 0.5188,
+   "folds": [
+    0.5466,
+    0.5215,
+    0.5183,
+    0.5339,
+    0.5279
+   ],
+   "spread": 0.01,
+   "shuffle": 0.4944,
+   "beats_shuffle": true,
+   "per_coin_auc": {
+    "1000PEPEUSDT": 0.5231,
+    "ADAUSDT": 0.5235,
+    "ARBUSDT": 0.5369,
+    "BNBUSDT": 0.5529,
+    "BTCUSDT": 0.5021,
+    "DOGEUSDT": 0.5137,
+    "ENAUSDT": 0.4976,
+    "ETHUSDT": 0.5326,
+    "NEARUSDT": 0.5126,
+    "SOLUSDT": 0.4967,
+    "SUIUSDT": 0.5346,
+    "UNIUSDT": 0.5095,
+    "XRPUSDT": 0.5314,
+    "ZECUSDT": 0.5277
+   }
+  },
+  "5bars_x2atr": {
+   "hold": 5,
+   "k": 2.0,
+   "samples": 22804,
+   "columns": 88,
+   "dropped_scale_bound": [],
+   "auc": 0.4946,
+   "folds": [
+    0.5552,
+    0.4953,
+    0.5059,
+    0.5419,
+    0.5074
+   ],
+   "spread": 0.0231,
+   "shuffle": 0.5009,
+   "beats_shuffle": false,
+   "per_coin_auc": {
+    "1000PEPEUSDT": 0.4801,
+    "ADAUSDT": 0.4682,
+    "ARBUSDT": 0.5348,
+    "BNBUSDT": 0.5205,
+    "BTCUSDT": 0.4883,
+    "DOGEUSDT": 0.4633,
+    "ENAUSDT": 0.5823,
+    "ETHUSDT": 0.4797,
+    "NEARUSDT": 0.5197,
+    "SOLUSDT": 0.4824,
+    "SUIUSDT": 0.4482,
+    "UNIUSDT": 0.5015,
+    "XRPUSDT": 0.5004,
+    "ZECUSDT": 0.5431
+   }
+  }
+ },
+ "ran_at": "2026-09-14T07:50:38Z"
+}

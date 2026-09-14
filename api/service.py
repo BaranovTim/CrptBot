@@ -746,7 +746,7 @@ class TradingService:
 
         def run() -> None:
             # dearest last: 1m is ~100s a pair, 1d is ~22s
-            order = ["1d", "4h", "1h", "15m", "5m", "1m"]
+            order = ["1d", "4h", "1h", "15m"]
             t_start = time.time()
             done = 0
             for tf in order:

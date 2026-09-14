@@ -33,7 +33,7 @@ class AlertSettingsSheet extends StatefulWidget {
 }
 
 class _AlertSettingsSheetState extends State<AlertSettingsSheet> {
-  static const _all = ['1m', '5m', '15m', '1h', '4h', '1d'];
+  static const _all = ['15m', '1h', '4h', '1d'];
 
   /// (alert kind, label). `spike` deliberately rides with `signal`: both are
   /// the model telling you something moved, and splitting them would give two

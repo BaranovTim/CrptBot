@@ -194,7 +194,7 @@ class Settings {
     try {
       final prefs = await SharedPreferences.getInstance();
       final v = prefs.getString(_intervalKey);
-      return const {'1m', '5m', '15m', '1h', '4h', '1d'}.contains(v)
+      return const {'15m', '1h', '4h', '1d'}.contains(v)
           ? v!
           : '1h';
     } catch (_) {

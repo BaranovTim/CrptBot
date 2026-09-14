@@ -842,7 +842,9 @@ def test_the_warm_order_puts_the_cheap_timeframes_first():
     order = re.search(r'order = \[([^\]]+)\]', src)
     assert order, "warm() no longer declares an explicit order"
     got = [x.strip().strip('"\'') for x in order.group(1).split(",")]
-    assert got == ["1d", "4h", "1h", "15m", "5m", "1m"], got
+    # 1m and 5m are no longer trading timeframes; dearest of what remains
+    # is still last
+    assert got == ["1d", "4h", "1h", "15m"], got
     # and the symbol loop must be INSIDE the interval loop
     assert src.index("for tf in order") < src.index("for sym in syms"), \
         "warming is symbol-major again; the last pair stays cold"
