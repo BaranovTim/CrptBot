@@ -80,6 +80,7 @@ def build_dataset(
     funding: Optional[pd.Series] = None,
     warmup: int = 0,
     labels: Optional[LabelResult] = None,
+    quant: Optional[pd.DataFrame] = None,
 ) -> Dataset:
     """Join detector outputs to labels. Every block is optional."""
     if not isinstance(bars.index, pd.DatetimeIndex):
@@ -94,7 +95,8 @@ def build_dataset(
     frames.append(regime)
 
     for name, frame in (("agent1", agent1), ("agent2", agent2),
-                        ("agent3", agent3), ("agent4", agent4)):
+                        ("agent3", agent3), ("agent4", agent4),
+                        ("quant", quant)):
         if frame is None or frame.empty:
             blocks[name] = []
             continue

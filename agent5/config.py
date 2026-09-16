@@ -116,4 +116,4 @@ DEFAULT_CONFIG = Agent5Config()
 # the ablation order from the plan: start from the regime floor, then add
 # blocks from cheapest to most expensive. each step answers "does this block
 # add anything on top of everything before it?"
-ABLATION_ORDER = ("regime", "agent2", "agent1", "agent4", "agent3")
+ABLATION_ORDER = ("regime", "quant", "agent2", "agent1", "agent4", "agent3")
