@@ -8,6 +8,7 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tradingbot_app/theme/liquid_obsidian.dart';
 import 'package:tradingbot_app/widgets/positions_panel.dart';
+import 'package:tradingbot_app/widgets/smart_money_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
 import 'dart:convert';
@@ -2048,6 +2049,122 @@ void main() {
       );
       expect(out.map((a) => a.symbol), ['BTCUSDT'],
           reason: 'BTC allowed by its override; ETH held to the general');
+    });
+  });
+
+  group('smart money', () {
+    final payload = {
+      'available': true,
+      'tracked': 25,
+      'selected_at': '2026-09-16T08:00:00+00:00',
+      'polled_at': '2026-09-16T12:00:00+00:00',
+      'note': 'information, not a call',
+      'consensus': {
+        'symbol': 'BTCUSDT', 'tracked': 25, 'long': 7, 'short': 2,
+        'long_notional': 12300000.0, 'short_notional': 1100000.0,
+        'holders': [
+          {'address': '0xe867fbdad3291530e41530301ecb77693850c78e',
+           'short': '0xe867…c78e', 'name': '', 'side': 'LONG',
+           'notional': 2100000.0, 'entry': 63120.0, 'leverage': 10.0,
+           'upnl': 1500.0, 'win_rate': 0.69, 'pnl_30d': 22100000.0},
+          {'address': '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+           'short': '0xbbbb…bbbb', 'name': 'maomao', 'side': 'SHORT',
+           'notional': 840000.0, 'entry': 63500.0, 'leverage': 3.0,
+           'upnl': -200.0, 'win_rate': 0.62, 'pnl_30d': 1000000.0},
+        ],
+      },
+      'events': [
+        {'id': 'e1', 'kind': 'opened',
+         'address': '0xe867fbdad3291530e41530301ecb77693850c78e',
+         'coin': 'BTC', 'symbol': 'BTCUSDT', 'side': 'LONG',
+         'size': 33.0, 'notional': 2100000.0, 'entry': 63120.0,
+         'leverage': 10.0, 'at': '2026-09-16T11:40:00+00:00',
+         'price_at': 63130.0,
+         'trader': {'win_rate': 0.69, 'pnl_30d': 22100000.0,
+                    'closed_trades': 873, 'display_name': ''}},
+      ],
+      'traders': [
+        {'address': '0xe867fbdad3291530e41530301ecb77693850c78e',
+         'short': '0xe867…c78e', 'name': '', 'score': 3.1,
+         'win_rate': 0.69, 'closed_trades': 873, 'profit_factor': 2.4,
+         'pnl_30d': 22100000.0, 'roi_30d': 0.35, 'account_value': 85100000.0,
+         'weeks_positive': 4, 'weeks_covered': 4, 'coins': ['BTCUSDT'],
+         'open': ['BTC']},
+      ],
+    };
+
+    test('the payload parses, with the trader named by address when unnamed', () {
+      final sm = SmartMoney.fromJson(payload);
+      expect(sm.available, isTrue);
+      expect(sm.tracked, 25);
+      expect(sm.consensus!.holding, 9);
+      expect(sm.consensus!.holders.first.who, '0xe867…c78e');
+      expect(sm.consensus!.holders[1].who, 'maomao');
+      expect(sm.events.single.who, '0xe867…c78e');
+      expect(sm.events.single.winRate, closeTo(0.69, 1e-9));
+      expect(sm.events.single.priceAt, 63130.0);
+      expect(sm.traders.single.closedTrades, 873);
+    });
+
+    test('money reads the way the notification writes it', () {
+      expect(usdCompact(2100000), r'$2.1M');
+      expect(usdCompact(840000), r'$840k');
+      expect(usdCompact(12500), r'$13k');
+      expect(usdCompact(950), r'$950');
+      final now = DateTime.utc(2026, 9, 16, 12);
+      expect(agoText(now.subtract(const Duration(minutes: 20)), now: now), '20m ago');
+      expect(agoText(now.subtract(const Duration(hours: 5)), now: now), '5h ago');
+      expect(agoText(now.subtract(const Duration(days: 3)), now: now), '3d ago');
+    });
+
+    testWidgets('the panel shows the split, the holders, the moves and the label',
+        (t) async {
+      final sm = SmartMoney.fromJson(payload);
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SmartMoneyPanel(data: sm, now: DateTime.utc(2026, 9, 16, 12)),
+          ),
+        ),
+      ));
+      await t.pumpAndSettle();
+      expect(find.text('SMART MONEY'), findsOneWidget);
+      expect(find.text('25 followed'), findsOneWidget);
+      expect(find.text(r'9 of 25 hold it · 7 long $12.3M · 2 short $1.1M'),
+          findsOneWidget);
+      expect(find.text('0xe867…c78e'), findsOneWidget);
+      expect(find.text('maomao'), findsOneWidget);
+      expect(find.text('69% win rate'), findsOneWidget);
+      expect(find.textContaining('opened long'), findsOneWidget);
+      expect(find.text('20m ago'), findsOneWidget);
+      expect(find.textContaining('not a call'), findsOneWidget);
+    });
+
+    testWidgets('nothing followed draws nothing', (t) async {
+      final sm = SmartMoney.fromJson({'available': true, 'tracked': 0});
+      await t.pumpWidget(MaterialApp(home: SmartMoneyPanel(data: sm)));
+      expect(find.text('SMART MONEY'), findsNothing);
+    });
+
+    test('the kind can be silenced from the phone like any other', () {
+      Alert smart(String sym) => Alert.fromJson({
+            'id': 's-$sym', 'kind': 'smart', 'symbol': sym, 'interval': '',
+            'title': '$sym: 0xe867…c78e opened LONG', 'body': '',
+            'severity': 'medium', 'at': DateTime.now().toIso8601String(),
+            'detected_at': DateTime.now().toIso8601String(),
+            'extra': {'event': 'opened', 'side': 'LONG'},
+          });
+      final kept = selectDeliverable([smart('BTCUSDT'), smart('ETHUSDT')],
+          sensitivity: 'strong',
+          isMuted: (s, _) => s == 'ETHUSDT',
+          isKindMuted: (_) => false);
+      expect(kept.map((a) => a.symbol), ['BTCUSDT'],
+          reason: 'a coin mute applies; no strength gate applies');
+      final none = selectDeliverable([smart('BTCUSDT')],
+          sensitivity: 'strong',
+          isMuted: (_, _) => false,
+          isKindMuted: (k) => k == 'smart');
+      expect(none, isEmpty);
     });
   });
 }

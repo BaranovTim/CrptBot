@@ -121,8 +121,16 @@ def get_engine(svc=None):
     if _ENGINE is None:
         from api.alerts import AlertEngine
 
-        _ENGINE = AlertEngine(svc if svc is not None else get_service())
+        service = svc if svc is not None else get_service()
+        _ENGINE = AlertEngine(service)
         _ENGINE.start()
+        # the followed-traders tracker runs beside the engine, on its own
+        # thread, so its events exist before anyone asks. SMARTMONEY=0 in
+        # the environment keeps it off on a box without the memory.
+        try:
+            service.smart_tracker()
+        except Exception as e:                       # pragma: no cover
+            log.warning("smartmoney tracker not started: %s", e)
     return _ENGINE
 
 # Shared secret. Empty means loopback-only operation; `serve()` refuses any
@@ -332,6 +340,7 @@ class Handler(BaseHTTPRequestHandler):
                             "trades": False,
                             "endpoints": ["/api/coins", "/api/dashboard",
                                           "/api/chart", "/api/whales",
+                                          "/api/smartmoney",
                                           "/api/news", "/api/training",
                                           "/api/alerts", "/api/calendar",
                                           "/api/timeframes",
@@ -541,6 +550,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(svc.chart(symbol=opt("symbol"),
                                      interval=opt("interval"),
                                      n=arg("n", 96)))
+            elif route == "/api/smartmoney":
+                self._send(svc.smart_money(symbol=opt("symbol"),
+                                           limit=arg("limit", 20)))
             elif route == "/api/whales":
                 sym = opt("symbol")
                 if (opt("market") or "crypto") == "stocks" and sym:

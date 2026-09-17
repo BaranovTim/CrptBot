@@ -218,6 +218,12 @@ class Notifications {
     description: 'Warnings before scheduled market events such as FOMC',
     importance: Importance.high,
   );
+  static const _channelSmart = AndroidNotificationChannel(
+    'smart', 'Smart money',
+    description:
+        'When a followed top trader opens, closes or flips a position',
+    importance: Importance.high,
+  );
 
   /// Taps, as they happen. The shell listens and navigates. A broadcast
   /// stream because the shell can be rebuilt (sign-out, sign-in) and each
@@ -295,7 +301,9 @@ class Notifications {
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
       if (android != null) {
-        for (final c in [_channelSignals, _channelMarket, _channelCalendar]) {
+        for (final c in [
+          _channelSignals, _channelMarket, _channelCalendar, _channelSmart,
+        ]) {
           await android.createNotificationChannel(c);
         }
         // ASK THE OS WHAT IS TRUE, not what the request returned.
@@ -330,6 +338,7 @@ class Notifications {
     final channel = switch (kind) {
       'signal' => _channelSignals,
       'calendar' => _channelCalendar,
+      'smart' => _channelSmart,
       _ => _channelMarket,
     };
     return NotificationDetails(
@@ -590,6 +599,14 @@ class Notifications {
         'title': 'News · crypto',
         'body': 'SEC closes its inquiry without action. '
             'Novelty 0.81, magnitude 0.64.',
+      },
+      {
+        'kind': 'smart',
+        'severity': 'medium',
+        'title': '$symbol: 0xe867…c78e opened LONG',
+        'body': '10× · \$2.1M @ 63,120.00\n'
+            '69% win rate · +\$22.1M / 30d · 873 trades\n'
+            '7 of 25 followed long, 2 short',
       },
       {
         'kind': 'calendar',

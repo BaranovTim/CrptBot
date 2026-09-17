@@ -1249,3 +1249,134 @@ class LiveSignals {
   final int watched;
   final List<String> intervals;
 }
+
+/// The followed traders: who holds this coin, and what they just did.
+///
+/// INFORMATION, NOT A CALL. The server says so in `note` and the panel
+/// repeats it. A leaderboard selects on past profit; whether following pays
+/// is being measured, and until it is, nothing here is a recommendation.
+class SmartMoney {
+  SmartMoney.fromJson(Map<String, dynamic> j)
+      : available = j['available'] as bool? ?? false,
+        tracked = (j['tracked'] as num?)?.toInt() ?? 0,
+        note = j['note'] as String? ?? '',
+        polledAt = _t(j['polled_at']),
+        consensus = j['consensus'] == null
+            ? null
+            : SmartConsensus.fromJson(j['consensus'] as Map<String, dynamic>),
+        events = ((j['events'] as List?) ?? const [])
+            .map((e) => SmartEvent.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        traders = ((j['traders'] as List?) ?? const [])
+            .map((e) => SmartTrader.fromJson(e as Map<String, dynamic>))
+            .toList();
+
+  final bool available;
+  final int tracked;
+  final String note;
+  final DateTime? polledAt;
+  final SmartConsensus? consensus;
+  final List<SmartEvent> events;
+  final List<SmartTrader> traders;
+
+  static DateTime? _t(dynamic v) =>
+      v == null ? null : DateTime.tryParse(v as String)?.toUtc();
+}
+
+class SmartConsensus {
+  SmartConsensus.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] as String? ?? '',
+        tracked = (j['tracked'] as num?)?.toInt() ?? 0,
+        long = (j['long'] as num?)?.toInt() ?? 0,
+        short = (j['short'] as num?)?.toInt() ?? 0,
+        longNotional = _d(j['long_notional']) ?? 0,
+        shortNotional = _d(j['short_notional']) ?? 0,
+        holders = ((j['holders'] as List?) ?? const [])
+            .map((e) => SmartHolder.fromJson(e as Map<String, dynamic>))
+            .toList();
+
+  final String symbol;
+  final int tracked, long, short;
+  final double longNotional, shortNotional;
+  final List<SmartHolder> holders;
+
+  /// Share of the followed who hold this coin at all.
+  int get holding => long + short;
+}
+
+class SmartHolder {
+  SmartHolder.fromJson(Map<String, dynamic> j)
+      : address = j['address'] as String? ?? '',
+        short = j['short'] as String? ?? '',
+        name = j['name'] as String? ?? '',
+        side = j['side'] as String? ?? '',
+        notional = _d(j['notional']) ?? 0,
+        entry = _d(j['entry']),
+        leverage = _d(j['leverage']),
+        upnl = _d(j['upnl']),
+        winRate = _d(j['win_rate']),
+        pnl30d = _d(j['pnl_30d']);
+
+  final String address, short, name, side;
+  final double notional;
+  final double? entry, leverage, upnl, winRate, pnl30d;
+
+  String get who => name.isNotEmpty ? name : short;
+  bool get isLong => side == 'LONG';
+}
+
+class SmartEvent {
+  SmartEvent.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String? ?? '',
+        kind = j['kind'] as String? ?? '',
+        address = j['address'] as String? ?? '',
+        coin = j['coin'] as String? ?? '',
+        symbol = j['symbol'] as String? ?? '',
+        side = j['side'] as String? ?? '',
+        notional = _d(j['notional']) ?? 0,
+        entry = _d(j['entry']),
+        leverage = _d(j['leverage']),
+        priceAt = _d(j['price_at']),
+        at = DateTime.tryParse(j['at'] as String? ?? '')?.toUtc() ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        trader = Map<String, dynamic>.from((j['trader'] as Map?) ?? const {});
+
+  final String id, kind, address, coin, symbol, side;
+  final double notional;
+  final double? entry, leverage, priceAt;
+  final DateTime at;
+  final Map<String, dynamic> trader;
+
+  String get who {
+    final n = (trader['display_name'] as String?)?.trim() ?? '';
+    if (n.isNotEmpty) return n;
+    final a = address.toLowerCase();
+    return a.length >= 12 ? '${a.substring(0, 6)}…${a.substring(a.length - 4)}' : a;
+  }
+
+  double? get winRate => _d(trader['win_rate']);
+  bool get isLong => side == 'LONG';
+}
+
+class SmartTrader {
+  SmartTrader.fromJson(Map<String, dynamic> j)
+      : address = j['address'] as String? ?? '',
+        short = j['short'] as String? ?? '',
+        name = j['name'] as String? ?? '',
+        score = _d(j['score']) ?? 0,
+        winRate = _d(j['win_rate']) ?? 0,
+        closedTrades = (j['closed_trades'] as num?)?.toInt() ?? 0,
+        profitFactor = _d(j['profit_factor']) ?? 0,
+        pnl30d = _d(j['pnl_30d']) ?? 0,
+        accountValue = _d(j['account_value']) ?? 0,
+        weeksPositive = (j['weeks_positive'] as num?)?.toInt() ?? 0,
+        weeksCovered = (j['weeks_covered'] as num?)?.toInt() ?? 0,
+        open = ((j['open'] as List?) ?? const []).map((e) => '$e').toList();
+
+  final String address, short, name;
+  final double score, winRate, profitFactor, pnl30d, accountValue;
+  final int closedTrades, weeksPositive, weeksCovered;
+  final List<String> open;
+
+  String get who => name.isNotEmpty ? name : short;
+}

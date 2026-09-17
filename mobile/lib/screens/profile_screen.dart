@@ -1594,6 +1594,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           _tile(
+            icon: Icons.groups_rounded,
+            title: 'Smart money',
+            subtitle: _mutedLoaded && Muted.instance.isKindMuted('smart')
+                ? 'Off'
+                : 'On — when a followed top trader opens, closes or flips '
+                    'a position in a coin you have not muted. Their public '
+                    'record, not a call.',
+            trailing: Switch(
+              value: !(_mutedLoaded && Muted.instance.isKindMuted('smart')),
+              activeThumbColor: Obsidian.primary,
+              onChanged: (_) async {
+                await Muted.instance.toggleKind('smart');
+                unawaited(PushDelivery.instance.sync(widget.client));
+                if (mounted) setState(() {});
+              },
+            ),
+          ),
+          _tile(
             icon: Icons.newspaper_rounded,
             title: 'News attached to a call',
             subtitle: _newsNames[_newsLevel] ?? 'Everything',

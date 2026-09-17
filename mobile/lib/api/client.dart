@@ -454,6 +454,11 @@ class ApiClient {
   Future<Consensus> consensus({String? symbol}) async =>
       Consensus.fromJson(await _get('/api/consensus${_q(symbol, null)}'));
 
+  /// The followed traders' books and recent moves, for one coin or all.
+  Future<SmartMoney> smartMoney({String? symbol, int limit = 20}) async =>
+      SmartMoney.fromJson(await _get(
+          '/api/smartmoney${_q(symbol, null, extra: 'limit=$limit')}'));
+
   Future<List<TimeframeInfo>> timeframes({String? symbol}) async {
     final j = await _get('/api/timeframes${_q(symbol, null)}');
     return (j['timeframes'] as List)

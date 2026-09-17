@@ -35,6 +35,7 @@ import '../theme/liquid_obsidian.dart';
 import '../widgets/article_sheet.dart';
 import '../widgets/analysis_panels.dart';
 import '../widgets/positions_panel.dart';
+import '../widgets/smart_money_panel.dart';
 import '../widgets/trade_entry.dart';
 import '../widgets/glass.dart';
 import '../widgets/horizon_sheet.dart';
@@ -120,6 +121,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// server — see `trades.dart` on why, and on what that costs.
   List<TradeEntry> _positions = const [];
   Consensus? _consensus;
+  SmartMoney? _smart;
   String? _error;
   String? _untrained;
   Timer? _timer;
@@ -346,6 +348,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  /// The followed traders on this coin. Same rule as consensus: captured
+  /// per symbol, never awaited with the main payload, absent on failure.
+  Future<void> _loadSmartMoney() async {
+    final forSymbol = widget.symbol;
+    try {
+      final sm = await widget.client.smartMoney(symbol: forSymbol, limit: 8);
+      if (mounted && forSymbol == widget.symbol) {
+        setState(() => _smart = sm);
+      }
+    } catch (_) {
+      // supporting context; its absence is not worth an error state
+    }
+  }
+
   @override
   void didUpdateWidget(covariant DashboardScreen old) {
     super.didUpdateWidget(old);
@@ -386,6 +402,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         if (old.symbol != widget.symbol) {
           _live = null;
           _consensus = null;
+          _smart = null;
         }
       });
       _load(quiet: hit != null);
@@ -567,6 +584,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // the same Future.wait held the whole screen on a spinner for twelve
       // seconds. It is supporting context, so it arrives when it arrives.
       unawaited(_loadConsensus());
+      unawaited(_loadSmartMoney());
       unawaited(_loadMajor());
     } on UntrainedException catch (e) {
       // a normal state, not a fault: this timeframe simply has no model yet
@@ -666,6 +684,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _levels(d),
           const SizedBox(height: Obsidian.gutter),
           ..._consensusPanel(),
+          if (_smart != null && _smart!.available && _smart!.tracked > 0) ...[
+            SmartMoneyPanel(data: _smart!),
+            const SizedBox(height: Obsidian.gutter),
+          ],
           _note(d),
           const SizedBox(height: Obsidian.gutter),
           // THE VERY BOTTOM, and that is the right place for it. Everything

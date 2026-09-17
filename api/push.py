@@ -335,6 +335,8 @@ def _priority(a) -> int:
         return 5 if getattr(a, "strength", "") == "strong" else 4
     if kind == "calendar":
         return 4
+    if kind == "smart":
+        return 4                    # a followed trader acting is worth a sound
     return 3
 
 
@@ -343,6 +345,7 @@ _TAGS = {
     "calendar": "calendar",
     "news": "newspaper",
     "whale": "whale",
+    "smart": "whale",
 }
 
 

@@ -188,6 +188,24 @@ def _hash(*parts) -> str:
     return hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:16]
 
 
+def _short(address: str) -> str:
+    a = (address or "").lower()
+    return f"{a[:6]}…{a[-4:]}" if len(a) >= 12 else a
+
+
+def _usd(v) -> str:
+    """$2.1M, $840k, $12,500 -- a notification has no room for cents."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return "$?"
+    if x >= 1e6:
+        return f"${x / 1e6:.1f}M"
+    if x >= 1e4:
+        return f"${x / 1e3:.0f}k"
+    return f"${x:,.0f}"
+
+
 def _price_text(v) -> str:
     """A price with enough digits to act on. Mirrors `format.dart`'s
     `priceText`, thresholds and trimming included.
@@ -251,6 +269,9 @@ class AlertEngine:
         self._spiked_bar: Dict[tuple, Optional[str]] = {}
         self._primed = False
         self._pairs = pairs
+        # the newest smart-money event already translated, so a restart does
+        # not re-announce the tracker's whole log
+        self._smart_cursor = 0
         # Recent headlines and filings, held for attachment to the next
         # action change rather than sent on their own. Bounded: this is
         # context for one notification, not an archive.
@@ -364,7 +385,8 @@ class AlertEngine:
     def refresh(self) -> List[Alert]:
         """Look once. Returns only what is new."""
         fresh: List[Alert] = []
-        for probe in (self._signal, self._whales, self._news, self._calendar):
+        for probe in (self._signal, self._whales, self._news, self._calendar,
+                      self._smart):
             try:
                 fresh.extend(probe())
             except Exception as e:                 # one dead feed must not
@@ -448,6 +470,7 @@ class AlertEngine:
                                 for k, v in raw.get("spiked_bar", {}).items()}
             self._log = [_alert_from_json(a) for a in raw.get("log", [])]
             self._primed = bool(raw.get("primed", False))
+            self._smart_cursor = int(raw.get("smart_cursor", 0) or 0)
             log.info("alerts: restored %d in the log, %d ids seen",
                      len(self._log), len(self._seen))
         except (KeyError, TypeError, ValueError) as e:
@@ -472,6 +495,7 @@ class AlertEngine:
                 "spiked_bar": {"|".join(k): v
                                for k, v in self._spiked_bar.items()},
                 "log": [a.to_json() for a in self._log[-MAX_LOG:]],
+                "smart_cursor": self._smart_cursor,
             }))
             os.replace(tmp, self._state_path)
         except (OSError, ValueError, TypeError) as e:
@@ -581,6 +605,72 @@ class AlertEngine:
             fresh = [c for c in self._context if c["at"] >= cutoff]
             self._context = fresh[-60:]          # bounded, see __init__
         return list(reversed(fresh))[:MAX_CONTEXT]
+
+    def _smart(self) -> List[Alert]:
+        """A followed trader opened, closed or flipped a position.
+
+        The tracker (smartmoney/) already reduced its polls to differences,
+        so this is a translation, not a detection: one alert per event, for
+        the coins this server serves. Adds and reductions are left to the
+        panel -- "he added to his BTC long" is context, not a decision.
+
+        LABELLED AS WHAT IT IS. The body carries the trader's record and how
+        many of the followed set sit on each side, and nothing here calls it
+        a signal: the feed is measured in `research/` before it may earn
+        that word. See smartmoney/__init__.py.
+        """
+        tracker = getattr(self.svc, "smart_tracker", lambda: None)()
+        if tracker is None:
+            return []
+        try:
+            served = set(self.svc.trained_symbols())
+        except Exception:
+            served = set()
+        out: List[Alert] = []
+        for e in tracker.after(self._smart_cursor):
+            self._smart_cursor = max(self._smart_cursor, e.seq)
+            if e.kind not in ("opened", "closed", "flipped"):
+                continue
+            if not e.symbol or (served and e.symbol not in served):
+                continue
+            t = e.trader or {}
+            who = (t.get("display_name") or "").strip() or _short(e.address)
+            verb = {"opened": "opened", "closed": "closed", "flipped": "flipped to"}[e.kind]
+            lines = []
+            if e.kind != "closed":
+                lev = f"{e.leverage:g}× · " if e.leverage else ""
+                at = f" @ {_price_text(e.entry)}" if e.entry else ""
+                lines.append(f"{lev}{_usd(e.notional)}{at}")
+            else:
+                lines.append(f"was {_usd(e.notional)}")
+            wr, pnl, n = t.get("win_rate"), t.get("pnl_30d"), t.get("closed_trades")
+            rec = []
+            if wr is not None:
+                rec.append(f"{wr:.0%} win rate")
+            if pnl is not None:
+                rec.append(f"{'+' if pnl >= 0 else '-'}{_usd(abs(pnl))} / 30d")
+            if n:
+                rec.append(f"{n} trades")
+            if rec:
+                lines.append(" · ".join(rec))
+            try:
+                c = tracker.consensus(e.symbol)
+                lines.append(f"{c['long']} of {c['tracked']} followed long, "
+                             f"{c['short']} short")
+            except Exception:
+                pass
+            out.append(Alert(
+                id=_hash("smart", e.id),
+                kind="smart",
+                severity="medium",
+                symbol=e.symbol, interval="",
+                title=f"{e.symbol}: {who} {verb} {e.side}",
+                body="\n".join(lines),
+                at=_parse(e.at) or utc_now(), detected_at=utc_now(),
+                extra={"address": e.address, "event": e.kind, "side": e.side,
+                       "coin": e.coin, "notional": f"{e.notional:.0f}",
+                       "price_at": "" if e.price_at is None else f"{e.price_at}"}))
+        return out
 
     def _whales(self) -> List[Alert]:
         """New filings, collected as CONTEXT rather than sent.

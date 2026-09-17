@@ -69,6 +69,10 @@ services:
       OAUTH_APPLE_TEAM_ID: ${OAUTH_APPLE_TEAM_ID:-}
       OAUTH_APPLE_KEY_ID: ${OAUTH_APPLE_KEY_ID:-}
       OAUTH_APPLE_PRIVATE_KEY: ${OAUTH_APPLE_PRIVATE_KEY:-}
+      # The followed-traders tracker (smartmoney/). On by default; it is a
+      # polling thread and a 37MB file once a day. Set 0 to keep it off on
+      # a box that cannot spare that.
+      SMARTMONEY: ${SMARTMONEY:-1}
     volumes:
       - ./data_cache:/app/data_cache
       - ./output:/app/output

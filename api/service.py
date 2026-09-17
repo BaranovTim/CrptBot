@@ -1365,6 +1365,61 @@ class TradingService:
         }
 
     # ----------------------------------------------------------- whales
+    # ---------------------------------------------------------- smart money
+    def smart_tracker(self):
+        """The followed-traders tracker, started on first use.
+
+        Handed our 1m store as its price source so every event carries the
+        price a follower would have seen -- the number `research/` scores
+        the feed on. Answers None only when the package is unavailable, so
+        the alert probe and the route both degrade to "nothing" rather than
+        to an error.
+        """
+        try:
+            from smartmoney import get_tracker
+        except Exception as e:                       # pragma: no cover
+            log.warning("smartmoney unavailable: %s", e)
+            return None
+        return get_tracker(price_fn=self._last_close)
+
+    def _last_close(self, symbol: str) -> Optional[float]:
+        """Newest 1m close on disk, or None. Reads one file, not the store."""
+        try:
+            from livefeed.store import BarStore
+
+            store = BarStore(symbol.upper(), "1m")
+            files = sorted(store.dir.glob("*.csv"))
+            if not files:
+                return None
+            last = store._read_file(files[-1])
+            if last is None or last.empty:
+                return None
+            return float(last["close"].iloc[-1])
+        except Exception:
+            return None
+
+    def smart_money(self, symbol: Optional[str] = None,
+                    limit: int = 20) -> Dict[str, Any]:
+        """The panel: who is followed, who holds this coin, what they did."""
+        t = self.smart_tracker()
+        if t is None:
+            return {"available": False, "tracked": 0, "consensus": None,
+                    "events": [], "traders": []}
+        sym = symbol.upper() if symbol else None
+        status = t.status()
+        return {
+            "available": True,
+            "tracked": status["tracked"],
+            "selected_at": status["selected_at"],
+            "polled_at": status["polled_at"],
+            "consensus": t.consensus(sym) if sym else None,
+            "events": t.recent(sym, limit=limit),
+            "traders": status["traders"],
+            # the label the app repeats next to the feed. see smartmoney/
+            "note": "public books of the best-recorded traders on Hyperliquid; "
+                    "information, not a call -- being measured",
+        }
+
     def whales(self, limit: int = 20) -> List[Dict[str, Any]]:
         try:
             from whalefeed.store import WhaleStore
