@@ -188,6 +188,25 @@ class Notifications {
   bool _ready = false;
   bool granted = false;
 
+  /// Silence everything. Read from settings at init, set by the switch.
+  ///
+  /// Checked at every post below rather than at the callers, so a new
+  /// caller cannot forget. A plain field, not a future: `Trades` reads it
+  /// on a hot path and in tests where no plugin exists.
+  bool silenced = false;
+
+  Future<void> setSilenced(bool v) async {
+    silenced = v;
+    await Settings.instance.saveSilenced(v);
+    if (v && _ready) {
+      // the calendar warnings already booked with the OS would still fire;
+      // a silence that lets them through is not one
+      try {
+        await _plugin.cancelAll();
+      } catch (_) {}
+    }
+  }
+
   /// Re-read the OS state. Cheap, never prompts, and the thing to call
   /// when a screen that shows the state comes back into view -- the person
   /// may have just changed it in system settings.
@@ -261,6 +280,7 @@ class Notifications {
 
   Future<void> init() async {
     if (_ready || kIsWeb) return;
+    silenced = await Settings.instance.silenced();
     tzdata.initializeTimeZones();
     try {
       tz.setLocalLocation(tz.getLocation(DateTime.now().timeZoneName));
@@ -394,6 +414,7 @@ class Notifications {
   ///     delivered every time. One second is imperceptible.
   Future<void> showAlert(Alert a) async {
     if (!_ready) await init();
+    if (silenced) return;
     // The relay adds this same line on the lock screen path; this is the
     // in-app path doing it from the local log. Signals only, first line,
     // for the reason in `api/push.py`: the collapsed notification shows one
@@ -429,6 +450,7 @@ class Notifications {
     String? currentCall,
   }) async {
     if (!_ready) await init();
+    if (silenced) return;
     final short = entry.symbol.endsWith('USDT')
         ? entry.symbol.substring(0, entry.symbol.length - 4)
         : entry.symbol;
@@ -495,6 +517,7 @@ class Notifications {
     required String pnl,
   }) async {
     if (!_ready) await init();
+    if (silenced) return;
     final short =
         symbol.endsWith('USDT') ? symbol.substring(0, symbol.length - 4) : symbol;
     final takeProfit = by == 'take_profit';
@@ -656,6 +679,7 @@ class Notifications {
   Future<void> scheduleCalendar(List<ScheduledEvent> events,
       {List<int> leadsMinutes = const [60, 5]}) async {
     if (!_ready) await init();
+    if (silenced) return;                  // nothing booked; see setSilenced
     final now = DateTime.now();
 
     for (final e in events) {

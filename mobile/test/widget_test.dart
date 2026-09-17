@@ -1886,6 +1886,28 @@ void main() {
       expect(r.settled.single.closedBy, 'take_profit');
     });
 
+    test('silenced: the question is not asked and the grace clock never starts',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      Notifications.instance.silenced = true;
+      try {
+        await Trades.instance.add(aged('1d', const Duration(hours: 241)));
+        final r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
+        expect(r.settled, isEmpty);
+        final t = (await Trades.instance.load()).single;
+        expect(t.isOpen, isTrue);
+        expect(t.limitAskedAt, isNull,
+            reason: 'a question nobody sees must not start the auto-close');
+        // silence lifts: the next check asks, as it would have
+        Notifications.instance.silenced = false;
+        await Trades.instance.checkLive({'BTCUSDT': 103.0});
+        expect((await Trades.instance.load()).single.limitAskedAt, isNotNull);
+      } finally {
+        Notifications.instance.silenced = false;
+      }
+    });
+
     test('a level on the same tick as expiry wins, and no question is sent',
         () async {
       SharedPreferences.setMockInitialValues({});
@@ -2014,6 +2036,17 @@ void main() {
   // level into the map, changing the general setting later would silently
   // stop applying to that coin. The relay mirrors this map, so a coin that
   // buzzes on the lock screen is the same coin that buzzes in the app.
+  group('silence everything', () {
+    test('the setting round-trips and defaults off', () async {
+      SharedPreferences.setMockInitialValues({});
+      expect(await Settings.instance.silenced(), isFalse);
+      await Settings.instance.saveSilenced(true);
+      expect(await Settings.instance.silenced(), isTrue);
+      await Settings.instance.saveSilenced(false);
+      expect(await Settings.instance.silenced(), isFalse);
+    });
+  });
+
   group('per-coin signal strength', () {
     test('a coin with no override follows the general setting', () async {
       SharedPreferences.setMockInitialValues({});

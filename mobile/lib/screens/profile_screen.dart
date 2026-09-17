@@ -109,6 +109,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   double? _balance;
   bool _lockOn = false, _lockAvailable = false;
   bool _timeLimit = true;
+  bool _silenced = false;
   String _newsLevel = 'all';
   int _overrideCount = 0;
   bool _mutedLoaded = false;
@@ -149,6 +150,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         (v) => mounted ? setState(() => _dailyStopPct = v) : null);
     Settings.instance.timeLimit().then(
         (v) => mounted ? setState(() => _timeLimit = v) : null);
+    Settings.instance.silenced().then(
+        (v) => mounted ? setState(() => _silenced = v) : null);
     Settings.instance.newsAlerts().then(
         (v) => mounted ? setState(() => _newsLevel = v) : null);
     Settings.instance.sensitivityOverrides().then(
@@ -1551,6 +1554,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // timeframe of it, or give it its own strength level -- and those
         // win over what is set here, for that coin only.
         _section('NOTIFICATIONS', [
+          // THE ONE SWITCH ABOVE THE OTHERS. Everything below it chooses
+          // what buzzes; this chooses whether anything does. The relay is
+          // told too, so silence holds with the app closed.
+          _tile(
+            icon: _silenced
+                ? Icons.notifications_off_rounded
+                : Icons.notifications_active_rounded,
+            title: 'Silence everything',
+            subtitle: _silenced
+                ? 'On — nothing reaches this phone: no signals, smart money, '
+                    'news, scheduled releases, level hits or time-limit '
+                    'questions, and no in-app banners. Alerts still collect '
+                    'in the bell. An entry at its time limit stays open '
+                    'until you decide.'
+                : 'Off — the switches below decide what buzzes',
+            trailing: Switch(
+              value: _silenced,
+              activeThumbColor: Obsidian.primary,
+              onChanged: (v) async {
+                setState(() => _silenced = v);
+                await Notifications.instance.setSilenced(v);
+                unawaited(PushDelivery.instance.sync(widget.client));
+                if (!v) {
+                  // silence cancelled the booked release warnings; book
+                  // them again now rather than at the next app start
+                  try {
+                    final events = await widget.client.calendar(days: 21);
+                    await Notifications.instance.scheduleCalendar(events);
+                  } catch (_) {}
+                }
+              },
+            ),
+          ),
           _tile(
             icon: Icons.tune_rounded,
             title: 'Signal strength',

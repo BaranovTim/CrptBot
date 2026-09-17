@@ -357,6 +357,7 @@ class ApiClient {
     required List<String> muted,
     required List<Map<String, Object>> positions,
     Map<String, String> overrides = const {},
+    bool silenced = false,
   }) =>
       _post('/api/push/subscribe', {
         'topic': topic,
@@ -366,6 +367,7 @@ class ApiClient {
         'muted': muted,
         'positions': positions,
         'overrides': overrides,
+        'silenced': silenced,
       });
 
   Future<Map<String, dynamic>> pushUnsubscribe(String topic) =>

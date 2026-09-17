@@ -252,6 +252,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         //
         // So both paths post again. A duplicate is a nuisance; silence is a
         // broken feature, and only one of those is worth defending against.
+        // Silenced: neither. The alert is still in the bell.
+        if (Notifications.instance.silenced) continue;
         await Notifications.instance.showAlert(a);
         _banner(a);
       }
@@ -280,6 +282,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   /// The in-app version of an alert. Carries the same "when it happened"
   /// line as the notification, because a filing from four days ago should
   /// never read as breaking news.
+  ///
+  /// TAPPING IT OPENS THE COIN, on the alert's timeframe, exactly as tapping
+  /// the same alert in the shade does. Swiping it away still dismisses it.
+  /// A banner that names a coin and does nothing when pressed reads as
+  /// broken, and it was.
   void _banner(Alert a) {
     if (!mounted) return;
     final tone = switch (a.kind) {
@@ -288,7 +295,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       'calendar' => Obsidian.primary,
       _ => Obsidian.onSurfaceVariant,
     };
-    ScaffoldMessenger.of(context)
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
       ..removeCurrentSnackBar()
       ..showSnackBar(SnackBar(
         backgroundColor: Obsidian.surfaceHigh,
@@ -298,19 +306,29 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Obsidian.rLg),
             side: BorderSide(color: tone.withValues(alpha: 0.45))),
-        content: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(a.title,
-                style: Obsidian.bodyLg(color: tone)
-                    .copyWith(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 4),
-            Text(a.body, style: Obsidian.body(size: 12.5)),
-            const SizedBox(height: 4),
-            Text(a.whenLine(),
-                style: Obsidian.labelSm(color: Obsidian.outline, size: 10)),
-          ],
+        content: GestureDetector(
+          key: ValueKey('banner-${a.id}'),
+          behavior: HitTestBehavior.opaque,
+          onTap: a.symbol.isEmpty
+              ? null
+              : () {
+                  messenger.hideCurrentSnackBar();
+                  _openSymbol(a.symbol, a.interval);
+                },
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(a.title,
+                  style: Obsidian.bodyLg(color: tone)
+                      .copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 4),
+              Text(a.body, style: Obsidian.body(size: 12.5)),
+              const SizedBox(height: 4),
+              Text(a.whenLine(),
+                  style: Obsidian.labelSm(color: Obsidian.outline, size: 10)),
+            ],
+          ),
         ),
       ));
   }

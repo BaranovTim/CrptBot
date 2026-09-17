@@ -497,3 +497,41 @@ def test_overrides_are_cleaned_and_replaced():
     r.register(t, account="tim", overrides={})
     assert r.for_account("tim")["overrides"] == {}, "clearing did not clear"
     return True
+
+
+def test_silenced_holds_everything_back_and_lifting_it_restores():
+    """"Silence everything" on the phone must hold on the relay too: this
+    is the path that works while the app is closed."""
+    r, rec = _relay()
+    t = new_topic()
+    r.register(t, account="tim", sensitivity="small", silenced=True)
+    assert r.for_account("tim")["silenced"] is True
+    r.deliver([
+        FakeAlert(id="b", symbol="BTCUSDT", strength="strong",
+                  title="BTCUSDT: 1h; FLAT -> BUY", extra={"from": "FLAT", "to": "BUY"}),
+        FakeAlert(id="c", kind="calendar", title="FOMC in 60m"),
+        FakeAlert(id="s", kind="smart", symbol="BTCUSDT",
+                  title="BTCUSDT: 0xe867…c78e opened LONG"),
+    ])
+    assert rec.sent == [], "silenced, yet something was pushed"
+    # the switch off: the same alerts, now delivered (ids not yet pushed)
+    r.register(t, account="tim", sensitivity="small", silenced=False)
+    assert r.for_account("tim")["silenced"] is False
+    r.deliver([
+        FakeAlert(id="b2", symbol="BTCUSDT", strength="strong",
+                  title="BTCUSDT: 1h; FLAT -> BUY", extra={"from": "FLAT", "to": "BUY"}),
+    ])
+    assert [m["title"] for m in rec.sent] == ["BTCUSDT: 1h; FLAT -> BUY"]
+    return True
+
+
+def test_silenced_survives_a_restart_and_defaults_off():
+    d = tempfile.mkdtemp()
+    r = PushRelay(state_path=Path(d) / "push.json", opener=Recorder())
+    t = new_topic()
+    r.register(t, account="tim", silenced=True)
+    again = PushRelay(state_path=Path(d) / "push.json", opener=Recorder())
+    assert again.for_account("tim")["silenced"] is True
+    r.register(new_topic(), account="ann")
+    assert r.for_account("ann")["silenced"] is False
+    return True

@@ -887,7 +887,8 @@ class Handler(BaseHTTPRequestHandler):
                         positions=[p for p in (body.get("positions") or [])
                                    if isinstance(p, dict)][:200],
                         overrides=body.get("overrides")
-                        if isinstance(body.get("overrides"), dict) else None)
+                        if isinstance(body.get("overrides"), dict) else None,
+                        silenced=body.get("silenced") is True)
                 self._send(r, status=200 if r.get("ok") else 400)
                 return
             if route == "/api/train/cancel":

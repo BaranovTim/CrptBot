@@ -153,6 +153,31 @@ class Settings {
 
   static const _timeLimitKey = 'trades.time_limit.v1';
 
+  /// Silence everything: no notification of any kind reaches the phone.
+  ///
+  /// One switch rather than five, for the evening when none of it is
+  /// wanted. Off by default. The relay is told (so nothing arrives from the
+  /// server either), the in-app banner stays away, and an entry at its time
+  /// limit is not asked about -- it stays open until the person decides,
+  /// because a question nobody sees must not close a trade on a timer.
+  Future<bool> silenced() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(_silencedKey) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> saveSilenced(bool v) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_silencedKey, v);
+    } catch (_) {}
+  }
+
+  static const _silencedKey = 'alerts.silenced.v1';
+
   /// How much of the news is allowed to buzz.
   ///
   /// Four levels rather than a switch, because "news" is not one thing. These

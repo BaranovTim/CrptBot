@@ -249,6 +249,10 @@ class Subscription:
     # rest of this record: the phone decides, the relay applies the same
     # decision to the alerts the phone is not awake to see.
     overrides: Dict[str, str] = field(default_factory=dict)
+    # "Silence everything" on the phone. Held here as well, because the
+    # relay is the path that works while the app is closed -- a silence the
+    # phone keeps and the server ignores is not one.
+    silenced: bool = False
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     # Observability, because a relay that silently stops is worse than one
@@ -285,6 +289,8 @@ class Subscription:
 
 def _wants(sub: Subscription, a) -> bool:
     """Would this subscription's owner have seen this on their screen?"""
+    if sub.silenced:
+        return False
     kind = getattr(a, "kind", "")
     if is_kind_muted(sub.muted, kind):
         return False
@@ -369,7 +375,8 @@ class PushRelay:
                  sensitivity: str = "strong", news: str = "all",
                  muted: Optional[List[str]] = None,
                  positions: Optional[List[Dict[str, Any]]] = None,
-                 overrides: Optional[Dict[str, str]] = None
+                 overrides: Optional[Dict[str, str]] = None,
+                 silenced: bool = False,
                  ) -> Dict[str, Any]:
         topic = (topic or "").strip()
         if not TOPIC_RE.match(topic):
@@ -401,6 +408,7 @@ class PushRelay:
                 muted=list(muted or ()),
                 positions=_clean_positions(positions),
                 overrides=_clean_overrides(overrides),
+                silenced=bool(silenced),
                 created_at=existing.created_at if existing else time.time(),
                 last_ok=existing.last_ok if existing else None,
                 sent=existing.sent if existing else 0,

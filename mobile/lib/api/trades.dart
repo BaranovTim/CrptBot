@@ -725,6 +725,10 @@ class Trades extends ChangeNotifier {
   /// opposite side says closing is; FLAT says the model has no view.
   Future<void> askAtLimit(String id,
       {required double price, ApiClient? client}) async {
+    // Silenced: the question would not be shown, so it is not asked, and
+    // the grace clock that closes an unanswered entry never starts. The
+    // entry stays open; the next check after silence lifts asks it then.
+    if (Notifications.instance.silenced) return;
     final all = List<TradeEntry>.from(await load());
     final i = all.indexWhere((t) => t.id == id);
     if (i < 0 || !all[i].isOpen || all[i].limitAskedAt != null) return;
