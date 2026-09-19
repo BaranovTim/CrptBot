@@ -32,13 +32,22 @@ class SignalsPanel extends StatelessWidget {
   /// Show the equity rows instead of the crypto ones.
   final bool equities;
 
-  /// Symbols you currently have an OPEN trade logged against.
+  /// What you currently have an OPEN trade logged against, as
+  /// `SYMBOL:interval` keys -- or a bare `SYMBOL` for an entry logged before
+  /// entries carried a timeframe, which then marks every row of that coin.
   ///
-  /// A call on a coin you are already in is a different piece of information
-  /// from a call on one you are not: the first is about whether to stay, the
-  /// second about whether to enter. The list should not make you remember
-  /// which is which.
+  /// PER TIMEFRAME, not per coin. An entry taken on the 4h call is a 4h
+  /// trade; the 1h row of the same coin is a call you have NOT acted on, and
+  /// tagging it IN TRADE told you the opposite. A call on a pair you are
+  /// already in is about whether to stay; one you are not in is about
+  /// whether to enter. The list should not make you remember which is which.
   final Set<String> held;
+
+  static String heldKey(String symbol, String? interval) =>
+      interval == null || interval.isEmpty ? symbol : '$symbol:$interval';
+
+  bool _inTrade(LiveSignal s) =>
+      held.contains(heldKey(s.symbol, s.interval)) || held.contains(s.symbol);
 
   @override
   Widget build(BuildContext context) {
@@ -204,7 +213,7 @@ class SignalsPanel extends StatelessWidget {
               ],
             ),
           ),
-          if (held.contains(s.symbol)) ...[
+          if (_inTrade(s)) ...[
             const SizedBox(width: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),

@@ -8,6 +8,7 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tradingbot_app/theme/liquid_obsidian.dart';
 import 'package:tradingbot_app/widgets/positions_panel.dart';
+import 'package:tradingbot_app/widgets/signals_panel.dart';
 import 'package:tradingbot_app/widgets/smart_money_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
@@ -2198,6 +2199,48 @@ void main() {
           isMuted: (_, _) => false,
           isKindMuted: (k) => k == 'smart');
       expect(none, isEmpty);
+    });
+  });
+
+  group('IN TRADE is per timeframe', () {
+    LiveSignals two() => LiveSignals.fromJson({
+          'signals': [
+            {'symbol': 'BTCUSDT', 'interval': '1h', 'action': 'BUY',
+             'strength': 'strong', 'detail': '', 'side': 'LONG', 'ev': 0.3},
+            {'symbol': 'BTCUSDT', 'interval': '4h', 'action': 'BUY',
+             'strength': 'strong', 'detail': '', 'side': 'LONG', 'ev': 0.5},
+          ],
+          'watched_symbols': 1,
+          'intervals': ['1h', '4h'],
+        });
+
+    Future<int> tags(WidgetTester t, Set<String> held) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: SignalsPanel(
+                      data: two(), onOpen: (_) {}, held: held)))));
+      await t.pumpAndSettle();
+      return find.text('IN TRADE').evaluate().length;
+    }
+
+    testWidgets('a 4h entry tags the 4h row only', (t) async {
+      expect(await tags(t, {SignalsPanel.heldKey('BTCUSDT', '4h')}), 1);
+    });
+
+    testWidgets('an entry with no timeframe tags every row of the coin',
+        (t) async {
+      expect(await tags(t, {SignalsPanel.heldKey('BTCUSDT', null)}), 2);
+    });
+
+    testWidgets('nothing held, nothing tagged', (t) async {
+      expect(await tags(t, const {}), 0);
+    });
+
+    test('the key is what the market page builds from an entry', () {
+      expect(SignalsPanel.heldKey('BTCUSDT', '4h'), 'BTCUSDT:4h');
+      expect(SignalsPanel.heldKey('BTCUSDT', ''), 'BTCUSDT');
+      expect(SignalsPanel.heldKey('BTCUSDT', null), 'BTCUSDT');
     });
   });
 }

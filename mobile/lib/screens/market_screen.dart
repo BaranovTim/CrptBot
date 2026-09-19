@@ -65,13 +65,17 @@ class _MarketScreenState extends State<MarketScreen> {
 
   LiveSignals? _signals;
 
-  /// Symbols with an open trade logged against them, so the calls list can
-  /// say which of them you are already in.
+  /// Open trades as `SYMBOL:interval` keys (see `SignalsPanel.held`), so
+  /// the calls list tags the row you are actually in, not every row of the
+  /// coin.
   Set<String> _held = const {};
 
   Future<void> _loadHeld() async {
     final all = await Trades.instance.load();
-    final open = all.where((t) => t.isOpen).map((t) => t.symbol).toSet();
+    final open = all
+        .where((t) => t.isOpen)
+        .map((t) => SignalsPanel.heldKey(t.symbol, t.interval))
+        .toSet();
     if (mounted) setState(() => _held = open);
   }
 
