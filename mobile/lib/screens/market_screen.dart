@@ -1,4 +1,4 @@
-/// "Select Crypto Pair".
+/// The market page: your coins, in the order you keep them.
 ///
 /// The mockup's NOT TRAINED badge turns out to describe reality exactly:
 /// models are fitted for BTCUSDT and nothing else. So the badge is driven by
@@ -200,11 +200,11 @@ class _MarketScreenState extends State<MarketScreen> {
         header: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+          // No title. The list is the page; the one control it needs is
+          // the add button, kept where it was so the hand still finds it.
           Row(
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              Expanded(
-                child: Text('Select Crypto Pair', style: Obsidian.displayLg()),
-              ),
               InkWell(
                 onTap: _openPicker,
                 customBorder: const CircleBorder(),
