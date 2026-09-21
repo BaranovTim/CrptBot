@@ -44,11 +44,15 @@ class ProfileScreen extends StatefulWidget {
     required this.account,
     required this.onSignOut,
     this.onOpenSymbol,
+    this.onAccountChanged,
   });
 
   final ApiClient client;
   final Account account;
   final VoidCallback onSignOut;
+
+  /// The shown name was changed here; the shell holds the account.
+  final ValueChanged<Account>? onAccountChanged;
 
   /// "Show me this pair on this timeframe" -- the shell's one navigation
   /// door. Null interval means keep the current one.
@@ -282,6 +286,105 @@ class _ProfileScreenState extends State<ProfileScreen> {
         livePrice: _prices[t.symbol]);
     if (price == null || price <= 0) return;
     await Trades.instance.close(t.id, price);
+    await _loadTrades();
+  }
+
+  /// An error as one sentence a person can read.
+  static String _sentence(Object e) {
+    final t = (e is ApiException ? e.message : e.toString()).trim();
+    if (t.isEmpty) return 'Something went wrong.';
+    final cap = t[0].toUpperCase() + t.substring(1);
+    return RegExp(r'[.!?]$').hasMatch(cap) ? cap : '$cap.';
+  }
+
+  /// Change the name shown at the top of this page.
+  Future<void> _renameAccount() async {
+    final c = TextEditingController(text: widget.account.username ?? '');
+    String? problem;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setState) => AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        title: Text('Change your name', style: Obsidian.headlineMd()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('4 to 24 characters, starting with a letter; letters, digits '
+                'and underscores. It has to be free.',
+                style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: c,
+              autofocus: true,
+              style: Obsidian.dataTable(size: 16),
+              decoration: const InputDecoration(labelText: 'Username'),
+            ),
+            if (problem != null) ...[
+              const SizedBox(height: 8),
+              Text(problem!, style: Obsidian.body(color: Obsidian.error, size: 11.5)),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('Cancel', style: Obsidian.body())),
+          TextButton(
+              onPressed: () async {
+                try {
+                  final a = await widget.client.setUsername(c.text.trim());
+                  await Settings.instance.saveAccount(a);
+                  widget.onAccountChanged?.call(a);
+                  if (ctx.mounted) Navigator.of(ctx).pop(a.username);
+                } catch (e) {
+                  setState(() => problem = _sentence(e));
+                }
+              },
+              child: Text('Save', style: Obsidian.body(color: Obsidian.primary))),
+        ],
+      )),
+    );
+    if (name != null && mounted) setState(() {});
+  }
+
+  /// Start the statistics again. Closed entries go; open ones stay.
+  Future<void> _resetScore() async {
+    final closed = _trades.where((t) => !t.isOpen).length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        title: Text('Reset your score?', style: Obsidian.headlineMd()),
+        content: Text(
+            closed == 0
+                ? 'There are no closed entries to clear. Open positions are '
+                    'never touched by this.'
+                : 'This deletes the $closed closed entr${closed == 1 ? 'y' : 'ies'} '
+                    'in your log, so the win rate, the banked total and the '
+                    'trade count start again from zero. Open positions are '
+                    'kept. This cannot be undone.',
+            style: Obsidian.body(color: Obsidian.outline, size: 12.5)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text('Cancel', style: Obsidian.body())),
+          if (closed > 0)
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: Text('Reset', style: Obsidian.body(color: Obsidian.error))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await Trades.instance.clearClosed();
+    await _loadTrades();
+  }
+
+  Future<void> _editTrade(TradeEntry t) async {
+    final r = await askLevels(context, t, livePrice: _prices[t.symbol]);
+    if (r == null) return;
+    await Trades.instance.setLevels(t.id, takeProfit: r.tp, stopLoss: r.sl);
     await _loadTrades();
   }
 
@@ -1284,6 +1387,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             entry: t,
             livePrice: _prices[t.symbol],
             onClose: t.isOpen ? () => _closeTrade(t) : null,
+            onEdit: t.isOpen ? () => _editTrade(t) : null,
             onDelete: () => _deleteTrade(t),
             onOpen: widget.onOpenSymbol == null
                 ? null
@@ -1527,6 +1631,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 : 'You entered ${_balance!.toStringAsFixed(4)}. '
                     'Vanth cannot read your exchange.',
             onTap: _pickBalance,
+          ),
+        ]),
+        const SizedBox(height: Obsidian.gutter),
+        _section('ACCOUNT', [
+          _tile(
+            icon: Icons.badge_outlined,
+            title: 'Shown name',
+            subtitle: (widget.account.username?.isNotEmpty ?? false)
+                ? '${widget.account.username} — tap to change'
+                : 'None set — tap to choose one',
+            onTap: widget.account.operator ? null : _renameAccount,
+          ),
+          _tile(
+            icon: Icons.restart_alt_rounded,
+            title: 'Reset your score',
+            subtitle: 'Clears the closed entries in your log so the win rate '
+                'and totals start again. Open positions stay.',
+            onTap: _resetScore,
           ),
         ]),
         const SizedBox(height: Obsidian.gutter),

@@ -20,6 +20,25 @@ import 'dart:math' as math;
 ///
 /// Null renders as an em dash, never as zero: a price of "$0.00" reads as a
 /// level, and it is the most dangerous number this could invent.
+/// How many decimals a price needs to keep the digits it actually moves in:
+/// two above 1,000, four above 1, and below 1 four digits past the leading
+/// zeros. 1000PEPE at 0.003624 needs six; rounding it to four gave "0.0036"
+/// for the entry, the target and the stop alike, and the trade closed on
+/// the spot it was logged.
+int priceDecimals(double v) {
+  final a = v.abs();
+  if (a >= 1000) return 2;
+  if (a >= 1) return 4;
+  if (a == 0) return 2;
+  final leadingZeros = -(_log10(a).floor() + 1);
+  return (leadingZeros + 4).clamp(2, 8);
+}
+
+/// A price as text for an INPUT FIELD: every meaningful digit, no
+/// thousands separators, no currency sign, nothing trimmed.
+String priceInput(double? v) =>
+    v == null ? '' : v.toStringAsFixed(priceDecimals(v));
+
 String priceText(double? v, {String prefix = r'$'}) {
   if (v == null) return '—';
   final a = v.abs();

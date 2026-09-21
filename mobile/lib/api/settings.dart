@@ -47,6 +47,7 @@ class Settings {
   Future<void> saveAccount(Account a) =>
       _put(_accountKey, json.encode({
             'identifier': a.identifier,
+            'username': a.username,
             'tier': a.tier,
             'entitled': a.entitled,
             'operator': a.operator,

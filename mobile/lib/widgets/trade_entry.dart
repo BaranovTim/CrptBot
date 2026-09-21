@@ -11,13 +11,14 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../api/format.dart';
 import '../api/trades.dart';
 import '../theme/liquid_obsidian.dart';
 import 'glass.dart';
 
 String _money(double? v, {int? dp}) {
   if (v == null) return '—';
-  final d = dp ?? (v.abs() >= 100 ? 2 : 4);
+  final d = dp ?? priceDecimals(v);
   final s = v.toStringAsFixed(d);
   final parts = s.split('.');
   final whole = parts[0].replaceAllMapped(
@@ -73,20 +74,16 @@ class _LogEntryCardState extends State<LogEntryCard> {
   void initState() {
     super.initState();
     _size = TextEditingController();
-    _entry = TextEditingController(
-        text: widget.livePrice == null
-            ? ''
-            : widget.livePrice!.toStringAsFixed(
-                widget.livePrice! >= 100 ? 2 : 4));
-    _tp = TextEditingController(text: _fmt(widget.suggestedTp));
-    _sl = TextEditingController(text: _fmt(widget.suggestedSl));
+    _entry = TextEditingController(text: priceInput(widget.livePrice));
+    _tp = TextEditingController(text: priceInput(widget.suggestedTp));
+    _sl = TextEditingController(text: priceInput(widget.suggestedSl));
     _side = widget.suggestedSide == 'SHORT' ? 'SHORT' : 'LONG';
     Trades.instance.balance().then(
         (b) => mounted ? setState(() => _balance = b) : null);
   }
 
-  static String _fmt(double? v) =>
-      v == null ? '' : v.toStringAsFixed(v >= 100 ? 2 : 4);
+  // every digit the coin moves in -- see `priceDecimals`
+  static String _fmt(double? v) => priceInput(v);
 
   @override
   void dispose() {

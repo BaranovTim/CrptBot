@@ -484,6 +484,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _editPosition(TradeEntry t) async {
+    final r = await askLevels(context, t, livePrice: _livePrice);
+    if (r == null) return;
+    await Trades.instance.setLevels(t.id, takeProfit: r.tp, stopLoss: r.sl);
+    await _loadPositions();
+  }
+
   Future<void> _closePosition(TradeEntry t) async {
     final price = await askExitPrice(context, t, livePrice: _livePrice);
     if (price == null || price <= 0) return;
@@ -671,6 +678,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   : d.symbol,
               livePrice: _livePrice ?? d.price,
               onClose: _closePosition,
+              onEdit: _editPosition,
             ),
             const SizedBox(height: Obsidian.gutter),
           ],

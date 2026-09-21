@@ -238,6 +238,14 @@ class ApiClient {
   Future<Account> me() async =>
       Account.fromJson(await _get('/api/me'));
 
+  /// Change the shown name. The server applies the sign-up rules and the
+  /// uniqueness check; a refusal comes back as an exception with the
+  /// reason written for a person.
+  Future<Account> setUsername(String username) async {
+    final r = await _post('/api/auth/username', {'username': username});
+    return Account.fromJson(r['account'] as Map<String, dynamic>);
+  }
+
   /// Reachability, with no credential involved.
   ///
   /// The sign-in screen probes this rather than a gated route, so a bad

@@ -38,12 +38,14 @@ class PositionsPanel extends StatelessWidget {
     required this.short,
     this.livePrice,
     this.onClose,
+    this.onEdit,
   });
 
   final List<TradeEntry> entries;
   final String short;
   final double? livePrice;
   final void Function(TradeEntry)? onClose;
+  final void Function(TradeEntry)? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -73,7 +75,8 @@ class PositionsPanel extends StatelessWidget {
               entry: t,
               livePrice: livePrice,
               short: short,
-              onClose: onClose == null ? null : () => onClose!(t)),
+              onClose: onClose == null ? null : () => onClose!(t),
+              onEdit: onEdit == null ? null : () => onEdit!(t)),
           const SizedBox(height: Obsidian.panelGap),
         ],
       ],
@@ -88,6 +91,7 @@ class PositionCard extends StatelessWidget {
     required this.short,
     this.livePrice,
     this.onClose,
+    this.onEdit,
     this.showSymbol = false,
   });
 
@@ -95,6 +99,7 @@ class PositionCard extends StatelessWidget {
   final String short;
   final double? livePrice;
   final VoidCallback? onClose;
+  final VoidCallback? onEdit;
   final bool showSymbol;
 
   @override
@@ -192,21 +197,37 @@ class PositionCard extends StatelessWidget {
               ],
             ),
           ],
-          if (onClose != null) ...[
+          if (onClose != null || onEdit != null) ...[
             const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(Obsidian.rMd)),
+            Row(children: [
+              if (onEdit != null)
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(Obsidian.rMd)),
+                    ),
+                    onPressed: onEdit,
+                    icon: const Icon(Icons.tune_rounded, size: 15, color: Obsidian.onSurfaceVariant),
+                    label: Text('Change TP / SL', style: Obsidian.body(size: 12.5)),
+                  ),
                 ),
-                onPressed: onClose,
-                child: Text('Close this position',
-                    style: Obsidian.body(size: 12.5)),
-              ),
-            ),
+              if (onEdit != null && onClose != null) const SizedBox(width: 8),
+              if (onClose != null)
+                Expanded(
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(Obsidian.rMd)),
+                    ),
+                    onPressed: onClose,
+                    child: Text('Close this position',
+                        style: Obsidian.body(size: 12.5)),
+                  ),
+                ),
+            ]),
           ],
         ],
       ),
@@ -251,10 +272,7 @@ class PositionCard extends StatelessWidget {
 /// close, and it is editable because usually is not always.
 Future<double?> askExitPrice(BuildContext context, TradeEntry t,
     {double? livePrice}) async {
-  final c = TextEditingController(
-      text: livePrice == null
-          ? ''
-          : livePrice.toStringAsFixed(livePrice >= 100 ? 2 : 4));
+  final c = TextEditingController(text: priceInput(livePrice));
   return showDialog<double>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -288,6 +306,96 @@ Future<double?> askExitPrice(BuildContext context, TradeEntry t,
                 style: Obsidian.body(color: Obsidian.primary))),
       ],
     ),
+  );
+}
+
+
+/// Edit an open entry's target and stop. Returns (takeProfit, stopLoss),
+/// either null to clear it, or null altogether on cancel. Refuses a level
+/// on the wrong side of the entry -- a long's stop above its entry is not
+/// a stop, and would close the trade the moment it was saved.
+Future<({double? tp, double? sl})?> askLevels(BuildContext context, TradeEntry t,
+    {double? livePrice}) async {
+  final tpC = TextEditingController(text: priceInput(t.takeProfit));
+  final slC = TextEditingController(text: priceInput(t.stopLoss));
+  String? problem;
+  return showDialog<({double? tp, double? sl})>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(builder: (ctx, setState) {
+      double? parse(String v) {
+        final x = v.trim().replaceAll(',', '');
+        return x.isEmpty ? null : double.tryParse(x);
+      }
+
+      void save() {
+        final tp = parse(tpC.text), sl = parse(slC.text);
+        final short = t.isShort;
+        final ref = livePrice ?? t.entryPrice;
+        if (tpC.text.trim().isNotEmpty && tp == null ||
+            slC.text.trim().isNotEmpty && sl == null) {
+          setState(() => problem = 'That is not a number.');
+          return;
+        }
+        if (tp != null && (short ? tp >= ref : tp <= ref)) {
+          setState(() => problem = short
+              ? 'A short\'s target must be below the price.'
+              : 'A long\'s target must be above the price.');
+          return;
+        }
+        if (sl != null && (short ? sl <= ref : sl >= ref)) {
+          setState(() => problem = short
+              ? 'A short\'s stop must be above the price.'
+              : 'A long\'s stop must be below the price.');
+          return;
+        }
+        Navigator.of(ctx).pop((tp: tp, sl: sl));
+      }
+
+      return AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        title: Text('Change the levels', style: Obsidian.headlineMd()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+                t.trailed
+                    ? 'A daily entry is trailed: leave the target empty and the '
+                        'stop follows the swings from wherever you put it. It '
+                        'only ever tightens.'
+                    : 'Leave a field empty to have no level there. The app closes '
+                        'the entry when price touches either.',
+                style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: tpC,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: Obsidian.dataTable(size: 15),
+              decoration: const InputDecoration(labelText: 'Take profit'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: slC,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: Obsidian.dataTable(size: 15),
+              decoration: const InputDecoration(labelText: 'Stop loss'),
+            ),
+            if (problem != null) ...[
+              const SizedBox(height: 8),
+              Text(problem!, style: Obsidian.body(color: Obsidian.error, size: 11.5)),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('Cancel', style: Obsidian.body())),
+          TextButton(
+              onPressed: save,
+              child: Text('Save', style: Obsidian.body(color: Obsidian.primary))),
+        ],
+      );
+    }),
   );
 }
 
@@ -465,11 +573,12 @@ class JournalCard extends StatelessWidget {
     this.onClose,
     this.onDelete,
     this.onOpen,
+    this.onEdit,
   });
 
   final TradeEntry entry;
   final double? livePrice;
-  final VoidCallback? onClose, onDelete;
+  final VoidCallback? onClose, onDelete, onEdit;
 
   /// Tap anywhere on the card that is not a button: open this pair's
   /// dashboard, on the timeframe it was logged from.
@@ -616,7 +725,26 @@ class JournalCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (onClose != null && onDelete != null)
+                if (onEdit != null) ...[
+                  if (onClose != null) const SizedBox(width: 8),
+                  SizedBox(
+                    width: 42,
+                    height: 36,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        side: BorderSide(
+                            color: Colors.white.withValues(alpha: 0.10)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(Obsidian.rMd)),
+                      ),
+                      onPressed: onEdit,
+                      child: const Icon(Icons.tune_rounded,
+                          size: 16, color: Obsidian.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+                if ((onClose != null || onEdit != null) && onDelete != null)
                   const SizedBox(width: 8),
                 if (onDelete != null)
                   SizedBox(

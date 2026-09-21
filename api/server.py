@@ -252,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
     # paying for, and warning an unsubscribed user that the market is about
     # to move is the right thing to do regardless of whether they pay.
     FREE = OPEN + ("/api/chart", "/api/calendar", "/api/me",
-                   "/api/auth/logout", "/api/billing/checkout",
+                   "/api/auth/logout", "/api/auth/username", "/api/billing/checkout",
                    # The CATALOGUE is free; the RESULTS are not. It describes
                    # which controls exist and what the presets contain, which
                    # is the thing an unsubscribed user needs in order to see
@@ -943,6 +943,13 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/auth/logout":
                 acc.end_session(self._bearer())
                 self._send({"ok": True})
+            elif route == "/api/auth/username":
+                _, user = self._principal()
+                if user is None:
+                    self._send({"error": "sign in first"}, status=401)
+                    return
+                u = acc.rename(user.identifier, str(body.get("username") or ""))
+                self._send({"ok": True, "account": u.public()})
             elif route == "/api/billing/checkout":
                 from api.billing import checkout_session
                 _, user = self._principal()

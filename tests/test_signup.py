@@ -538,3 +538,31 @@ def test_the_oauth_start_route_redirects_and_a_bad_provider_is_a_page():
         assert h.status == 200 and h.json == {"token": None}, h.json
         return True
     return _oauth_env(go)
+
+
+def test_the_shown_name_can_be_changed_under_the_sign_up_rules():
+    acc, _ = _acc()
+    _without_mailer(lambda: acc.register("a@x.com", PW, username="Timo"))
+    _without_mailer(lambda: acc.register("b@x.com", PW, username="Other"))
+    u = acc.rename("a@x.com", "Vanth_Tim")
+    assert u.username == "Vanth_Tim"
+    assert acc.get("a@x.com").username == "Vanth_Tim"
+    # the old name is free again, the new one is not; case is blind
+    for taken, who in (("other", "a@x.com"), ("VANTH_TIM", "b@x.com")):
+        try:
+            acc.rename(who, taken)
+        except AuthError as e:
+            assert "taken" in str(e), e
+        else:
+            raise AssertionError(f"{taken} was accepted for {who}")
+    acc.rename("b@x.com", "timo")             # freed by the first rename
+    # and the sign-up rules still apply
+    for bad in ("ab", "1abc", "has space", "x" * 25):
+        try:
+            acc.rename("a@x.com", bad)
+        except AuthError:
+            continue
+        raise AssertionError(bad)
+    # keeping your own name is not a collision
+    assert acc.rename("a@x.com", "vanth_tim").username == "vanth_tim"
+    return True

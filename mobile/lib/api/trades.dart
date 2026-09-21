@@ -381,6 +381,23 @@ class TradeEntry {
     );
   }
 
+  /// This entry with its levels changed by hand. Either may be cleared
+  /// (null), which is how a daily entry drops the target it should not
+  /// have. A trailed entry whose stop is moved by hand starts its trail
+  /// from there: the trail only ever tightens from the stop it is given.
+  TradeEntry withLevels({required double? takeProfit, required double? stopLoss}) =>
+      TradeEntry(
+        id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
+        openedAt: openedAt, takeProfit: takeProfit, stopLoss: stopLoss,
+        closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
+        note: note, highSince: highSince, lowSince: lowSince,
+        interval: interval, limitAskedAt: limitAskedAt,
+        keptPastLimit: keptPastLimit,
+        // a hand-set stop is judged from now, not from the entry: the range
+        // since entry may hold a wick the new stop was placed to ignore
+        stopMovedAt: stopLoss != this.stopLoss ? DateTime.now().toUtc() : stopMovedAt,
+      );
+
   TradeEntry _copy({DateTime? limitAskedAt, bool? keptPastLimit}) =>
       TradeEntry(
         id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
@@ -847,6 +864,34 @@ class Trades extends ChangeNotifier {
     await _save(all);
     unawaited(Notifications.instance.dismissTimeLimitQuestion(id));
     return all[i];
+  }
+
+  /// Change an open entry's target and stop. Returns the updated entry, or
+  /// null if it is not open. The next settle pass judges the new levels
+  /// against price from this moment.
+  Future<TradeEntry?> setLevels(String id,
+      {required double? takeProfit, required double? stopLoss}) async {
+    final all = List<TradeEntry>.from(await load());
+    final i = all.indexWhere((t) => t.id == id);
+    if (i < 0 || !all[i].isOpen) return null;
+    all[i] = all[i].withLevels(takeProfit: takeProfit, stopLoss: stopLoss);
+    await _save(all);
+    notifyListeners();
+    return all[i];
+  }
+
+  /// Wipe the closed history -- the statistics start again from here.
+  /// Open positions are kept: they are live money, not a score. Returns
+  /// how many were removed.
+  Future<int> clearClosed() async {
+    final all = await load();
+    final keep = all.where((t) => t.isOpen).toList();
+    final removed = all.length - keep.length;
+    if (removed > 0) {
+      await _save(keep);
+      notifyListeners();
+    }
+    return removed;
   }
 
   Future<void> close(String id, double price, {String by = ''}) async {

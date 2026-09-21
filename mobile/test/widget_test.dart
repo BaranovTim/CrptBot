@@ -2406,4 +2406,82 @@ void main() {
       expect(d.liveStopLoss(87000.0), closeTo(87000.0 * (1 - 0.0918), 1e-6));
     });
   });
+
+  group('levels keep every digit a coin moves in', () {
+    test('a small-priced coin is not rounded to its own entry', () {
+      // 1000PEPE at 0.003624: four decimals gave "0.0036" for entry, target
+      // and stop alike, and the trade closed the moment it was logged
+      expect(priceDecimals(0.003624), 6);
+      expect(priceInput(0.003624), '0.003624');
+      expect(priceInput(0.0036891), '0.003689');
+      expect(priceInput(0.12345678), '0.1235');
+      expect(priceInput(2.3456789), '2.3457');
+      expect(priceInput(85346.123), '85346.12');
+      expect(priceInput(null), '');
+      // a stop seeded 1% under a small entry stays under it after formatting
+      final entry = 0.003624, sl = entry * 0.99;
+      expect(double.parse(priceInput(sl)), lessThan(double.parse(priceInput(entry))));
+    });
+  });
+
+  group('changing the levels of an open entry', () {
+    TradeEntry e(String side, {double? tp, double? sl, String? iv}) => TradeEntry(
+        id: 'e-$side', symbol: 'ETHUSDT', side: side, size: 1, entryPrice: 100,
+        openedAt: DateTime.now(), takeProfit: tp, stopLoss: sl, interval: iv ?? '4h');
+
+    test('withLevels replaces both, allows clearing, and stamps a moved stop', () {
+      final t = e('LONG', tp: 110, sl: 90);
+      final w = t.withLevels(takeProfit: 115, stopLoss: 95);
+      expect(w.takeProfit, 115);
+      expect(w.stopLoss, 95);
+      expect(w.stopMovedAt, isNotNull, reason: 'a hand-set stop is judged from now');
+      final same = t.withLevels(takeProfit: 120, stopLoss: 90);
+      expect(same.stopMovedAt, isNull, reason: 'the stop did not change');
+      final cleared = t.withLevels(takeProfit: null, stopLoss: 90);
+      expect(cleared.takeProfit, isNull);
+    });
+
+    test('setLevels writes through the store and leaves closed entries alone', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      final t = e('SHORT', tp: 90, sl: 110);
+      await Trades.instance.add(t);
+      final u = await Trades.instance.setLevels(t.id, takeProfit: 85, stopLoss: 105);
+      expect(u!.takeProfit, 85);
+      expect((await Trades.instance.load()).single.stopLoss, 105);
+      await Trades.instance.close(t.id, 95);
+      expect(await Trades.instance.setLevels(t.id, takeProfit: 1, stopLoss: 2), isNull);
+    });
+  });
+
+  group('resetting the score', () {
+    test('clearClosed removes the closed history and keeps open positions', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      TradeEntry e(String id) => TradeEntry(
+          id: id, symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+          openedAt: DateTime.now(), stopLoss: 90, interval: '4h');
+      await Trades.instance.add(e('open1'));
+      await Trades.instance.add(e('done1'));
+      await Trades.instance.add(e('done2'));
+      await Trades.instance.close('done1', 105);
+      await Trades.instance.close('done2', 95);
+      expect(await Trades.instance.clearClosed(), 2);
+      final left = await Trades.instance.load();
+      expect(left.map((t) => t.id), ['open1']);
+      expect(await Trades.instance.clearClosed(), 0);
+    });
+  });
+
+  group('the shown name', () {
+    test('survives the account cache', () async {
+      SharedPreferences.setMockInitialValues({});
+      final a = Account.fromJson({'identifier': 'a@x.com', 'username': 'Vanth_Tim',
+          'tier': 'pro', 'entitled': true});
+      await Settings.instance.saveAccount(a);
+      final back = await Settings.instance.cachedAccount();
+      expect(back!.username, 'Vanth_Tim');
+      expect(back.displayName, 'Vanth_Tim');
+    });
+  });
 }

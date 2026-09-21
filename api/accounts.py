@@ -445,6 +445,26 @@ class Accounts:
                     return cand
         return None
 
+    def rename(self, identifier: str, username: str) -> User:
+        """Change the name shown in the app. Same rules as at sign-up --
+        4-24 characters, a letter first, unique across accounts, case
+        blind -- and the rules are enforced here, not in the app, because
+        the app is not the only client that could ask."""
+        uname = (username or "").strip()
+        bad = username_problem(uname)
+        if bad:
+            raise AuthError(bad)
+        with self._lock:
+            u = self._users.get((identifier or "").lower())
+            if u is None:
+                raise AuthError("no such account")
+            other = self._by_username(uname)
+            if other is not None and other.identifier != u.identifier:
+                raise AuthError("that username is taken")
+            u.username = uname
+            self._save()
+            return u
+
     def _by_username(self, username: str) -> Optional[User]:
         want = (username or "").strip().lower()
         if not want:

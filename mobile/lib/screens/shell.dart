@@ -689,6 +689,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                 account: widget.account,
                 onSignOut: _signOut,
                 onOpenSymbol: _openSymbol,
+                onAccountChanged: widget.onAccountChanged,
               )
             : SubscribeScreen(
                 client: widget.client,
