@@ -78,7 +78,7 @@ class _Cached:
 class TradingService:
     """One instance, shared by every request. Caches are per-bar, not per-call."""
 
-    def __init__(self, symbol: str = "BTCUSDT", interval: str = "1h",
+    def __init__(self, symbol: str = "BTCUSDT", interval: str = "4h",
                  asset: str = "BTC"):
         # the DEFAULT pair. Every read below can be pointed at another one,
         # because the app now has a timeframe selector and each timeframe is
@@ -746,7 +746,7 @@ class TradingService:
 
         def run() -> None:
             # dearest last: 1m is ~100s a pair, 1d is ~22s
-            order = ["1d", "4h", "1h", "15m"]
+            order = ["1d", "4h"]
             t_start = time.time()
             done = 0
             for tf in order:
@@ -1146,7 +1146,7 @@ class TradingService:
     # build takes ~24s on the single shared vCPU (measured: 24 pairs warmed
     # in 587s) and a 1m bar closes every 60s, so four coins could never keep
     # up. These four cost about 14% of the core.
-    RECORD_INTERVALS = ("15m", "1h", "4h", "1d")
+    RECORD_INTERVALS = ("4h", "1d")
 
     def record_symbols(self) -> List[str]:
         """Which pairs the recorder and the alert engine keep warm.

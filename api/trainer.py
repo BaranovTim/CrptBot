@@ -64,7 +64,7 @@ KEEP_FINISHED = 20
 MAX_PER_DAY = 12
 DAY = 86400.0
 
-VALID_INTERVALS = ("15m", "1h", "4h", "1d")
+VALID_INTERVALS = ("4h", "1d")
 
 
 def market_for(symbol: str, requested: str) -> str:

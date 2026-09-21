@@ -161,7 +161,12 @@ class PushDelivery {
       ..sort((a, b) => a.symbol.compareTo(b.symbol));
     return [
       for (final t in open)
-        {'symbol': t.symbol, 'side': t.side, 'entry': t.entryPrice},
+        {
+          'symbol': t.symbol, 'side': t.side, 'entry': t.entryPrice,
+          // the timeframe the entry was logged on, so the relay's advice
+          // can tell a call on the entry's own timeframe from another's
+          if (t.interval != null) 'interval': t.interval!,
+        },
     ];
   }
 

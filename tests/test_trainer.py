@@ -60,7 +60,7 @@ def test_an_unknown_timeframe_is_refused_before_the_work_starts():
     t = _fresh()
     r = t.submit("BTCUSDT", "3h")
     assert not r["ok"]
-    assert "3h" in r["error"] and "1h" in r["error"], r
+    assert "3h" in r["error"] and "4h" in r["error"], r
     # ...and nothing was queued
     assert t.status()["queued"] == []
     return True
@@ -68,8 +68,8 @@ def test_an_unknown_timeframe_is_refused_before_the_work_starts():
 
 def test_the_same_pair_is_never_queued_twice():
     t = _fresh()
-    assert t.submit("BTCUSDT", "1h")["ok"]
-    again = t.submit("BTCUSDT", "1h")
+    assert t.submit("BTCUSDT", "4h")["ok"]
+    again = t.submit("BTCUSDT", "4h")
     assert not again["ok"]
     assert "already" in again["error"]
     assert len(t.status()["queued"]) == 1
@@ -79,8 +79,8 @@ def test_the_same_pair_is_never_queued_twice():
 def test_the_queue_has_a_ceiling():
     t = _fresh()
     for i in range(T.MAX_QUEUE):
-        assert t.submit(f"SYM{i}", "1h")["ok"], i
-    over = t.submit("ONEMORE", "1h")
+        assert t.submit(f"SYM{i}", "4h")["ok"], i
+    over = t.submit("ONEMORE", "4h")
     assert not over["ok"]
     assert "full" in over["error"]
     return True
@@ -141,7 +141,7 @@ def test_a_verdict_about_another_timeframe_is_not_claimed():
 
 def test_a_running_job_is_not_cancellable_but_a_queued_one_is():
     t = _fresh()
-    r = t.submit("BTCUSDT", "1h")
+    r = t.submit("BTCUSDT", "4h")
     jid = r["job"]["id"]
     assert t.cancel(jid)["ok"]
     assert t.status()["queued"] == []
@@ -166,7 +166,7 @@ def test_a_restart_does_not_leave_a_job_claiming_to_be_running():
 
         T.STATE.write_text(json.dumps({
             "queue": [], "finished": [],
-            "current": asdict(T.Job(id="a", symbol="BTCUSDT", interval="1h",
+            "current": asdict(T.Job(id="a", symbol="BTCUSDT", interval="4h",
                                     market="crypto", state=T.RUNNING)),
         }))
         t = T.Trainer()
@@ -190,16 +190,16 @@ def test_one_account_cannot_fill_the_day():
         # call never counts — and a loop that let the queue fill would submit
         # fewer than MAX_PER_DAY while appearing to submit them all.
         t._queue.clear()
-        r = t.submit(f"SYM{i}", "1h", account="alice")
+        r = t.submit(f"SYM{i}", "4h", account="alice")
         assert r["ok"], (i, r)
 
     t._queue.clear()
-    over = t.submit("LASTONE", "1h", account="alice")
+    over = t.submit("LASTONE", "4h", account="alice")
     assert not over["ok"] and "day" in over["error"], over
 
     # ...and a different account is unaffected
     t._queue.clear()
-    assert t.submit("OTHER", "1h", account="bob")["ok"]
+    assert t.submit("OTHER", "4h", account="bob")["ok"]
     return True
 
 
@@ -215,7 +215,7 @@ def test_a_usdt_pair_is_fitted_as_crypto_whatever_the_caller_claims():
     assert T.market_for("BTCUSDT", "crypto") == "crypto"
 
     t = _fresh()
-    r = t.submit("AVGOUSDT", "1h", market="stocks", account="tim")
+    r = t.submit("AVGOUSDT", "4h", market="stocks", account="tim")
     assert r["ok"] is True
     assert r["job"]["market"] == "crypto", r["job"]
     return True
@@ -225,7 +225,7 @@ def test_a_seed_that_found_nothing_says_so_by_name():
     """"Usually the higher-timeframe bars are missing" was the note for every
     clean exit, including the ones where the provider had never heard of the
     symbol. Same sentence, different causes, different fixes."""
-    job = T.Job(id="x", symbol="AVGOUSDT", interval="1h", market="stocks")
+    job = T.Job(id="x", symbol="AVGOUSDT", interval="4h", market="stocks")
     note = T._no_model_note(job, "equity seed AVGOUSDT 1h: no bars")
     assert "AVGOUSDT" in note and "provider" in note, note
 

@@ -39,7 +39,14 @@ import pandas as pd
 # `price_range` reads them to see whether a level was touched, and the
 # collector's health check watches them -- so the lookup tables below keep
 # their 1m and 5m rows. Only this list decides what is offered and trained.
-TIMEFRAMES: List[str] = ["15m", "1h", "4h", "1d"]
+# 4h and 1d. 15m and 1h were removed on 2026-09-21: on both, the models
+# predict (the 1h structure fit reached 0.57 AUC and a 65% hit rate) but the
+# next level is ~0.7% away and a 0.10% round trip eats the whole edge --
+# the best 1h configuration made +0.07% per trade gross and lost after fees
+# (research/structure_levels.py). Their bars are still collected: 1m for
+# level detection, 15m and 1h for research and for the higher-timeframe
+# context the remaining models read.
+TIMEFRAMES: List[str] = ["4h", "1d"]
 
 # Binance notation -> pandas offset alias.
 _PANDAS_RULE: Dict[str, str] = {

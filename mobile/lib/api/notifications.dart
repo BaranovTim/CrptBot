@@ -82,12 +82,61 @@ String describeWhen(DateTime at, {DateTime? now}) {
 /// on that symbol. Mirrors `entry_line` in `api/push.py` word for word, and
 /// the price goes through `priceText` so it reads as the same number the
 /// dashboard shows.
-Future<String?> heldLine(String symbol) async {
+Future<String?> heldLine(String symbol,
+    {String? alertInterval, String? to}) async {
   final open = (await Trades.instance.load())
       .where((t) => t.isOpen && t.symbol == symbol);
   if (open.isEmpty) return null;
   final t = open.first;
-  return 'Open entry: ${t.side} @ ${priceText(t.entryPrice, prefix: '')}';
+  final line = 'Open entry: ${t.side} @ ${priceText(t.entryPrice, prefix: '')}';
+  final adv = adviceLine(
+      side: t.side, entryInterval: t.interval,
+      alertInterval: alertInterval, to: to);
+  return adv == null ? line : '$line\n$adv';
+}
+
+/// What to do with the entry you hold when the call on its coin changes.
+///
+/// Mirrors `advice_line` in `api/push.py` -- the relay writes this for the
+/// lock screen, the app writes it for its own banner, and the two must say
+/// the same thing. The numbers are from the 4h held-out year: leaving when
+/// the call is withdrawn was no better than holding to the levels; entries
+/// that saw the opposite call lost 1.7% on average and leaving at the call
+/// was slightly better than holding. A call on another timeframe than the
+/// entry's is context: the entry's own timeframe manages its exit.
+String? adviceLine({
+  required String side,
+  String? entryInterval,
+  String? alertInterval,
+  String? to,
+}) {
+  final s = side.toUpperCase();
+  final t = (to ?? '').toUpperCase();
+  if ((s != 'LONG' && s != 'SHORT') || !const {'BUY', 'SELL', 'FLAT'}.contains(t)) {
+    return null;
+  }
+  final piv = entryInterval ?? '';
+  if (piv.isNotEmpty && alertInterval != null && alertInterval.isNotEmpty &&
+      piv != alertInterval) {
+    final manager = piv == '1d' ? 'the trailing stop decides' : 'its $piv levels decide';
+    return 'Your entry is on $piv; this call is on $alertInterval. Stay — $manager the exit.';
+  }
+  final same = (t == 'BUY') == (s == 'LONG');
+  if (t == 'FLAT') {
+    return piv == '1d'
+        ? 'Stay — the trailing stop decides. A withdrawn call is not an exit.'
+        : 'Stay — your levels decide. Leaving when the call is withdrawn was '
+            'measured no better than holding to them.';
+  }
+  if (same) return 'Stay in — the call agrees with your entry.';
+  final other = t == 'BUY' ? 'LONG' : 'SHORT';
+  if (piv == '1d') {
+    return 'The model now calls $other. Your trailing stop stays where it is; '
+        'closing or tightening is your call — this case was not measured on 1d.';
+  }
+  return 'Close it — the model now calls the other way. Entries that saw this '
+      'lost 1.7% on average in the test year; leaving at the call was slightly '
+      'better than holding. A fresh $other entry is on the card if you want to reverse.';
 }
 
 /// Where a tapped notification wants the app to go.
@@ -420,7 +469,9 @@ class Notifications {
     // for the reason in `api/push.py`: the collapsed notification shows one
     // line, and when you hold the coin a call just changed on, that line
     // is "you hold this".
-    final held = a.kind == 'signal' ? await heldLine(a.symbol) : null;
+    final held = a.kind == 'signal'
+        ? await heldLine(a.symbol, alertInterval: a.interval, to: a.extra['to'])
+        : null;
     final body = [
       ?held,
       a.body,

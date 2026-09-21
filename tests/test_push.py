@@ -384,7 +384,10 @@ def test_a_signal_on_a_coin_you_hold_says_so_first():
     assert len(rec.sent) == 1, rec.sent
     lines = rec.sent[0]["message"].split("\n")
     assert lines[0] == "Open entry: LONG @ 79,200.00", lines
-    assert lines[1] == "STRONG", lines
+    # the second line says what to do about it; a call on the entry's own
+    # side is nothing to do
+    assert lines[1] == "Stay in -- the call agrees with your entry.", lines
+    assert lines[2] == "STRONG", lines
     return True
 
 
@@ -446,7 +449,7 @@ def test_positions_are_cleaned_and_replaced_not_accumulated():
               "not a dict", {"symbol": "", "side": "LONG", "entry": 1.0})
     sub = r.for_account("tim")
     assert sub["positions"] == [
-        {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0}], sub
+        {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0, "interval": ""}], sub
 
     r.register(t, account="tim", sensitivity="strong", positions=[])
     assert r.for_account("tim")["positions"] == [], "closing did not clear"
@@ -534,4 +537,54 @@ def test_silenced_survives_a_restart_and_defaults_off():
     assert again.for_account("tim")["silenced"] is True
     r.register(new_topic(), account="ann")
     assert r.for_account("ann")["silenced"] is False
+    return True
+
+
+def test_the_advice_says_what_to_do_with_the_entry_you_hold():
+    """The second line of a signal notification on a coin you are in.
+
+    Each case was measured on the 4h held-out year (see `advice_line`):
+    a withdrawn call is not an exit; the opposite call is; a call on the
+    entry's own side is nothing to do; a call on another timeframe is
+    context the entry's own timeframe manages."""
+    from api.push import advice_line
+
+    long4h = {"symbol": "BTCUSDT", "side": "LONG", "entry": 80000.0, "interval": "4h"}
+    assert advice_line(long4h, "4h", "BUY").startswith("Stay in")
+    assert advice_line(long4h, "4h", "FLAT").startswith("Stay -- your levels decide")
+    sell = advice_line(long4h, "4h", "SELL")
+    assert sell.startswith("Close it") and "fresh SHORT entry" in sell
+    # the mirror for a short
+    short4h = dict(long4h, side="SHORT")
+    assert advice_line(short4h, "4h", "SELL").startswith("Stay in")
+    assert "fresh LONG entry" in advice_line(short4h, "4h", "BUY")
+    # a daily entry is trailed: no exit on a withdrawn call, and the
+    # opposite call is flagged as unmeasured rather than turned into a rule
+    long1d = dict(long4h, interval="1d")
+    assert "trailing stop" in advice_line(long1d, "1d", "FLAT")
+    assert "not measured" in advice_line(long1d, "1d", "SELL")
+    # another timeframe's call is context
+    x = advice_line(long1d, "4h", "SELL")
+    assert x.startswith("Your entry is on 1d; this call is on 4h") and "trailing stop" in x
+    y = advice_line(long4h, "1d", "SELL")
+    assert "its 4h levels decide" in y
+    # an entry logged before timeframes were recorded is judged on the call's
+    assert advice_line({"symbol": "BTCUSDT", "side": "LONG", "entry": 1.0, "interval": ""}, "4h", "SELL").startswith("Close it")
+    assert advice_line(long4h, "4h", "STALE") is None
+    return True
+
+
+def test_the_relay_puts_the_advice_on_the_second_line():
+    r, rec = _relay()
+    r.register(new_topic(), account="tim", sensitivity="small",
+               positions=[{"symbol": "BTCUSDT", "side": "LONG", "entry": 80000.0, "interval": "4h"}])
+    r.deliver([FakeAlert(id="x", symbol="BTCUSDT", interval="4h", strength="strong",
+                         title="BTCUSDT: 4h; BUY -> SELL", body="STRONG\nTake profit 1",
+                         extra={"from": "BUY", "to": "SELL"})])
+    lines = rec.sent[-1]["message"].split("\n")
+    assert lines[0] == "Open entry: LONG @ 80,000.00", lines
+    assert lines[1].startswith("Close it -- the model now calls the other way"), lines
+    assert lines[2] == "STRONG"
+    # and the interval survives a round trip through the registry
+    assert r.for_account("tim")["positions"][0]["interval"] == "4h"
     return True

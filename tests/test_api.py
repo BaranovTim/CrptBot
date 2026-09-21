@@ -186,7 +186,12 @@ def test_dashboard_payload_survives_strict_json():
         return True                            # nothing collected here
 
     from api.service import get_service
-    d = get_service().dashboard()
+    svc = get_service()
+    # BUILT, not read from the cache: other tests in this file stand in a
+    # placeholder build for the default pair, and the refresh worker
+    # persists whatever it built. This test is about the real payload.
+    svc._dash.pop((svc.symbol, svc.interval), None)
+    d = svc.dashboard()
     json.dumps(d, allow_nan=False)             # the actual guarantee
 
     assert d["status"]["trades"] is False, "the app claimed the bot trades"
@@ -842,9 +847,9 @@ def test_the_warm_order_puts_the_cheap_timeframes_first():
     order = re.search(r'order = \[([^\]]+)\]', src)
     assert order, "warm() no longer declares an explicit order"
     got = [x.strip().strip('"\'') for x in order.group(1).split(",")]
-    # 1m and 5m are no longer trading timeframes; dearest of what remains
-    # is still last
-    assert got == ["1d", "4h", "1h", "15m"], got
+    # 1m, 5m, 15m and 1h are no longer trading timeframes; dearest of what
+    # remains is still last
+    assert got == ["1d", "4h"], got
     # and the symbol loop must be INSIDE the interval loop
     assert src.index("for tf in order") < src.index("for sym in syms"), \
         "warming is symbol-major again; the last pair stays cold"

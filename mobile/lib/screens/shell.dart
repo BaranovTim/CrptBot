@@ -71,7 +71,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   /// The selected timeframe. Not a chart setting — each timeframe is its own
   /// fitted model, so this decides which model answers.
-  String _interval = '1h';
+  String _interval = '4h';
 
   late final LivePriceService _live = LivePriceService(symbol: _symbol);
   Timer? _alertTimer;
@@ -255,7 +255,12 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         // Silenced: neither. The alert is still in the bell.
         if (Notifications.instance.silenced) continue;
         await Notifications.instance.showAlert(a);
-        _banner(a);
+        // the banner carries the same "you hold this, and here is what to
+        // do" lines the lock-screen notification does
+        final held = a.kind == 'signal'
+            ? await heldLine(a.symbol, alertInterval: a.interval, to: a.extra['to'])
+            : null;
+        _banner(a, held: held);
       }
     } catch (e) {
       debugPrint('[alerts] poll failed: $e');
@@ -287,7 +292,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   /// the same alert in the shade does. Swiping it away still dismisses it.
   /// A banner that names a coin and does nothing when pressed reads as
   /// broken, and it was.
-  void _banner(Alert a) {
+  void _banner(Alert a, {String? held}) {
     if (!mounted) return;
     final tone = switch (a.kind) {
       'signal' => Obsidian.green,
@@ -323,6 +328,12 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                   style: Obsidian.bodyLg(color: tone)
                       .copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
+              if (held != null) ...[
+                Text(held,
+                    style: Obsidian.body(size: 12.5)
+                        .copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+              ],
               Text(a.body, style: Obsidian.body(size: 12.5)),
               const SizedBox(height: 4),
               Text(a.whenLine(),

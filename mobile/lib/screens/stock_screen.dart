@@ -67,7 +67,7 @@ class _StockScreenState extends State<StockScreen> {
   /// Restored from the LAST ONE LOOKED AT, in either market — see
   /// `Settings.lastInterval`. It used to be hardcoded to 1d, so opening a
   /// stock threw away whatever timeframe you had just been reading.
-  String _interval = '1h';
+  String _interval = '4h';
 
   /// The user's signal-strength setting, applied to stocks exactly as it is
   /// to crypto — one setting, both markets.

@@ -1308,17 +1308,20 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final s = Settings.instance;
 
-    // a sensible default before anything is chosen: 1h is the only timeframe
-    // whose models survived the fold-spread guard
-    expect(await s.lastInterval(), '1h');
+    // a sensible default before anything is chosen: 4h, the shorter of the
+    // two timeframes still offered (15m and 1h could not clear a fee)
+    expect(await s.lastInterval(), '4h');
 
-    await s.saveInterval('4h');
+    await s.saveInterval('1d');
+    expect(await s.lastInterval(), '1d');
+    // a timeframe the server no longer serves falls back too
+    await s.saveInterval('1h');
     expect(await s.lastInterval(), '4h');
 
     // a value that is not a real timeframe falls back rather than being
     // handed to an API that would 400 on it
     await s.saveInterval('3h');
-    expect(await s.lastInterval(), '1h');
+    expect(await s.lastInterval(), '4h');
   });
 
   test('an exit to FLAT is delivered at every sensitivity setting', () {
@@ -2302,6 +2305,60 @@ void main() {
       expect(titles, contains('200-day average'));
       expect(titles, contains('no time limit'));
       expect(howToSteps.length, greaterThanOrEqualTo(10));
+    });
+  });
+
+  group('what to do with the entry you hold', () {
+    test('the advice mirrors the relay, case by case', () {
+      // a call on the entry's own side: nothing to do
+      expect(adviceLine(side: 'LONG', entryInterval: '4h', alertInterval: '4h', to: 'BUY'),
+          startsWith('Stay in'));
+      // withdrawn: stay, measured
+      expect(adviceLine(side: 'LONG', entryInterval: '4h', alertInterval: '4h', to: 'FLAT'),
+          startsWith('Stay — your levels decide'));
+      // the opposite call: close, with the measured number and the reverse
+      final sell = adviceLine(side: 'LONG', entryInterval: '4h', alertInterval: '4h', to: 'SELL')!;
+      expect(sell, startsWith('Close it'));
+      expect(sell, contains('fresh SHORT entry'));
+      expect(adviceLine(side: 'SHORT', entryInterval: '4h', alertInterval: '4h', to: 'BUY'),
+          contains('fresh LONG entry'));
+      // daily is trailed
+      expect(adviceLine(side: 'LONG', entryInterval: '1d', alertInterval: '1d', to: 'FLAT'),
+          contains('trailing stop'));
+      expect(adviceLine(side: 'LONG', entryInterval: '1d', alertInterval: '1d', to: 'SELL'),
+          contains('not measured'));
+      // another timeframe's call is context
+      expect(adviceLine(side: 'LONG', entryInterval: '1d', alertInterval: '4h', to: 'SELL'),
+          startsWith('Your entry is on 1d; this call is on 4h'));
+      expect(adviceLine(side: 'LONG', entryInterval: '4h', alertInterval: '1d', to: 'SELL'),
+          contains('its 4h levels decide'));
+      // an old entry with no timeframe is judged on the call's own
+      expect(adviceLine(side: 'LONG', entryInterval: null, alertInterval: '4h', to: 'SELL'),
+          startsWith('Close it'));
+      expect(adviceLine(side: 'LONG', entryInterval: '4h', alertInterval: '4h', to: 'STALE'), isNull);
+    });
+
+    test('the held line carries the advice on its second line', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(TradeEntry(
+          id: 'h', symbol: 'ETHUSDT', side: 'SHORT', size: 1, entryPrice: 2500,
+          openedAt: DateTime.now(), stopLoss: 2600, interval: '4h'));
+      final line = await heldLine('ETHUSDT', alertInterval: '4h', to: 'BUY');
+      final parts = line!.split('\n');
+      expect(parts[0], 'Open entry: SHORT @ 2,500.00');
+      expect(parts[1], startsWith('Close it'));
+      expect(await heldLine('BTCUSDT', alertInterval: '4h', to: 'BUY'), isNull);
+    });
+
+    test('the relay is told the timeframe of each open entry', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(TradeEntry(
+          id: 'p', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 80000,
+          openedAt: DateTime.now(), stopLoss: 77000, interval: '1d'));
+      final pos = await PushDelivery.instance.openPositions();
+      expect(pos.single['interval'], '1d');
     });
   });
 }

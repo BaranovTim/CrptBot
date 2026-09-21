@@ -176,8 +176,13 @@ def _clean_positions(raw) -> List[Dict[str, Any]]:
             continue
         if not sym or side not in ("LONG", "SHORT") or not entry > 0:
             continue
+        # the timeframe the entry was logged on, so the advice can tell a
+        # call on the entry's own timeframe from one on another
+        iv = str(p.get("interval") or "").strip()
+        if iv not in ("15m", "1h", "4h", "1d"):
+            iv = ""
         if sym not in out and len(out) < MAX_POSITIONS:
-            out[sym] = {"symbol": sym, "side": side, "entry": entry}
+            out[sym] = {"symbol": sym, "side": side, "entry": entry, "interval": iv}
     return list(out.values())
 
 
@@ -221,6 +226,55 @@ def held_line(sub, symbol: str) -> Optional[str]:
     for p in sub.positions:
         if p.get("symbol") == symbol:
             return entry_line(p["side"], p["entry"])
+    return None
+
+
+def advice_line(position: Dict[str, Any], alert_interval: str, to: str) -> Optional[str]:
+    """What to do with the entry you hold, when the call on its coin changes.
+
+    MEASURED, NOT ASSUMED (research on the 4h held-out year, 1,014 calls):
+      * the call withdrawn to FLAT: leaving at that moment was no better
+        than holding to the target or stop (-0.09% vs -0.08% per trade,
+        lower win rate). So: stay, the levels decide.
+      * the model calling the OPPOSITE way: the trades that saw it lost
+        1.7% on average; leaving at the call was marginally better than
+        holding (+0.12%, inside the noise). So: close, and the fresh call
+        is on the card if you want to reverse.
+      * the call agreeing with the entry: nothing to do.
+    A call on a DIFFERENT timeframe from the entry's is context, not an
+    instruction: the entry's own timeframe manages its exit -- the trail on
+    1d, the levels elsewhere. Mirrored in `notifications.dart`.
+    """
+    side = str(position.get("side") or "").upper()
+    piv = str(position.get("interval") or "")
+    to = (to or "").upper()
+    if side not in ("LONG", "SHORT") or to not in ("BUY", "SELL", "FLAT"):
+        return None
+    if piv and alert_interval and piv != alert_interval:
+        manager = "the trailing stop" if piv == "1d" else f"its {piv} levels"
+        return (f"Your entry is on {piv}; this call is on {alert_interval}. "
+                f"Stay -- {manager} decide{'s' if piv == '1d' else ''} the exit.")
+    same = (to == "BUY") == (side == "LONG")
+    if to == "FLAT":
+        if piv == "1d":
+            return "Stay -- the trailing stop decides. A withdrawn call is not an exit."
+        return ("Stay -- your levels decide. Leaving when the call is withdrawn "
+                "was measured no better than holding to them.")
+    if same:
+        return "Stay in -- the call agrees with your entry."
+    other = "LONG" if to == "BUY" else "SHORT"
+    if piv == "1d":
+        return (f"The model now calls {other}. Your trailing stop stays where it is; "
+                f"closing or tightening is your call -- this case was not measured on 1d.")
+    return (f"Close it -- the model now calls the other way. Entries that saw this "
+            f"lost 1.7% on average in the test year; leaving at the call was slightly "
+            f"better than holding. A fresh {other} entry is on the card if you want to reverse.")
+
+
+def held_position(sub, symbol: str) -> Optional[Dict[str, Any]]:
+    for p in sub.positions:
+        if p.get("symbol") == symbol:
+            return p
     return None
 
 
@@ -516,9 +570,16 @@ class PushRelay:
         # visible before you expand anything. Signals only: a news item
         # about a coin you hold is not a decision about your position.
         if getattr(a, "kind", "") == "signal":
-            held = held_line(sub, getattr(a, "symbol", ""))
-            if held:
-                body = held + ("\n" + body if body else "")
+            pos = held_position(sub, getattr(a, "symbol", ""))
+            if pos:
+                lines = [entry_line(pos["side"], pos["entry"])]
+                # and what to do about it: the second line, before the
+                # strength and the levels, because it is the decision
+                extra = getattr(a, "extra", None) or {}
+                adv = advice_line(pos, getattr(a, "interval", ""), str(extra.get("to", "")))
+                if adv:
+                    lines.append(adv)
+                body = "\n".join(lines) + ("\n" + body if body else "")
         payload = {
             "topic": sub.topic,
             "title": a.title[:120],

@@ -219,11 +219,13 @@ class Settings {
     try {
       final prefs = await SharedPreferences.getInstance();
       final v = prefs.getString(_intervalKey);
-      return const {'15m', '1h', '4h', '1d'}.contains(v)
+      // 15m and 1h are no longer offered: a phone that last looked at one
+      // opens on 4h rather than on a timeframe the server will not serve
+      return const {'4h', '1d'}.contains(v)
           ? v!
-          : '1h';
+          : '4h';
     } catch (_) {
-      return '1h';
+      return '4h';
     }
   }
 

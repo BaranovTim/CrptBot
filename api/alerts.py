@@ -299,7 +299,7 @@ class AlertEngine:
         if self._pairs is not None:
             return list(self._pairs)
         try:
-            ivs = getattr(self.svc, "RECORD_INTERVALS", ("1h",))
+            ivs = getattr(self.svc, "RECORD_INTERVALS", ("4h",))
             # The RECORDER's set, not every trained symbol. Watching a pair
             # nothing keeps warm means building it cold on the alert loop's
             # own thread — 160s and ~750MB a time, every 30 seconds, which is
