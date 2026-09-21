@@ -456,6 +456,15 @@ class ApiClient {
   Future<Consensus> consensus({String? symbol}) async =>
       Consensus.fromJson(await _get('/api/consensus${_q(symbol, null)}'));
 
+  /// Where a logged entry's trailing stop sits now (daily entries).
+  Future<Map<String, dynamic>> trail(String symbol, String interval,
+      String side, DateTime openedAt, {double? stop}) async {
+    final q = 'symbol=$symbol&interval=$interval&side=$side'
+        '&opened=${Uri.encodeQueryComponent(openedAt.toUtc().toIso8601String())}'
+        '${stop == null ? '' : '&stop=$stop'}';
+    return await _get('/api/trail?$q');
+  }
+
   /// The followed traders' books and recent moves, for one coin or all.
   Future<SmartMoney> smartMoney({String? symbol, int limit = 20}) async =>
       SmartMoney.fromJson(await _get(

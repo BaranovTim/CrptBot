@@ -117,7 +117,11 @@ BARRIERS: Dict[str, Tuple[float, int]] = {
     # 0.519 at 10 -- and a pooled 10-day model scored 0.530 on a held-out
     # year against controls at 0.50. Whatever the daily features know, it
     # is slow. See research/pooled_daily.py and research/pooled_holdout.py.
-    "1d": (1.0, 10),        # span ~8.27%, hold 10d
+    # Still ten bars for the LABEL. The trade itself is not held to a clock
+    # any more: a daily entry is managed by a trailing stop (agent5/trail.py)
+    # and the model only decides the entry. The label window says how long
+    # the level ahead may take to be reached; ten days measured best.
+    "1d": (1.0, 10),        # levels ~1 ATR each way; label window 10d
 }
 
 
@@ -129,6 +133,13 @@ BARRIERS: Dict[str, Tuple[float, int]] = {
 # each model was asked, and `evaluate` reads that from the model's own cfg.
 GEOMETRY: Dict[str, str] = {
     "4h": "structure",
+    # Daily too, since 2026-09-21. Pooled across the coins as before, but
+    # on the chart's levels: fit before Sep 2025 and scored on the year
+    # after, test AUC 0.55-0.57 against scrambled controls at 0.47-0.50 --
+    # and the same test on the year before that gave the same answer. The
+    # ten-day ATR model under the identical protocol sat at 0.505 / 0.514.
+    # See research/swing_daily.py.
+    "1d": "structure",
 }
 
 

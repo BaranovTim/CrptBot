@@ -214,12 +214,14 @@ def test_day_trading_holds_are_hours_not_days_on_fast_timeframes():
     return True
 
 
-def test_daily_holds_ten_days_because_two_measured_at_chance():
-    """The window curve: 0.498 at 2 days, 0.508 at 5, 0.519 at 10; a pooled
-    ten-day model scored 0.530 on a held-out year against controls at 0.50.
-    Shortening this would put a model at chance back on the daily card."""
+def test_daily_labels_a_ten_day_window_on_structure():
+    """The window curve: 0.498 at 2 days, 0.508 at 5, 0.519 at 10 on ATR;
+    on the chart's levels a pooled ten-day fit scored 0.55-0.57 on two
+    separate held-out years against controls at 0.47-0.50. Daily is a
+    structure timeframe: the slots are sides, both on the ten-day label
+    window, and the trade itself is trailed rather than timed."""
     k, h1, h2 = barriers_for("1d")
-    assert (k, h1, h2) == (1.0, 5, 10), (k, h1, h2)
+    assert (k, h1, h2) == (1.0, 10, 10), (k, h1, h2)
     return True
 
 

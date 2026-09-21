@@ -55,11 +55,19 @@ def main(argv=None) -> int:
                    help="where cached feature frames live (default: a temp dir)")
     a = p.parse_args(argv)
 
+    from core import geometry_for, slot_side
+
     PD.CACHE = Path(a.cache) if a.cache else Path(tempfile.mkdtemp())
     k, h1, h2 = barriers_for(INTERVAL)
+    structure = geometry_for(INTERVAL) == "structure"
     syms = PD.symbols()
-    print(f"pooled daily fit over {len(syms)} coins, +/-{k:g} ATR, "
-          f"holds {h1}/{h2} bars", flush=True)
+    if structure:
+        print(f"pooled daily fit over {len(syms)} coins ON STRUCTURE (next swing / "
+              f"last swing; fallback +/-{k:g} ATR), window {h2} bars; "
+              f"h1 = long model, h2 = short model", flush=True)
+    else:
+        print(f"pooled daily fit over {len(syms)} coins, +/-{k:g} ATR, "
+              f"holds {h1}/{h2} bars", flush=True)
 
     verdict = {"symbol": "POOLED", "interval": INTERVAL, "source": "pooled",
                "coins": syms,
@@ -67,16 +75,18 @@ def main(argv=None) -> int:
                "horizons": {}}
     fitted = {}
     for slot, hold in ((1, h1), (2, h2)):
+        side = slot_side(INTERVAL, slot) if structure else None
         parts = {}
         for sym in syms:
-            ds = PD.build_one(sym, hold, k)
+            ds = PD.build_one(sym, hold, k, side=side)
             if ds is not None and len(ds) > 200:
                 parts[sym] = ds
         dropped = PD.scale_bound_columns(parts)
         pooled, coin = PD.pool(parts)
         cols = [c for c in pooled.X.columns if c not in dropped]
 
-        cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k)
+        cfg = (Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k, geometry="structure", side=side)
+               if structure else Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k))
         judge = JudgeAgent(cfg)
         # the full pipeline: purged CV, isotonic calibration on OOF, the
         # shuffle control -- then the final refit on everything
@@ -84,7 +94,7 @@ def main(argv=None) -> int:
                            with_ablation=False, with_importance=False)
         ev = report.evaluation
         ok = beats_shuffle(ev.auc, ev.shuffle_auc, ev.auc_spread)
-        print(f"  h{slot} ({hold} bars): AUC {ev.auc:.3f}  spread "
+        print(f"  h{slot} ({side or hold} {'model' if side else 'bars'}): AUC {ev.auc:.3f}  spread "
               f"{ev.auc_spread:.3f}  shuffle {ev.shuffle_auc:.3f}  "
               f"{'CLEARS' if ok else 'fails'}  ({len(pooled):,} samples, "
               f"{len(cols)} columns)", flush=True)
@@ -94,6 +104,7 @@ def main(argv=None) -> int:
             "spread": round(float(ev.auc_spread), 4),
             "effective_n": int(len(pooled)),
             "beats_shuffle": bool(ok), "hold": hold,
+            **({"geometry": "structure", "side": side} if side else {}),
         }
         fitted[slot] = judge
 

@@ -211,9 +211,16 @@ class Dashboard {
         tpOffsetPct = _d((j['levels'] as Map)['tp_offset_pct']),
         slOffsetPct = _d((j['levels'] as Map)['sl_offset_pct']),
         side = (j['levels'] as Map)['side'] as String? ?? '',
+        trendAbove = (j['trend'] as Map?)?['above'] as bool?,
+        trendEma = _d((j['trend'] as Map?)?['ema']),
         calibrationNote = j['calibration_note'] as String? ?? '';
 
   final String symbol, pair, interval, htf, calibrationNote;
+
+  /// The 200-day trend, on the timeframes that gate on it (daily). Null
+  /// elsewhere, or with too little history to say.
+  final bool? trendAbove;
+  final double? trendEma;
   final List<TimeframeInfo> timeframes;
   final bool stale;
   final double? price, changePct, takeProfit, stopLoss;

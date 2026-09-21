@@ -137,6 +137,52 @@ const List<HowToStep> howToSteps = [
           'gone past the line you drew.',
       Obsidian.redSoft,
       'DISCIPLINE'),
+  // THE SWING RULES. Measured on two separate years across fifteen coins
+  // (research/swing_daily.py), and written here in the order they apply.
+  HowToStep(
+      '07',
+      'Daily: buy only above the 200-day average',
+      'The same buy signals lost money below the 200-day average in both '
+          'test years, under every exit, and made it above. So the daily '
+          'card makes no BUY below the line; the card says which side the '
+          'coin is on. SELL signals are not gated — they paid on both sides, '
+          'best when fading a rally above the line.',
+      Obsidian.primary,
+      'THE TREND'),
+  HowToStep(
+      '08',
+      'Daily entries have no time limit — the stop trails',
+      'Log a daily entry with the stop at the last swing low and no take '
+          'profit. Each time a new swing low confirms on the daily chart, '
+          'the app moves your stop up to it and tells you. It never moves '
+          'back. The trade lives until the structure breaks. Trailed like '
+          'this, buys with the trend averaged about +5% per trade in both '
+          'years; a fixed target and a ten-day clock lost.',
+      _cyan,
+      'THE EXIT'),
+  HowToStep(
+      '09',
+      'Expect to lose most of them',
+      'With a trailing stop about three trades in four end at the stop, '
+          'around −6% each. The year is paid for by the one in four that '
+          'runs +15% to +30%. If that is hard to hold, take half at the '
+          'first level and trail the rest: roughly half the return, and '
+          'about half the trades win. Size from the stop distance — the '
+          'quarter-Kelly figure on the card does that — so no single stop '
+          'matters.',
+      _violet,
+      'THE SHAPE'),
+  HowToStep(
+      '10',
+      '4h: levels, not distances',
+      "Take profit and stop on 4h sit on the chart's levels — the next "
+          'confirmed swing ahead and the last one behind — and a call comes '
+          "only when the model's confidence is in the top tenth of its last "
+          'ninety days on that coin. Both were measured on a year the model '
+          'never saw. 1h and 15m are shown; their moves are too small to '
+          'clear a market-order fee, so treat their calls as context.',
+      Obsidian.amber,
+      'THE TIMEFRAMES'),
 ];
 
 /// The first-run dialog. Cannot be dismissed by tapping outside: the one

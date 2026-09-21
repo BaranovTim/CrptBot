@@ -255,8 +255,8 @@ def test_when_both_sides_fire_the_more_confident_speaks():
 
 # -------------------------------------------------------------- the table
 def test_four_hours_is_the_structure_timeframe_and_its_slots_are_sides():
-    assert geometry_for("4h") == "structure"
-    for tf in ("15m", "1h", "1d"):
+    assert geometry_for("4h") == "structure" and geometry_for("1d") == "structure"
+    for tf in ("15m", "1h"):
         assert geometry_for(tf) == "atr"
     k, h1, h2 = barriers_for("4h")
     assert (h1, h2) == (16, 16), "structure slots hold for the same window"

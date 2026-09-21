@@ -844,9 +844,12 @@ class TradingService:
             "live": live,
             "indicators": _indicators(snap, interval=interval, htf=htf),
             "analyses": [_analysis(a), _analysis(b)],
-            "recommendation": _gate_by_verdict(
-                symbol, interval, _recommendation(b, a, stale)),
+            "recommendation": _gate_by_trend(
+                interval, bars, _gate_by_verdict(
+                    symbol, interval, _recommendation(b, a, stale))),
             "levels": _levels(chosen, price),
+            # the long-term trend, for the card and for the daily rule
+            "trend": _trend(interval, bars),
             "calibration_note": (
                 "Probability is the chance a long entered at this bar's close "
                 "reaches the next confirmed swing before breaking the last one, "
@@ -1402,6 +1405,27 @@ class TradingService:
         except Exception:
             return None
 
+    def trail(self, symbol: str, interval: str, side: str, opened_at: str,
+              initial_stop: Optional[float] = None) -> Dict[str, Any]:
+        """Where a logged entry's trailing stop sits now (agent5/trail.py).
+
+        Daily entries are managed by this rather than by a clock. The app
+        asks on resume and on its settle timer, moves the entry's stop to
+        the answer -- only ever in the trade's favour -- and notifies when
+        it moved. The bars are the same closed daily bars the model reads.
+        """
+        from agent5.trail import trailing_stop, trend_state
+        sym, iv = self._pair(symbol, interval)
+        bars = self._bars(sym, iv)
+        if bars.empty:
+            return {"symbol": sym, "interval": iv, "trail": None,
+                    "error": "no bars"}
+        st = trailing_stop(bars, opened_at, side, initial_stop=initial_stop)
+        return {"symbol": sym, "interval": iv,
+                "last_closed_bar": bars.index[-1].isoformat(),
+                "trail": st.to_json() if st else None,
+                "trend": trend_state(bars) if iv in TREND_GATED else None}
+
     def smart_money(self, symbol: Optional[str] = None,
                     limit: int = 20) -> Dict[str, Any]:
         """The panel: who is followed, who holds this coin, what they did."""
@@ -1907,6 +1931,45 @@ def _gate_by_verdict(symbol: str, interval: str,
             # the card shows `detail`
             "diagnostic": why,
             "strength": "", "gated": True,
+            "window_ends": rec.get("window_ends")}
+
+
+# Which timeframes take a long only WITH the 200-day trend. Daily, measured:
+# the same entries below the average lost in both test years under every
+# exit; above it they made the money. See agent5/trail.py.
+TREND_GATED = ("1d",)
+
+
+def _trend(interval: str, bars) -> Optional[Dict[str, Any]]:
+    if interval not in TREND_GATED:
+        return None
+    from agent5.trail import trend_state
+    try:
+        t = trend_state(bars)
+    except Exception:
+        return None
+    return {"span_days": t["span"], "ema": _num(t["ema"]), "above": t["above"]}
+
+
+def _gate_by_trend(interval: str, bars, rec: Dict[str, Any]) -> Dict[str, Any]:
+    """A daily BUY below the 200-day average is not made."""
+    if interval not in TREND_GATED or rec.get("action") != "BUY":
+        return rec
+    from agent5.trail import trend_ok
+    try:
+        ok = trend_ok(bars, "LONG")
+    except Exception:
+        return rec
+    if ok is not False:
+        return rec
+    return {"action": "FLAT", "tone": "flat",
+            "detail": "No buy on 1d: the coin is below its 200-day average. "
+                      "Daily buys are taken only with the trend; sells are "
+                      "not gated.",
+            "diagnostic": "long gated by the 200-day trend (agent5/trail.py)",
+            "strength": "", "gated": True, "gated_by": "trend",
+            "slot": rec.get("slot"), "rank": rec.get("rank"),
+            "geometry": rec.get("geometry"),
             "window_ends": rec.get("window_ends")}
 
 

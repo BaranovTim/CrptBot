@@ -707,7 +707,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             suggestedSide: d.side.isEmpty
                 ? (d.recommendation.action == 'SELL' ? 'SHORT' : 'LONG')
                 : (d.isShort ? 'SHORT' : 'LONG'),
-            suggestedTp: d.liveTakeProfit(_livePrice),
+            // A daily entry is trailed, not targeted: its stop follows the
+            // swings and there is no take profit to seed. The level ahead
+            // is still on the levels panel, as information.
+            suggestedTp:
+                widget.interval == '1d' ? null : d.liveTakeProfit(_livePrice),
             suggestedSl: d.liveStopLoss(_livePrice),
             onLogged: _loadPositions,
           ),
@@ -1385,6 +1389,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 10),
             Text('quarter-Kelly size ${r.sizePct!.toStringAsFixed(2)}% of equity',
                 style: Obsidian.labelSm(color: c, size: 10.5)),
+          ],
+          // THE DAILY RULE, on the card. Buys are taken only above the
+          // 200-day average; the line says which side of it the coin is on
+          // so a FLAT below the line reads as the rule, not as indecision.
+          if (d.trendAbove != null) ...[
+            const SizedBox(height: 10),
+            Text(
+                d.trendAbove!
+                    ? 'Above its 200-day average — buys allowed'
+                    : 'Below its 200-day average — no buys until it reclaims it',
+                textAlign: TextAlign.center,
+                style: Obsidian.labelSm(
+                    color: d.trendAbove! ? Obsidian.green : Obsidian.outline,
+                    size: 10.5)),
           ],
         ],
       ),

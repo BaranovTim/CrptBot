@@ -1657,10 +1657,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             icon: Icons.timer_outlined,
             title: "Ask at the model's time limit",
             subtitle: _timeLimit
-                ? 'On — 2h on 1h, 64h on 4h, 10 days on 1d. An entry that '
-                    'reaches neither level by then gets a notification: '
-                    'keep it open, or close it now marked TIME LIMIT. It '
-                    'tells you what the model says at that moment.'
+                ? 'On — 2h on 15m and 1h, 64h on 4h. An entry that reaches '
+                    'neither level by then gets a notification: keep it '
+                    'open, or close it now marked TIME LIMIT. Daily entries '
+                    'have no limit: their stop trails the swings instead.'
                 : 'Off — nothing is asked; entries stay open until a level '
                     'is hit. Past the window, that is a coin flip.',
             trailing: Switch(

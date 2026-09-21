@@ -66,6 +66,7 @@ class TradeEntry {
     this.interval,
     this.limitAskedAt,
     this.keptPastLimit = false,
+    this.stopMovedAt,
   });
 
   factory TradeEntry.create({
@@ -118,6 +119,9 @@ class TradeEntry {
             ? null
             : DateTime.parse(j['limit_asked_at'] as String),
         keptPastLimit: j['kept_past_limit'] as bool? ?? false,
+        stopMovedAt: j['stop_moved_at'] == null
+            ? null
+            : DateTime.parse(j['stop_moved_at'] as String),
       );
 
   final String id, symbol, side, note;
@@ -198,8 +202,22 @@ class TradeEntry {
         _ => null,
       };
 
-  /// When the model stops having an opinion about this entry.
+  /// TRAILED, not timed. A daily entry has no clock: the server moves its
+  /// stop up to each newly confirmed swing low (down to each swing high
+  /// for a short), and the entry lives until the structure breaks. That is
+  /// how the measured professionals held, and it made money in both test
+  /// years where a fixed ten-day exit lost. See agent5/trail.py.
+  bool get trailed => interval == '1d';
+
+  /// When the trailing stop last moved. The stop is checked against price
+  /// from HERE, not from the entry: the range since entry can hold a low
+  /// from before the stop was raised to above it.
+  final DateTime? stopMovedAt;
+
+  /// When the model stops having an opinion about this entry. Null for a
+  /// trailed entry -- it has no window to expire.
   DateTime? get timeLimit {
+    if (trailed) return null;
     final h = horizonOf(interval);
     return h == null ? null : openedAt.add(h);
   }
@@ -230,6 +248,7 @@ class TradeEntry {
         'interval': interval,
         'limit_asked_at': limitAskedAt?.toIso8601String(),
         'kept_past_limit': keptPastLimit,
+        'stop_moved_at': stopMovedAt?.toIso8601String(),
       };
 
   /// The price this position is marked against: its close for a finished
@@ -345,6 +364,23 @@ class TradeEntry {
   TradeEntry withLimitState({DateTime? asked, bool? kept}) =>
       _copy(limitAskedAt: asked, keptPastLimit: kept);
 
+  /// This entry with its stop moved by the trail. Only ever tighter: a
+  /// long's stop goes up, a short's goes down, or the entry is returned
+  /// unchanged (by identity, so a caller can skip the write).
+  TradeEntry withTrailedStop(double stop, DateTime movedAt) {
+    final cur = stopLoss;
+    final tighter = cur == null || (isShort ? stop < cur : stop > cur);
+    if (!tighter) return this;
+    return TradeEntry(
+      id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
+      openedAt: openedAt, takeProfit: takeProfit, stopLoss: stop,
+      closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
+      note: note, highSince: highSince, lowSince: lowSince,
+      interval: interval, limitAskedAt: limitAskedAt,
+      keptPastLimit: keptPastLimit, stopMovedAt: movedAt,
+    );
+  }
+
   TradeEntry _copy({DateTime? limitAskedAt, bool? keptPastLimit}) =>
       TradeEntry(
         id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
@@ -354,6 +390,7 @@ class TradeEntry {
         interval: interval,
         limitAskedAt: limitAskedAt ?? this.limitAskedAt,
         keptPastLimit: keptPastLimit ?? this.keptPastLimit,
+        stopMovedAt: stopMovedAt,
       );
 
   /// This entry with the extremes widened to include `high`/`low`.
@@ -652,6 +689,7 @@ class Trades extends ChangeNotifier {
   }
 
   Future<List<TradeEntry>> settle(ApiClient client) async {
+    await syncTrails(client);
     final open = (await load())
         .where((t) => t.isOpen && (t.takeProfit != null || t.stopLoss != null))
         .toList();
@@ -667,8 +705,9 @@ class Trades extends ChangeNotifier {
     final ranges = await Future.wait(
       open.map((t) async {
         try {
+          // a trailed entry's stop is judged from the moment it last moved
           return MapEntry(t, await client.priceRange(t.symbol,
-              since: t.openedAt));
+              since: t.stopMovedAt ?? t.openedAt));
         } catch (e) {
           // Offline, or a pair the server does not carry. Leaving the trade
           // open is the safe failure: the next pass settles it.
@@ -719,6 +758,46 @@ class Trades extends ChangeNotifier {
       }
     }
     return settled;
+  }
+
+  /// Move every open trailed entry's stop to where the server's trail puts
+  /// it now, and say so. Never loosens a stop; never touches an entry the
+  /// person closed. Offline, nothing changes -- the next pass catches up.
+  Future<List<TradeEntry>> syncTrails(ApiClient client) async {
+    final all = List<TradeEntry>.from(await load());
+    final moved = <TradeEntry>[];
+    var changed = false;
+    for (var i = 0; i < all.length; i++) {
+      final t = all[i];
+      if (!t.isOpen || !t.trailed) continue;
+      Map<String, dynamic> r;
+      try {
+        r = await client.trail(t.symbol, t.interval!, t.side, t.openedAt,
+            stop: t.stopLoss);
+      } catch (e) {
+        debugPrint('[trades] trail for ${t.symbol}: $e');
+        continue;
+      }
+      final trail = r['trail'] as Map?;
+      final stop = (trail?['stop'] as num?)?.toDouble();
+      if (stop == null) continue;
+      final at = DateTime.tryParse((trail?['moved_at'] as String?) ??
+              (r['last_closed_bar'] as String? ?? '')) ??
+          DateTime.now().toUtc();
+      final w = t.withTrailedStop(stop, at);
+      if (identical(w, t)) continue;
+      all[i] = w;
+      changed = true;
+      moved.add(w);
+      unawaited(Notifications.instance.showStopMoved(
+          id: t.id, symbol: t.symbol, side: t.side,
+          from: t.stopLoss, to: stop, moves: (trail?['moves'] as num?)?.toInt()));
+    }
+    if (changed) {
+      await _save(all);
+      notifyListeners();
+    }
+    return moved;
   }
 
   /// Send "keep or close?" for an entry whose window has closed. Once.

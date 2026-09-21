@@ -8,6 +8,7 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tradingbot_app/theme/liquid_obsidian.dart';
 import 'package:tradingbot_app/widgets/positions_panel.dart';
+import 'package:tradingbot_app/widgets/acknowledgement.dart';
 import 'package:tradingbot_app/widgets/signals_panel.dart';
 import 'package:tradingbot_app/widgets/smart_money_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1847,7 +1848,7 @@ void main() {
     test('an expired entry is ASKED about, not closed', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      await Trades.instance.add(aged('1d', const Duration(hours: 241)));
+      await Trades.instance.add(aged('4h', const Duration(hours: 70)));
       final r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
       expect(r.settled, isEmpty, reason: 'the window closing must not close it');
       final t = (await Trades.instance.load()).single;
@@ -1862,7 +1863,7 @@ void main() {
     test('"close now" closes at the price given, marked TIME LIMIT', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      final e = aged('1d', const Duration(hours: 241));
+      final e = aged('4h', const Duration(hours: 70));
       await Trades.instance.add(e);
       await Trades.instance.checkLive({'BTCUSDT': 103.0});
       final closed = await Trades.instance.answerLimit(e.id, close: true, price: 103.5);
@@ -1875,7 +1876,7 @@ void main() {
     test('"keep open" leaves it open and it is never asked again', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      final e = aged('1d', const Duration(hours: 241));
+      final e = aged('4h', const Duration(hours: 70));
       await Trades.instance.add(e);
       await Trades.instance.checkLive({'BTCUSDT': 103.0});
       final kept = await Trades.instance.answerLimit(e.id, close: false);
@@ -1893,7 +1894,7 @@ void main() {
       Trades.instance.resetForTest();
       Notifications.instance.silenced = true;
       try {
-        await Trades.instance.add(aged('1d', const Duration(hours: 241)));
+        await Trades.instance.add(aged('4h', const Duration(hours: 70)));
         final r = await Trades.instance.checkLive({'BTCUSDT': 103.0});
         expect(r.settled, isEmpty);
         final t = (await Trades.instance.load()).single;
@@ -1913,7 +1914,7 @@ void main() {
         () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      await Trades.instance.add(aged('1d', const Duration(hours: 241)));
+      await Trades.instance.add(aged('4h', const Duration(hours: 70)));
       final r = await Trades.instance.checkLive({'BTCUSDT': 131.0});
       expect(r.settled.single.closedBy, 'take_profit');
       expect(r.settled.single.closePrice, 130.0);
@@ -1946,11 +1947,11 @@ void main() {
       expect(r.settled.single.closedBy, 'time_limit');
       expect(r.settled.single.closePrice, 103.0);
 
-      // asked 50 minutes ago on 1d: inside its hour, still open
+      // asked 8 minutes ago on 4h: inside its ten minutes, still open
       Trades.instance.resetForTest();
       SharedPreferences.setMockInitialValues({});
-      e = aged('1d', const Duration(hours: 241)).withLimitState(
-          asked: DateTime.now().subtract(const Duration(minutes: 50)));
+      e = aged('4h', const Duration(hours: 70)).withLimitState(
+          asked: DateTime.now().subtract(const Duration(minutes: 8)));
       await Trades.instance.add(e);
       expect((await Trades.instance.checkLive({'BTCUSDT': 103.0})).settled,
           isEmpty);
@@ -1971,7 +1972,7 @@ void main() {
     test('inside the window nothing is asked', () async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
-      await Trades.instance.add(aged('1d', const Duration(hours: 100)));
+      await Trades.instance.add(aged('4h', const Duration(hours: 40)));
       await Trades.instance.checkLive({'BTCUSDT': 103.0});
       expect((await Trades.instance.load()).single.limitAskedAt, isNull);
     });
@@ -1988,7 +1989,7 @@ void main() {
     });
 
     test('the question and its answers survive a write and a read', () {
-      final t = TradeEntry.fromJson(aged('1d', const Duration(hours: 241))
+      final t = TradeEntry.fromJson(aged('4h', const Duration(hours: 70))
           .withLimitState(asked: DateTime(2026, 9, 13), kept: true)
           .toJson());
       expect(t.limitAskedAt, DateTime(2026, 9, 13));
@@ -2021,13 +2022,18 @@ void main() {
       final now = DateTime(2026, 9, 13, 12);
       TradeEntry at(Duration age) => TradeEntry(
           id: 'c', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 1,
-          openedAt: now.subtract(age), interval: '1d');
+          openedAt: now.subtract(age), interval: '4h');
       expect(JournalCard.timeLeftText(at(const Duration(hours: 6)), now),
-          '9d 18h left');
-      expect(JournalCard.timeLeftText(at(const Duration(hours: 239)), now),
+          '2d 10h left');
+      expect(JournalCard.timeLeftText(at(const Duration(hours: 63)), now),
           '1h 0m left');
-      expect(JournalCard.timeLeftText(at(const Duration(hours: 241)), now),
+      expect(JournalCard.timeLeftText(at(const Duration(hours: 65)), now),
           'window closed');
+      // a daily entry has no window to count down
+      final daily = TradeEntry(
+          id: 'd', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 1,
+          openedAt: now.subtract(const Duration(days: 30)), interval: '1d');
+      expect(JournalCard.timeLeftText(daily, now), isNull);
     });
   });
 
@@ -2241,6 +2247,61 @@ void main() {
       expect(SignalsPanel.heldKey('BTCUSDT', '4h'), 'BTCUSDT:4h');
       expect(SignalsPanel.heldKey('BTCUSDT', ''), 'BTCUSDT');
       expect(SignalsPanel.heldKey('BTCUSDT', null), 'BTCUSDT');
+    });
+  });
+
+  group('daily entries are trailed, not timed', () {
+    TradeEntry daily(String side, {double? sl, double? tp}) => TradeEntry(
+        id: 'd-$side', symbol: 'BTCUSDT', side: side, size: 1, entryPrice: 100,
+        openedAt: DateTime.now().subtract(const Duration(days: 30)),
+        takeProfit: tp, stopLoss: sl, interval: '1d');
+
+    test('a daily entry has no time limit and is never asked', () {
+      final e = daily('LONG', sl: 90);
+      expect(e.trailed, isTrue);
+      expect(e.timeLimit, isNull);
+      expect(e.expiredAt(DateTime.now()), isFalse);
+      expect(e.needsLimitQuestion(DateTime.now()), isFalse);
+      // other timeframes keep their clock
+      final h4 = TradeEntry(
+          id: 'x', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+          openedAt: DateTime.now().subtract(const Duration(hours: 70)),
+          stopLoss: 90, interval: '4h');
+      expect(h4.trailed, isFalse);
+      expect(h4.expiredAt(DateTime.now()), isTrue);
+    });
+
+    test('the trailed stop only tightens, and records when it moved', () {
+      final at = DateTime.utc(2026, 9, 20);
+      final e = daily('LONG', sl: 90);
+      final up = e.withTrailedStop(95, at);
+      expect(up.stopLoss, 95);
+      expect(up.stopMovedAt, at);
+      expect(identical(e.withTrailedStop(85, at), e), isTrue,
+          reason: 'a looser stop is refused');
+      expect(identical(up.withTrailedStop(95, at), up), isTrue,
+          reason: 'the same stop is not a move');
+      final sh = daily('SHORT', sl: 110);
+      expect(sh.withTrailedStop(105, at).stopLoss, 105);
+      expect(identical(sh.withTrailedStop(115, at), sh), isTrue);
+      // an entry logged without a stop takes the first one
+      expect(daily('LONG').withTrailedStop(88, at).stopLoss, 88);
+    });
+
+    test('the moved stop survives a round trip through storage', () {
+      final at = DateTime.utc(2026, 9, 20, 0, 0);
+      final e = daily('LONG', sl: 90).withTrailedStop(95, at);
+      final back = TradeEntry.fromJson(json.decode(json.encode(e.toJson())));
+      expect(back.stopLoss, 95);
+      expect(back.stopMovedAt, at);
+      expect(back.trailed, isTrue);
+    });
+
+    test('the instructions carry the swing rules', () {
+      final titles = howToSteps.map((h) => h.title).join(' | ');
+      expect(titles, contains('200-day average'));
+      expect(titles, contains('no time limit'));
+      expect(howToSteps.length, greaterThanOrEqualTo(10));
     });
   });
 }

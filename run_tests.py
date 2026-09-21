@@ -38,6 +38,7 @@ MODULES = [
     "tests.test_signup",
     "tests.test_timeframes",
     "tests.test_structure",
+    "tests.test_trail",
     "tests.test_schedule",
     "tests.test_alerts",
     "tests.test_push",

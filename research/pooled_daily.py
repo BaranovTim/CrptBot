@@ -86,17 +86,21 @@ def frames_for(sym: str):
     return bars, frames, warm
 
 
-def build_one(sym: str, hold: int, k: float) -> Dataset | None:
+def build_one(sym: str, hold: int, k: float, side: str = None) -> Dataset | None:
     """The per-coin dataset, exactly as train.py builds it, for any
-    (window, barrier) from the cached frames."""
-    p = CACHE / f"{sym}_{INTERVAL}_h{hold}_k{k:g}.pkl"
+    (window, barrier) from the cached frames. With `side`, the structure
+    label for that side (agent5/structure.py); without, the ATR one."""
+    tag = f"_{side}" if side else ""
+    p = CACHE / f"{sym}_{INTERVAL}_h{hold}_k{k:g}{tag}.pkl"
     if p.exists():
         return pickle.load(open(p, "rb"))
     got = frames_for(sym)
     if got is None:
         return None
     bars, frames, warm = got
-    judge = JudgeAgent(Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k))
+    cfg = (Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k, geometry="structure", side=side)
+           if side else Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k))
+    judge = JudgeAgent(cfg)
     ds = judge.build(bars, warmup=warm, **frames)
     pickle.dump(ds, open(p, "wb"))
     return ds

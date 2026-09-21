@@ -340,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
                             "trades": False,
                             "endpoints": ["/api/coins", "/api/dashboard",
                                           "/api/chart", "/api/whales",
-                                          "/api/smartmoney",
+                                          "/api/smartmoney", "/api/trail",
                                           "/api/news", "/api/training",
                                           "/api/alerts", "/api/calendar",
                                           "/api/timeframes",
@@ -550,6 +550,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(svc.chart(symbol=opt("symbol"),
                                      interval=opt("interval"),
                                      n=arg("n", 96)))
+            elif route == "/api/trail":
+                side = (opt("side") or "").upper()
+                opened = opt("opened")
+                if side not in ("LONG", "SHORT") or not opened:
+                    self._send({"error": "side (LONG|SHORT) and opened (ISO time) are required"},
+                               status=400)
+                    return
+                stop = opt("stop")
+                self._send(svc.trail(opt("symbol") or svc.symbol,
+                                     opt("interval") or "1d", side, opened,
+                                     initial_stop=float(stop) if stop else None))
             elif route == "/api/smartmoney":
                 self._send(svc.smart_money(symbol=opt("symbol"),
                                            limit=arg("limit", 20)))

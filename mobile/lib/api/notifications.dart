@@ -442,6 +442,38 @@ class Notifications {
     await _plugin.show(_idFor(a.id), a.title, body, details, payload: OpenRequest.encode(a.symbol, a.interval, a.id));
   }
 
+  /// The trail moved a daily entry's stop. One line, on the signals
+  /// channel: it is about a position you hold.
+  Future<void> showStopMoved({
+    required String id,
+    required String symbol,
+    required String side,
+    required double? from,
+    required double to,
+    int? moves,
+  }) async {
+    if (!_ready) await init();
+    if (silenced) return;
+    final short = symbol.endsWith('USDT')
+        ? symbol.substring(0, symbol.length - 4)
+        : symbol;
+    final dir = side == 'SHORT' ? 'down' : 'up';
+    final title = '$short: stop moved $dir to ${priceText(to, prefix: '')}';
+    final body = [
+      if (from != null) 'Was ${priceText(from, prefix: '')}.',
+      'A new swing ${side == 'SHORT' ? 'high' : 'low'} confirmed on the daily '
+          'chart; the stop follows it. It never moves back.',
+      if (moves != null && moves > 1) 'Moved $moves times since entry.',
+    ].join(' ');
+    try {
+      await _plugin.show(_idFor('trail-$id-$to'), title, body,
+          _details('signal', 'medium'),
+          payload: OpenRequest.encode(symbol, '1d', id));
+    } catch (e) {
+      debugPrint('[notifications] stop moved: $e');
+    }
+  }
+
   /// "Keep or close?" -- the model's window on a logged entry has closed
   /// and no level was reached. Two buttons, answerable from the shade.
   Future<void> askTimeLimit({
