@@ -183,6 +183,23 @@ const List<HowToStep> howToSteps = [
           'clear a market-order fee, so treat their calls as context.',
       Obsidian.amber,
       'THE TIMEFRAMES'),
+  HowToStep(
+      '11',
+      'Smart money confirms, it does not decide',
+      'The followed traders\' entries are not an input to the model — tested, '
+          'they add nothing there, because they are silent on nine bars in '
+          'ten. But on the model\'s own 4h calls they matter: when a followed '
+          'trader had entered the same way in the last 24h the calls made '
+          '+0.6% a trade at a 72% hit rate; when one had entered the other '
+          'way, −0.4% at 50%. So agreement raises a call one level, '
+          'disagreement lowers it one (a small call it contradicts is '
+          'withdrawn), and the card and the notification say which. On '
+          'daily the window is 72h and only agreement counts: trailed '
+          'entries a followed trader had also taken averaged +7% (half out) '
+          'against −0.3% otherwise; disagreement was measured to change '
+          'nothing there, so it is noted and the call stands.',
+      Obsidian.greenDim,
+      'CONFLUENCE'),
 ];
 
 /// The first-run dialog. Cannot be dismissed by tapping outside: the one

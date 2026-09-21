@@ -391,3 +391,29 @@ def test_polling_continues_while_a_selection_runs():
     finally:
         t.stop()
     return True
+
+
+def test_net_entries_counts_the_last_day_by_side():
+    from datetime import timedelta as _td
+
+    v = Venue()
+    v.books["0xaaaa"] = {}; v.books["0xbbbb"] = {}; v.books["0xcccc"] = {}
+    t, _ = _tracker(v, [_trader("0xaaaa"), _trader("0xbbbb"), _trader("0xcccc")])
+    t.reselect(); t.poll(NOW)
+    v.books["0xaaaa"] = {"BTC": _pos("LONG", 1)}
+    t.poll(NOW + _td(hours=1))
+    v.books["0xbbbb"] = {"BTC": _pos("LONG", 2), "ETH": _pos("SHORT", 3)}
+    t.poll(NOW + _td(hours=2))
+    v.books["0xcccc"] = {"BTC": _pos("SHORT", 1)}
+    t.poll(NOW + _td(hours=3))
+    at = NOW + _td(hours=4)
+    btc = t.net_entries("BTCUSDT", hours=24, now=at)
+    assert (btc["net"], btc["longs"], btc["shorts"]) == (1, 2, 1), btc
+    assert t.net_entries("ETHUSDT", hours=24, now=at)["net"] == -1
+    # an entry older than the window no longer counts; a close never does
+    assert t.net_entries("BTCUSDT", hours=24, now=NOW + _td(hours=30))["net"] == 0
+    v.books["0xaaaa"] = {}
+    t.poll(NOW + _td(hours=5))
+    assert t.net_entries("BTCUSDT", hours=24, now=NOW + _td(hours=6))["net"] == 1
+    assert t.net_entries("SOLUSDT", hours=24, now=at)["net"] == 0
+    return True

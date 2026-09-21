@@ -2361,4 +2361,18 @@ void main() {
       expect(pos.single['interval'], '1d');
     });
   });
+
+  group('smart money confirms a call', () {
+    test('the note parses and is empty when absent', () {
+      final r = Recommendation.fromJson({'action': 'BUY', 'tone': 'up', 'detail': 'd',
+          'strength': 'medium',
+          'smart_note': 'Smart money agrees: 2 followed traders opened LONG in the last 24h.'});
+      expect(r.smartNote, startsWith('Smart money agrees'));
+      expect(Recommendation.fromJson({'action': 'FLAT', 'detail': ''}).smartNote, '');
+    });
+
+    test('the instructions explain confluence', () {
+      expect(howToSteps.map((h) => h.title).join(' | '), contains('confirms, it does not decide'));
+    });
+  });
 }

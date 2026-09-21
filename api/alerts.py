@@ -566,6 +566,10 @@ class AlertEngine:
         strength = str(rec.get("strength") or "").upper()
         if strength:
             lines.append(strength)
+        # confluence with the followed traders, when it changed or confirmed
+        # the call (api/service._smart_overlay)
+        if rec.get("smart_note"):
+            lines.append(str(rec["smart_note"]))
         if not closing:
             # Omitted entirely on an exit: closing a position has no target
             # and no stop, and printing the model's barriers next to the word

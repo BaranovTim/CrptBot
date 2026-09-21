@@ -240,6 +240,15 @@ A year of fills for 54 Hyperliquid addresses (top-400 by 30-day profit, discreti
 - **Copying the setup loses**: the classifier's top decile as an entry → −0.34%/24h vs +0.08% every bar. The +1.4%/1h after their resting fills is the limit-order effect (fill 1.2% below the next 15m close); from a follower's price it is 0.
 - **What persists**: traders profitable on position trades in H1 (≥5 trades) → their H2 entries, from a follower's price, **+1.52%/24h (se 0.41), both sides, 7/9 traders, 8/10 coins**, vs +0.34% drift. 166 trades, 9 traders — a real but thin result. It says: select on a half-year record of position trades, not the 30-day board; the smartmoney tracker's selection should change to that.
 
+### Smart money as a model input vs as confluence (research/smart_feature.py, 2026-09-21)
+
+Causal cohort (followed = ≥8 position trades, positive, 50–92% win in the trailing 180 days, from fills before each day), three features per 4h bar (net entries 24h / 72h, exposure), joined to the 4h held-out scores.
+
+- **As a feature: nothing.** Non-zero on 9.6% of bars; alone AUC 0.501; logistic on score+feature 0.580 vs score 0.581.
+- **On the model's own calls (rank ≥ 0.85): a lot.** Agrees +0.59%/trade at 72% (n=121 bar-rows); silent −0.18% at 56%; disagrees −0.41% at 50% (n=181). Same ordering on all three definitions.
+- Daily (research/smart_daily.py, trailed entries, one year): a 24h window lands on 5% of calls (unusable); 72h on 15%. Agree (42 calls): trail +10.7%, half-out +7.1%; silent (~800): −0.2%/−0.3%; disagree (50): −1.5%/−0.35% — not worse than silence, and the sign flips between longs and shorts. A followed trader's entry ALONE, trailed on daily: longs +5.8% ±2.6 (n=122), shorts +2.7% ±1.5 (n=94), median negative, ~2σ — not acted on.
+- Shipped as an overlay (`api/service._smart_overlay`, SMART_OVERLAY): 4h 24h window, agree raises / disagree lowers; 1d 72h window, agree raises / disagree only annotates: agreement raises the strength one level, disagreement lowers one, a small call it contradicts is withdrawn; never creates a call. One held-out year, ~300 rows with a signal — measure live.
+
 ## 6. What this says about the recommended action
 
 Applying the field's discipline to this system yields one change and one

@@ -107,6 +107,7 @@ class Recommendation {
         detail = j['detail'] as String? ?? '',
         ev = _d(j['ev']),
         strength = j['strength'] as String? ?? '',
+        smartNote = j['smart_note'] as String? ?? '',
         pNeeded = _d(j['p_needed']),
         sizePct = _d(j['size_pct']);
 
@@ -114,6 +115,11 @@ class Recommendation {
   final String? tone;
   final String detail;
   final double? ev, sizePct;
+
+  /// "Smart money agrees: 2 followed traders opened LONG in the last 24h."
+  /// -- set when the followed traders' entries changed or confirmed this
+  /// call (4h only, where it was measured). Empty otherwise.
+  final String smartNote;
 
   /// strong | medium | small, or "" when the expected value does not clear
   /// breakeven after costs. The server reports the strongest level this

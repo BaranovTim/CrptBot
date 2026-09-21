@@ -794,6 +794,12 @@ class TradingService:
         b = evaluate(mon.h2, bars, X, "ANALYSIS B", opened_at=last_close,
                      ends_at=last_close + n2 * mon.delta, bars_left=n2)
 
+        # SMART-MONEY CONFLUENCE, on the calls only. See `_smart_overlay`.
+        smart = self._smart_net(symbol, interval)
+        if smart is not None:
+            for an in (a, b):
+                _smart_overlay(an, smart, lower=SMART_OVERLAY[interval]["lower"])
+
         # THE FORWARD RECORD.
         #
         # Written here because this is the moment the forecast exists and the
@@ -850,6 +856,11 @@ class TradingService:
             "levels": _levels(chosen, price),
             # the long-term trend, for the card and for the daily rule
             "trend": _trend(interval, bars),
+            # what the followed traders did on this coin in the last day,
+            # and how it changed the call (if it did)
+            "smart": (dict(smart, note=getattr(chosen, "smart_note", "") or "",
+                           effect=getattr(chosen, "smart_effect", "") or "")
+                      if smart is not None else None),
             "calibration_note": (
                 "Probability is the chance a long entered at this bar's close "
                 "reaches the next confirmed swing before breaking the last one, "
@@ -1405,6 +1416,21 @@ class TradingService:
         except Exception:
             return None
 
+    def _smart_net(self, symbol: str, interval: str) -> Optional[Dict[str, Any]]:
+        """The followed traders' net entries on this coin in the last 24h,
+        for the timeframes the overlay was measured on. None elsewhere, or
+        when the tracker is off."""
+        if interval not in SMART_OVERLAY:
+            return None
+        try:
+            t = self.smart_tracker()
+            if t is None or not t.traders:
+                return None
+            return t.net_entries(symbol, hours=SMART_OVERLAY[interval]["hours"])
+        except Exception as e:
+            log.warning("smart overlay: %s", e)
+            return None
+
     def trail(self, symbol: str, interval: str, side: str, opened_at: str,
               initial_stop: Optional[float] = None) -> Dict[str, Any]:
         """Where a logged entry's trailing stop sits now (agent5/trail.py).
@@ -1934,6 +1960,72 @@ def _gate_by_verdict(symbol: str, interval: str,
             "window_ends": rec.get("window_ends")}
 
 
+# Which timeframes apply the smart-money overlay to their calls, with what
+# window, and whether disagreement lowers a call. Both measured:
+#   4h  (research/smart_feature.py) a 24h window; agree +0.59%/trade at 72%,
+#       silent -0.18%, disagree -0.41% at 50% -- both directions matter.
+#   1d  (research/smart_daily.py) a 24h window is one bar and almost never
+#       lands on a call (5%); 72h does (15%). Agreement was strong on the
+#       trailed entries (+10.7% mean, +7.1% half-out, vs -0.2% silent, 42
+#       calls); disagreement was NOT worse than silence (-1.5% vs -0.2%,
+#       50 calls, longs and shorts disagreeing on the sign). So on daily,
+#       agreement raises and disagreement leaves the call alone.
+SMART_OVERLAY = {
+    "4h": {"hours": 24.0, "lower": True},
+    "1d": {"hours": 72.0, "lower": False},
+}
+
+_STRENGTH_UP = {"small": "medium", "medium": "strong", "strong": "strong"}
+_STRENGTH_DOWN = {"strong": "medium", "medium": "small", "small": ""}
+
+
+def _smart_overlay(an, smart: Dict[str, Any], lower: bool = True) -> None:
+    """Confluence with the followed traders, applied to a call in place.
+
+    Agreement raises the call one level. Disagreement lowers it one where
+    that was measured to matter (`lower`), and a small call it contradicts
+    is withdrawn; where it was not (daily), disagreement only annotates.
+    Silence changes nothing. Never creates a call the model did not make.
+    See SMART_OVERLAY for the numbers.
+    """
+    if not getattr(an, "action", "").startswith("ENTER") or not getattr(an, "strength", ""):
+        return
+    net = int(smart.get("net", 0) or 0)
+    if net == 0:
+        return
+    long = an.side == "LONG"
+    agrees = (net > 0) == long
+    n = smart.get("longs" if net > 0 else "shorts", abs(net))
+    way = "LONG" if net > 0 else "SHORT"
+    hours = int(smart.get("hours", 24) or 24)
+    who = f"{n} followed trader{'s' if n != 1 else ''} opened {way} in the last {hours}h"
+    before = an.strength
+    if agrees:
+        an.strength = _STRENGTH_UP[before]
+        an.smart_effect = "raised" if an.strength != before else "confirmed"
+        an.smart_note = f"Smart money agrees: {who}."
+        an.reason = f"{an.reason} {an.smart_note}"
+        return
+    if not lower:
+        an.smart_effect = "noted"
+        an.smart_note = f"Smart money disagrees: {who}. On daily that was measured to change nothing; the call stands."
+        an.reason = f"{an.reason} {an.smart_note}"
+        return
+    an.strength = _STRENGTH_DOWN[before]
+    an.smart_note = f"Smart money disagrees: {who}."
+    if an.strength:
+        an.smart_effect = "lowered"
+        an.reason = f"{an.reason} {an.smart_note} Call lowered to {an.strength}."
+        return
+    # a small call the followed traders bet against is not made
+    an.smart_effect = "withdrawn"
+    an.action = "WAIT"
+    an.side = ""
+    an.size_pct = 0.0
+    an.reason = (f"No {'long' if long else 'short'} entry: the model's call was small and "
+                 f"the followed traders went the other way ({who}).")
+
+
 # Which timeframes take a long only WITH the 200-day trend. Daily, measured:
 # the same entries below the average lost in both test years under every
 # exit; above it they made the money. See agent5/trail.py.
@@ -2048,6 +2140,7 @@ def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
                 "slot": slot,
                 "rank": _num(getattr(a, "rank", float("nan"))),
                 "geometry": getattr(a, "geometry", "atr"),
+                "smart_note": getattr(a, "smart_note", "") or "",
                 # strong | medium | small. The server reports the strongest
                 # level this entry clears; the app decides whether the user's
                 # chosen sensitivity is satisfied. Computing it once here and

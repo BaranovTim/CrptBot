@@ -297,3 +297,68 @@ def test_when_neither_side_calls_the_card_speaks_for_the_nearer_one():
     assert _choose(b, a) is a
     assert "long entry" in a.reason
     return True
+
+
+# ------------------------------------------------ the smart-money overlay
+def _call(side, strength):
+    a = Analysis("ANALYSIS A", pd.Timestamp("2026-09-21", tz="UTC"),
+                 pd.Timestamp("2026-09-24", tz="UTC"), 16)
+    a.action = f"ENTER {side} NOW"; a.side = side; a.strength = strength
+    a.geometry = "structure"; a.reason = "A signal."; a.size_pct = 2.0
+    return a
+
+
+def test_agreement_raises_a_call_and_disagreement_lowers_it():
+    from api.service import _smart_overlay
+
+    a = _call("LONG", "small")
+    _smart_overlay(a, {"net": 2, "longs": 2, "shorts": 0})
+    assert a.strength == "medium" and a.smart_effect == "raised"
+    assert "Smart money agrees: 2 followed traders opened LONG" in a.reason
+    b = _call("LONG", "strong")
+    _smart_overlay(b, {"net": 1, "longs": 1, "shorts": 0})
+    assert b.strength == "strong" and b.smart_effect == "confirmed"
+    c = _call("SHORT", "strong")
+    _smart_overlay(c, {"net": 1, "longs": 1, "shorts": 0})
+    assert c.strength == "medium" and c.smart_effect == "lowered" and c.action.startswith("ENTER")
+    assert "disagrees" in c.smart_note and "lowered to medium" in c.reason
+    return True
+
+
+def test_a_small_call_the_followed_bet_against_is_withdrawn():
+    from api.service import _smart_overlay
+
+    a = _call("LONG", "small")
+    _smart_overlay(a, {"net": -1, "longs": 0, "shorts": 1})
+    assert a.action == "WAIT" and a.side == "" and a.strength == "" and a.size_pct == 0.0
+    assert a.smart_effect == "withdrawn" and "went the other way" in a.reason
+    return True
+
+
+def test_silence_and_no_call_leave_everything_alone():
+    from api.service import _smart_overlay
+
+    a = _call("LONG", "medium")
+    _smart_overlay(a, {"net": 0, "longs": 1, "shorts": 1})
+    assert a.strength == "medium" and a.smart_note == "" and a.reason == "A signal."
+    w = Analysis("ANALYSIS A", pd.Timestamp("2026-09-21", tz="UTC"),
+                 pd.Timestamp("2026-09-24", tz="UTC"), 16)
+    w.action = "WAIT"; w.reason = "No entry."
+    _smart_overlay(w, {"net": 3, "longs": 3, "shorts": 0})
+    assert w.action == "WAIT" and w.strength == "", "the overlay never creates a call"
+    return True
+
+
+def test_the_overlay_windows_and_asymmetry_are_the_measured_ones():
+    from api.service import SMART_OVERLAY, _smart_overlay
+    assert SMART_OVERLAY == {"4h": {"hours": 24.0, "lower": True},
+                             "1d": {"hours": 72.0, "lower": False}}
+    # daily: agreement raises, disagreement only annotates
+    a = _call("LONG", "small")
+    _smart_overlay(a, {"net": 1, "longs": 1, "shorts": 0, "hours": 72}, lower=False)
+    assert a.strength == "medium" and "last 72h" in a.smart_note
+    b = _call("LONG", "small")
+    _smart_overlay(b, {"net": -2, "longs": 0, "shorts": 2, "hours": 72}, lower=False)
+    assert b.strength == "small" and b.action.startswith("ENTER") and b.smart_effect == "noted"
+    assert "the call stands" in b.reason
+    return True

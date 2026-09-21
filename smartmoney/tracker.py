@@ -36,7 +36,7 @@ import os
 import threading
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -247,6 +247,37 @@ class Tracker:
             "short_notional": sum(r["notional"] or 0 for r in shorts),
             "holders": rows,
         }
+
+    def net_entries(self, symbol: str, hours: float = 24.0,
+                    now: Optional[datetime] = None) -> dict:
+        """Followed traders' entries on this coin in the last `hours`: +1 per
+        long opened or flipped to, -1 per short. The confluence signal.
+
+        MEASURED (research/smart_feature.py, the 4h held-out year): on the
+        model's own calls, +0.59%/trade at a 72% hit rate when this agreed
+        with the call, -0.41% at 50% when it disagreed, -0.18% when silent.
+        As a model INPUT it was worth nothing -- it is zero on 90% of bars
+        -- so it is applied as an overlay on calls, never as a feature.
+        """
+        sym = (symbol or "").upper()
+        now = now or utc_now()
+        since = now - timedelta(hours=hours)
+        net = 0; longs = 0; shorts = 0
+        with self._lock:
+            for e in self.events:
+                if e.symbol != sym or e.kind not in ("opened", "flipped"):
+                    continue
+                try:
+                    at = datetime.fromisoformat(e.at)
+                except ValueError:
+                    continue
+                if at < since or at > now:
+                    continue
+                if e.side == "LONG":
+                    net += 1; longs += 1
+                elif e.side == "SHORT":
+                    net -= 1; shorts += 1
+        return {"symbol": sym, "hours": hours, "net": net, "longs": longs, "shorts": shorts}
 
     def recent(self, symbol: Optional[str] = None, limit: int = 20) -> List[dict]:
         sym = (symbol or "").upper()

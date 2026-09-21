@@ -43,8 +43,9 @@ class StubService:
     """A dashboard payload we can steer, with no models and no network."""
 
     def __init__(self, action="FLAT", live=None, whales=None, news=None,
-                 strength="strong", levels=None):
+                 strength="strong", levels=None, smart_note=""):
         self.action, self._live = action, live
+        self.smart_note = smart_note
         # The notification body is built from these. They were absent from
         # the stub while the body was prose, so the redesign onto strength
         # and levels arrived with three lines nothing exercised.
@@ -76,6 +77,7 @@ class StubService:
             "recommendation": {"action": self.action, "tone": "flat",
                                "detail": "d", "ev": 0.1, "size_pct": 1.0,
                                "strength": self.strength,
+                               "smart_note": self.smart_note,
                                "window_ends": "x"},
             "levels": self.levels,
             "live": self._live,
@@ -569,4 +571,18 @@ def test_a_dashboard_coming_back_to_life_is_not_a_signal():
     svc._bar = "2026-08-28T16:59:59.999000+00:00"
     fired = e.refresh()
     assert len(fired) == 1 and "FLAT" in fired[0].title, fired
+    return True
+
+
+def test_the_smart_money_line_sits_under_the_strength():
+    """When the followed traders changed or confirmed a call, the
+    notification says so, right after the strength and before the levels."""
+    svc = StubService(action="FLAT",
+                      smart_note="Smart money agrees: 2 followed traders opened LONG in the last 24h.")
+    e = _engine(svc)
+    svc.action = "BUY"
+    a = e.refresh()[0]
+    lines = a.body.split("\n")
+    assert lines[0] == "STRONG" and lines[1].startswith("Smart money agrees"), lines
+    assert lines[2].startswith("Take profit"), lines
     return True

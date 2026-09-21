@@ -1385,6 +1385,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Text('${r.strength.toUpperCase()} SIGNAL',
                 style: Obsidian.labelSm(color: c, size: 10)),
           ],
+          // CONFLUENCE. The followed traders' entries do not feed the model
+          // -- measured, they add nothing there -- but on the model's own
+          // calls their agreement was worth +0.6% a trade and their
+          // disagreement -0.4%, so the call is raised or lowered a level and
+          // the card says which.
+          if (r.smartNote.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(r.smartNote,
+                textAlign: TextAlign.center,
+                style: Obsidian.labelSm(
+                    color: r.smartNote.startsWith('Smart money agrees')
+                        ? Obsidian.green
+                        : Obsidian.amber,
+                    size: 10.5)),
+          ],
           if (!gated && r.sizePct != null && r.sizePct! > 0) ...[
             const SizedBox(height: 10),
             Text('quarter-Kelly size ${r.sizePct!.toStringAsFixed(2)}% of equity',

@@ -352,6 +352,10 @@ class Analysis:
     # `_evaluate_structure` for why a fixed threshold does not survive.
     rank: float = float("nan")
     geometry: str = "atr"
+    # what the followed traders did, and what it did to the call
+    # (api/service._smart_overlay). "" when nothing applied.
+    smart_note: str = ""
+    smart_effect: str = ""      # raised | confirmed | lowered | withdrawn
 
     @property
     def p_down(self) -> float:
