@@ -1831,7 +1831,7 @@ void main() {
     test('the horizon per timeframe matches core/timeframes.py BARRIERS', () {
       expect(TradeEntry.horizonOf('15m'), const Duration(hours: 2));
       expect(TradeEntry.horizonOf('1h'), const Duration(hours: 2));
-      expect(TradeEntry.horizonOf('4h'), const Duration(hours: 8));
+      expect(TradeEntry.horizonOf('4h'), const Duration(hours: 64));
       expect(TradeEntry.horizonOf('1d'), const Duration(days: 10));
       // no longer trading timeframes: an old entry on them is never expired
       expect(TradeEntry.horizonOf('1m'), isNull);

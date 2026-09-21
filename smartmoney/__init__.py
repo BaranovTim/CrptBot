@@ -19,8 +19,9 @@ THIS IS INFORMATION, NOT A SIGNAL, UNTIL IT IS MEASURED
     the price at detection so `research/` can score what happened after.
     The app labels the feed accordingly.
 """
-from .select import TraderStats, fill_stats, select_traders
+from .episodes import Episode, reconstruct
+from .select import TraderStats, record_stats, select_traders
 from .tracker import Event, Tracker, get_tracker
 
-__all__ = ["Event", "Tracker", "TraderStats", "fill_stats",
-           "get_tracker", "select_traders"]
+__all__ = ["Episode", "Event", "Tracker", "TraderStats", "get_tracker",
+           "reconstruct", "record_stats", "select_traders"]

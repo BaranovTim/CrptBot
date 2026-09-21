@@ -95,7 +95,15 @@ def _atr(bars: pd.DataFrame, period: int) -> pd.Series:
 
 
 def triple_barrier(bars: pd.DataFrame, cfg: Agent5Config) -> LabelResult:
-    """Label every bar that has ATR and a complete future window."""
+    """Label every bar that has ATR and a complete future window.
+
+    Dispatches on `cfg.geometry`: the structure barrier lives in its own
+    module because it needs Agent 1's pivots, and agent5 imports nothing
+    from the detectors here (the ablation deletes them wholesale).
+    """
+    if getattr(cfg, "geometry", "atr") == "structure":
+        from .structure import structure_barrier
+        return structure_barrier(bars, cfg)
     n = len(bars)
     close = bars["close"].to_numpy(float)
     high = bars["high"].to_numpy(float)

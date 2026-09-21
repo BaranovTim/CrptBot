@@ -643,12 +643,16 @@ class AlertEngine:
                 lines.append(f"{lev}{_usd(e.notional)}{at}")
             else:
                 lines.append(f"was {_usd(e.notional)}")
-            wr, pnl, n = t.get("win_rate"), t.get("pnl_30d"), t.get("closed_trades")
+            wr, n = t.get("win_rate"), t.get("position_trades") or t.get("closed_trades")
+            pnl = t.get("pnl_record")
+            span = "6mo"
+            if pnl is None:
+                pnl, span = t.get("pnl_30d"), "30d"
             rec = []
             if wr is not None:
                 rec.append(f"{wr:.0%} win rate")
             if pnl is not None:
-                rec.append(f"{'+' if pnl >= 0 else '-'}{_usd(abs(pnl))} / 30d")
+                rec.append(f"{'+' if pnl >= 0 else '-'}{_usd(abs(pnl))} / {span}")
             if n:
                 rec.append(f"{n} trades")
             if rec:

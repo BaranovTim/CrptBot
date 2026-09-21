@@ -187,7 +187,11 @@ class TradeEntry {
   static Duration? horizonOf(String? interval) => switch (interval) {
         '15m' => const Duration(hours: 2),            // 8 bars
         '1h' => const Duration(hours: 2),             // 2 bars
-        '4h' => const Duration(hours: 8),             // 2 bars
+        // SIXTEEN bars: the 4h models answer "does price reach the next
+        // confirmed swing before breaking the last one, within 64h". The
+        // barriers are the chart's levels, and a level that far takes
+        // longer to reach than a fixed ATR. See core/timeframes.py.
+        '4h' => const Duration(hours: 64),            // 16 bars
         // TEN days. The daily model is a pooled ten-day fit; two days sat
         // at chance on every coin. See core/timeframes.py BARRIERS.
         '1d' => const Duration(days: 10),             // 10 bars

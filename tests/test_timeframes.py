@@ -187,9 +187,16 @@ def test_the_hold_is_long_enough_for_the_target_to_be_reachable():
 
 
 def test_the_short_horizon_is_genuinely_shorter():
+    """On an ATR timeframe the slots are two horizons. On a structure
+    timeframe they are two SIDES on one horizon, so the holds are equal."""
+    from core import geometry_for
+
     for tf in TIMEFRAMES:
         _, h1, h2 = barriers_for(tf)
-        assert 1 <= h1 < h2, (tf, h1, h2)
+        if geometry_for(tf) == "structure":
+            assert h1 == h2 >= 8, (tf, h1, h2)
+        else:
+            assert 1 <= h1 < h2, (tf, h1, h2)
     return True
 
 

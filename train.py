@@ -197,11 +197,21 @@ def train_one(symbol: str, interval: str, slot: int, hold: int, k: float,
               bars, frames, warm: int, save: bool = True) -> Outcome:
     from agent5 import Agent5Config, JudgeAgent
 
+    from core import geometry_for, slot_side
+
     t0 = time.time()
     out = Outcome(symbol, interval, slot, ok=False, bars=len(bars))
-    # symmetric, so "chance down" is honestly 1 - "chance up"
-    cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k,
-                       **_cost_for(symbol))
+    geometry = geometry_for(interval)
+    if geometry == "structure":
+        # one model per side: the slot IS the side. k is the fallback
+        # distance for a bar without a level (agent5/structure.py)
+        cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k,
+                           geometry="structure", side=slot_side(interval, slot),
+                           **_cost_for(symbol))
+    else:
+        # symmetric, so "chance down" is honestly 1 - "chance up"
+        cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k,
+                           **_cost_for(symbol))
     judge = JudgeAgent(cfg)
     ds = judge.build(bars, warmup=warm, **frames)
     report = judge.fit(ds, with_shuffle=True, with_ablation=False,
@@ -283,7 +293,13 @@ def main(argv=None) -> int:
                 results.append(Outcome(a.symbol, interval, h, ok=False, note=why))
             continue
         k, hold1, hold2 = barriers_for(interval)
-        print(f"  barriers +/-{k:g} ATR   holds {hold1}/{hold2} bars", flush=True)
+        from core import geometry_for
+        if geometry_for(interval) == "structure":
+            print(f"  barriers ON STRUCTURE (nearest swing ahead / behind; "
+                  f"fallback +/-{k:g} ATR)   hold {hold2} bars   "
+                  f"h1 = long model, h2 = short model", flush=True)
+        else:
+            print(f"  barriers +/-{k:g} ATR   holds {hold1}/{hold2} bars", flush=True)
         for slot, hold in ((1, hold1), (2, hold2)):
             try:
                 r = train_one(a.symbol, interval, slot, hold, k, bars, frames,
@@ -327,13 +343,18 @@ def _write_verdicts(symbol: str, results, *, dry_run: bool) -> None:
     for r in results:
         if not r.ok:
             continue
-        by_iv.setdefault(r.interval, {})[f"h{r.horizon}"] = {
+        from core import geometry_for, slot_side
+        entry = {
             "auc": round(float(r.auc), 4),
             "shuffle": round(float(r.shuffle), 4),
             "spread": round(float(r.spread), 4),
             "effective_n": int(r.effective_n),
             "beats_shuffle": beats_shuffle(r.auc, r.shuffle, r.spread),
         }
+        if geometry_for(r.interval) == "structure":
+            entry["geometry"] = "structure"
+            entry["side"] = slot_side(r.interval, r.horizon)
+        by_iv.setdefault(r.interval, {})[f"h{r.horizon}"] = entry
     for iv, hs in by_iv.items():
         path = eval_path(symbol, iv)
         path.parent.mkdir(parents=True, exist_ok=True)

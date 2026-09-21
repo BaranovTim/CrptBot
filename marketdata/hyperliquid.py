@@ -105,6 +105,40 @@ def user_fills(address: str) -> List[Dict[str, Any]]:
     return out if isinstance(out, list) else []
 
 
+def user_fills_since(address: str, days: int = 180, pause: float = 0.3,
+                     max_pages: int = 20) -> List[Dict[str, Any]]:
+    """Every fill in the last `days`, paged through `userFillsByTime`.
+
+    `userFills` stops at the newest 2,000, which for a busy account is a
+    week and says nothing about a record. This walks forward from
+    now-days in pages of 2,000 (aggregated by order), and is what the
+    selection reads. Deduplicated on the trade id.
+    """
+    end = int(time.time() * 1000)
+    cur = end - days * 86_400_000
+    out: List[Dict[str, Any]] = []
+    for _ in range(max_pages):
+        page = info({"type": "userFillsByTime", "user": address,
+                     "startTime": cur, "endTime": end, "aggregateByTime": True})
+        if not isinstance(page, list) or not page:
+            break
+        out.extend(page)
+        last = max(int(x.get("time", 0)) for x in page)
+        if len(page) < 2000 or last <= cur:
+            break
+        cur = last + 1
+        time.sleep(pause)
+    seen: set = set()
+    uniq = []
+    for x in out:
+        tid = x.get("tid")
+        if tid in seen:
+            continue
+        seen.add(tid)
+        uniq.append(x)
+    return uniq
+
+
 def positions_from_state(state: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """{coin: {size, side, entry, leverage, notional, upnl}} from a state.
 

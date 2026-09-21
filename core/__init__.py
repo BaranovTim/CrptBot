@@ -11,6 +11,9 @@ having ONE input validator beats four copies that drift apart.
 from .health import FeatureHealth, feature_report
 from .timeframes import (
     BARRIERS,
+    GEOMETRY,
+    geometry_for,
+    slot_side,
     HTF_FOR,
     TIMEFRAMES,
     barriers_for,
@@ -31,5 +34,6 @@ from .validation import (
 
 __all__ = ["check_bars", "describe_bars_problem", "REQUIRED_OHLCV",
            "feature_report", "FeatureHealth", "utc_now",
-           "TIMEFRAMES", "HTF_FOR", "BARRIERS", "barriers_for", "pandas_rule", "htf_for", "history_start",
+           "TIMEFRAMES", "HTF_FOR", "BARRIERS", "GEOMETRY", "geometry_for", "slot_side",
+           "barriers_for", "pandas_rule", "htf_for", "history_start",
            "interval_seconds", "bars_per_day", "model_paths", "is_trained"]

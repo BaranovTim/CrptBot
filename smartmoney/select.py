@@ -1,30 +1,30 @@
 """Who to follow: a record, not a rank.
 
-"THE MOST SUCCESSFUL TRADES" IS THE WRONG SORT KEY ON ITS OWN
-    A scalper with nine hundred tiny wins and one liquidation has the most
-    successful trades on the board and a negative month. A lottery wallet
-    that went 40x on one HYPE long has the best ROI and no record at all.
-    So a trader qualifies on FOUR things at once, each of which the others
-    can fake:
+WHAT THE LEADERBOARD IS
+    Thirty days of profit. Measured against a year of fills for 54 of its
+    best-looking accounts (research/trader_patterns.py): 21 lost money over
+    the year, the median one had 4 liquidations, and for the median one
+    five trades were 73% of the gross. The board ranks variance. Half of
+    it is market makers whose fills never close at a loss and say nothing
+    about entries.
 
-      the month made money and the account is real     leaderboard
-      enough closed trades to be a record               fills
-      most of them won, and the wins outweigh the losses   fills
-      it was not one good week                          fills, by ISO week
+WHAT PERSISTED
+    Traders profitable on their POSITION TRADES over a half-year (at least
+    five of them) went on to make +1.5% per trade over the next 24h, from
+    the price a follower would pay, in the half-year after -- both sides,
+    seven of nine traders, against +0.3% of drift. Thin, but it is the one
+    thing in that analysis that held out of sample, and it is what this
+    selects on.
 
-    and the ranking score multiplies them, so being extraordinary on one axis
-    cannot buy a place with a bad number on another.
-
-WHAT A "TRADE" IS HERE
-    A reducing fill -- one with realised PnL -- net of its fee. A position
-    closed in three clips counts three times; that overstates the count for
-    everybody equally and is why the minimum is 100, not 30.
-
-WHERE THE NUMBERS COME FROM
-    The leaderboard gives PnL / ROI / volume; the venue's `userFills` gives
-    the newest 2,000 fills. For a busy account that is days, not months, so
-    consistency is judged over the weeks the fills actually cover, and a
-    record that covers fewer than two weeks does not qualify.
+THE RECORD
+    A POSITION TRADE is an episode (smartmoney/episodes.py) held at least
+    thirty minutes and reaching at least $5k. A record over the last
+    RECORD_DAYS qualifies when it has enough of them, made money, won more
+    than it lost, was consistent across the weeks it spans, and was not
+    liquidated more than it can explain. Ranked by a multiplicative score
+    so no single axis carries a bad one. The leaderboard is still where
+    the candidates come from -- it is the only public list of accounts
+    worth reading -- but it no longer decides.
 """
 from __future__ import annotations
 
@@ -36,35 +36,29 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from marketdata.hyperliquid import (fetch_leaderboard, iter_leaderboard,
-                                    performance, symbol_for, user_fills)
+                                    performance, user_fills_since)
+
+from .episodes import Episode, reconstruct
 
 log = logging.getLogger(__name__)
 
-# the bar: see the module docstring for why each exists
+# the leaderboard cut: real accounts with real activity
 MIN_ACCOUNT_USD = 100_000.0
 MIN_MONTH_VOLUME_USD = 1_000_000.0
-MIN_CLOSED_TRADES = 100
-MIN_WIN_RATE = 0.55
-MIN_PROFIT_FACTOR = 1.2
-MIN_WEEKS_COVERED = 2
-# THE BOT FILTER. The first live selection was twenty-five accounts at "100%
-# of 2,000, profit factor 99": market makers and basis arbitrage, whose
-# fills only ever close in profit because the risk sits elsewhere, at
-# 100+ fills a day, some of them in nothing but spot indices. None of them
-# has a view to follow. A record with no losing fill is not a trading
-# record, and a hundred closes a day is not a position.
-MAX_WIN_RATE = 0.90
-MAX_PROFIT_FACTOR = 20.0    # no realised losses at all = losers held, not traded
-MAX_FILLS_PER_DAY = 30.0
-MIN_ACTIVE_DAYS = 6
-CONSISTENCY = 0.6           # share of covered weeks that must be positive
-LOOKBACK_DAYS = 90
-# Measured on the live board: of the top 150 by monthly profit, 127 fail the
-# bot filter -- the biggest numbers on the board are made by machines. Real
-# discretionary records sit further down, so the pool is deep and the fills
-# read (one call each, once a day) is what finds them.
-CANDIDATES = 400
-TRACK = 25                  # how many end up followed
+CANDIDATES = 400            # deep, because most of the top is machines
+
+# the record
+RECORD_DAYS = 180
+MIN_HOLD_HOURS = 0.5
+MIN_NOTIONAL_USD = 5_000.0
+MIN_POSITION_TRADES = 8
+MIN_WIN_RATE = 0.50
+MAX_WIN_RATE = 0.92         # a book that never loses is not a trading book
+MIN_WEEKS = 4
+CONSISTENCY = 0.6           # share of covered weeks positive
+MAX_LIQUIDATIONS = 3
+MAX_MAKER_SHARE = 0.95      # 99% resting quotes is a market maker
+TRACK = 25
 
 
 @dataclass
@@ -75,15 +69,19 @@ class TraderStats:
     roi_30d: float
     volume_30d: float
     pnl_all: float
-    closed_trades: int = 0
+    # the record, on position trades over RECORD_DAYS
+    position_trades: int = 0
     wins: int = 0
     win_rate: float = 0.0
-    profit_factor: float = 0.0
+    pnl_record: float = 0.0
+    avg_win_pct: float = 0.0
+    avg_loss_pct: float = 0.0
+    payoff: float = 0.0
     weeks_covered: int = 0
     weeks_positive: int = 0
-    days_covered: float = 0.0
-    active_days: int = 0            # distinct days with a reducing fill
-    fills_per_day: float = 0.0
+    median_hold_h: float = 0.0
+    maker_share: float = 0.0
+    liquidations: int = 0
     coins: List[str] = field(default_factory=list)   # Binance symbols traded
     score: float = 0.0
     display_name: str = ""
@@ -98,20 +96,18 @@ class TraderStats:
 
     @property
     def qualifies(self) -> bool:
-        return (self.closed_trades >= MIN_CLOSED_TRADES
+        return (self.position_trades >= MIN_POSITION_TRADES
+                and self.pnl_record > 0
                 and MIN_WIN_RATE <= self.win_rate <= MAX_WIN_RATE
-                and MIN_PROFIT_FACTOR <= self.profit_factor <= MAX_PROFIT_FACTOR
-                and self.fills_per_day <= MAX_FILLS_PER_DAY
-                and self.active_days >= MIN_ACTIVE_DAYS
-                and bool(self.coins)                  # perpetuals, not spot indices
-                and self.weeks_covered >= MIN_WEEKS_COVERED
-                # most of the covered weeks positive: one good week is not a record
-                and self.weeks_positive >= math.ceil(CONSISTENCY * self.weeks_covered))
+                and self.weeks_covered >= MIN_WEEKS
+                and self.weeks_positive >= math.ceil(CONSISTENCY * self.weeks_covered)
+                and self.liquidations <= MAX_LIQUIDATIONS
+                and self.maker_share <= MAX_MAKER_SHARE
+                and bool(self.coins))
 
 
 def candidates(path: Path, limit: int = CANDIDATES) -> List[TraderStats]:
-    """Leaderboard rows worth reading fills for: real accounts that made
-    money this month and over their life, ranked by the month."""
+    """Leaderboard rows worth reading a record for."""
     out: List[TraderStats] = []
     for row in iter_leaderboard(path):
         try:
@@ -133,86 +129,61 @@ def candidates(path: Path, limit: int = CANDIDATES) -> List[TraderStats]:
     return out[:limit]
 
 
-def fill_stats(fills: Iterable[dict], now: Optional[datetime] = None,
-               lookback_days: int = LOOKBACK_DAYS) -> dict:
+def record_stats(fills: Iterable[dict], now: Optional[datetime] = None,
+                 days: int = RECORD_DAYS) -> dict:
     """The record inside one address's fills. Pure; testable."""
     now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=lookback_days)
-    gains = losses = 0.0
-    wins = trades = 0
+    cutoff_ms = int((now - timedelta(days=days)).timestamp() * 1000)
+    eps = [e for e in reconstruct(list(fills)) if e.t_close_ms >= cutoff_ms]
+    pos = [e for e in eps if e.hold_hours >= MIN_HOLD_HOURS and e.max_notional >= MIN_NOTIONAL_USD]
+    wins = [e for e in pos if e.pnl > 0]; losses = [e for e in pos if e.pnl <= 0]
     by_week: Dict[str, float] = {}
-    coins: set = set()
-    days: set = set()
-    oldest: Optional[datetime] = None
-    for f in fills:
-        try:
-            t = datetime.fromtimestamp(int(f.get("time", 0)) / 1000, tz=timezone.utc)
-        except (TypeError, ValueError, OSError):
-            continue
-        if t < cutoff:
-            continue
-        oldest = t if oldest is None or t < oldest else oldest
-        sym = symbol_for(str(f.get("coin", "")))
-        if sym:
-            coins.add(sym)
-        try:
-            pnl = float(f.get("closedPnl", 0) or 0)
-            fee = float(f.get("fee", 0) or 0)
-        except (TypeError, ValueError):
-            continue
-        if pnl == 0.0 and not str(f.get("dir", "")).startswith("Close"):
-            continue                                 # an opening fill
-        net = pnl - fee
-        trades += 1
-        if net > 0:
-            wins += 1
-            gains += net
-        else:
-            losses += -net
+    for e in pos:
+        t = datetime.fromtimestamp(e.t_close_ms / 1000, tz=timezone.utc)
         iso = t.isocalendar()
         wk = f"{iso[0]}-W{iso[1]:02d}"
-        by_week[wk] = by_week.get(wk, 0.0) + net
-        days.add(t.date())
+        by_week[wk] = by_week.get(wk, 0.0) + e.pnl
+    total_notional = sum(e.max_notional for e in eps) or 1.0
+    holds = sorted(e.hold_hours for e in pos)
+    avg_win = (sum(e.ret_pct for e in wins) / len(wins)) if wins else 0.0
+    avg_loss = (sum(e.ret_pct for e in losses) / len(losses)) if losses else 0.0
     return {
-        "closed_trades": trades,
-        "wins": wins,
-        "win_rate": (wins / trades) if trades else 0.0,
-        # capped: a record with no losing fill yet is not infinitely good, and
-        # `inf` is not JSON -- the phone's decoder would reject the payload
-        "profit_factor": min(gains / losses, 99.0) if losses > 0 else (99.0 if gains > 0 else 0.0),
+        "position_trades": len(pos),
+        "wins": len(wins),
+        "win_rate": (len(wins) / len(pos)) if pos else 0.0,
+        "pnl_record": sum(e.pnl for e in pos),
+        "avg_win_pct": avg_win,
+        "avg_loss_pct": avg_loss,
+        "payoff": (avg_win / -avg_loss) if avg_loss < 0 else (99.0 if avg_win > 0 else 0.0),
         "weeks_covered": len(by_week),
         "weeks_positive": sum(1 for v in by_week.values() if v > 0),
-        "days_covered": ((now - oldest).total_seconds() / 86400.0) if oldest else 0.0,
-        "active_days": len(days),
-        "fills_per_day": (trades / max(1.0, (now - oldest).total_seconds() / 86400.0)
-                          if oldest else 0.0),
-        "coins": sorted(coins),
+        "median_hold_h": holds[len(holds) // 2] if holds else 0.0,
+        "maker_share": sum(e.maker_entry * e.max_notional for e in eps) / total_notional,
+        "liquidations": sum(1 for e in pos if e.liquidated),
+        "coins": sorted({e.symbol for e in pos if e.symbol}),
     }
 
 
 def score_of(t: TraderStats) -> float:
     """Multiplicative, so no single axis can carry a bad one.
 
-    log10 of the month's profit in units of $10k (so $22M is 3.3, $100k is
-    1.0), times the win rate, times the profit factor capped at 3 (beyond
-    that it is one lucky trade), times the share of covered weeks that were
-    positive. A perfect record on a $50k month scores below a decent record
-    on a $5M month, which is the intended reading of "successful".
+    log10 of the record's profit in units of $10k, times the win rate,
+    times the payoff ratio capped at 3, times the share of covered weeks
+    that were positive.
     """
     if not t.qualifies:
         return 0.0
-    size = math.log10(1.0 + max(t.pnl_30d, 0.0) / 10_000.0)
-    pf = min(t.profit_factor, 3.0)
+    size = math.log10(1.0 + max(t.pnl_record, 0.0) / 10_000.0)
     consistency = t.weeks_positive / t.weeks_covered if t.weeks_covered else 0.0
-    return round(size * t.win_rate * pf * consistency, 4)
+    return round(size * t.win_rate * min(t.payoff, 3.0) * consistency, 4)
 
 
-def select_traders(leaderboard: Path, fills_fn: Callable[[str], List[dict]] = user_fills,
+def select_traders(leaderboard: Path,
+                   fills_fn: Callable[[str], List[dict]] = user_fills_since,
                    n: int = TRACK, now: Optional[datetime] = None,
                    pause: Callable[[], None] = lambda: None) -> List[TraderStats]:
-    """The followed set: candidates enriched with their fill record, filtered
-    on the bar, ranked by `score_of`. `pause` is called between fill reads
-    so the caller can be polite to the venue."""
+    """The followed set: candidates with their record, filtered on the bar,
+    ranked by `score_of`. `pause` runs between reads."""
     picked: List[TraderStats] = []
     for c in candidates(leaderboard):
         try:
@@ -221,8 +192,7 @@ def select_traders(leaderboard: Path, fills_fn: Callable[[str], List[dict]] = us
             log.warning("smartmoney: fills for %s failed: %s", c.address, e)
             fills = []
         pause()
-        s = fill_stats(fills, now=now)
-        for k, v in s.items():
+        for k, v in record_stats(fills, now=now).items():
             setattr(c, k, v)
         c.score = score_of(c)
         if c.score > 0:

@@ -346,6 +346,12 @@ class Analysis:
     upper: float = float("nan")
     lower: float = float("nan")
     side: str = ""
+    # Structure models decide by RANK, not by expected value: where this
+    # bar's score sits among the last TRAIL_BARS scores of the same model
+    # (0.97 = higher than 97% of them). NaN on an ATR model. See
+    # `_evaluate_structure` for why a fixed threshold does not survive.
+    rank: float = float("nan")
+    geometry: str = "atr"
 
     @property
     def p_down(self) -> float:
@@ -410,6 +416,113 @@ class Analysis:
         return "\n".join(L)
 
 
+# The trailing window a structure model ranks its score against: 90 days of
+# 4h bars. Long enough that a decile is ~54 bars, short enough to follow the
+# score distribution as it drifts.
+TRAIL_BARS = 540
+
+# The rank a structure entry must clear for each sensitivity. Measured on
+# research/structure_levels.py (5 coins, 4h, 16 bars): the top decile netted
+# +0.12%/trade and the top 5% +0.22% after fees, 10 of 10 books positive at
+# the top 5%. "small" is the loosest cut still measured positive.
+STRUCTURE_RANKS = (("strong", 0.95), ("medium", 0.90), ("small", 0.85))
+
+_LEVELS_CACHE: dict = {}
+
+
+def _structure_labels(judge, bars: pd.DataFrame):
+    """The per-bar barriers for this model's side, memoised on the newest
+    bar so the long and the short model do not each rebuild the levels."""
+    from agent5.labels import triple_barrier
+
+    key = (len(bars), bars.index[-1], judge.cfg.side, judge.cfg.max_hold_bars)
+    hit = _LEVELS_CACHE.get(key)
+    if hit is None:
+        if len(_LEVELS_CACHE) > 16:
+            _LEVELS_CACHE.clear()
+        hit = _LEVELS_CACHE[key] = triple_barrier(bars, judge.cfg)
+    return hit
+
+
+def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
+                        a: "Analysis") -> "Analysis":
+    """One side's structure model over the newest row.
+
+    WHY RANK AND NOT EXPECTED VALUE
+        The EV rule (p x TP - (1-p) x SL - cost > threshold) was measured
+        on these labels and it LOSES: the isotonic probability is honest on
+        average and the target/stop distances are close to equal, so it
+        opens far too many trades at 50-ish percent. What made money was
+        the top decile of the model's own score. A fixed cut from the
+        training data did not survive either -- it gave zero calls on half
+        the coins in the held-out year as the score distribution drifted --
+        so the cut is the quantile of the model's LAST TRAIL_BARS scores,
+        recomputed every bar. Causal: every score in the window is from a
+        bar that has closed.
+    """
+    from agent5.decision import expected_value_pct, kelly_full
+
+    cfg = judge.cfg
+    lab = _structure_labels(judge, bars)
+    tp_pct = float(lab.tp_pct.iloc[-1])
+    sl_pct = float(lab.sl_pct.iloc[-1])
+    entry = float(bars["close"].iloc[-1])
+    a.geometry = "structure"
+    if not (np.isfinite(tp_pct) and np.isfinite(sl_pct)):
+        return a
+
+    long = cfg.side == "long"
+    side = "LONG" if long else "SHORT"
+    tail = X.iloc[-min(TRAIL_BARS, len(X)):]
+    scores = judge.predict_proba(tail)
+    p = float(scores[-1])
+    past = scores[:-1]
+    past = past[np.isfinite(past)]
+    a.rank = float((past < p).mean()) if len(past) >= 50 else float("nan")
+
+    a.entry = entry
+    a.p_up = p if long else 1.0 - p          # p is P(this side's target first)
+    a.upper = entry * (1 + (tp_pct if long else sl_pct) / 100.0)
+    a.lower = entry * (1 - (sl_pct if long else tp_pct) / 100.0)
+    a.tp_price = a.upper if long else a.lower
+    a.sl_price = a.lower if long else a.upper
+    ev = float(expected_value_pct(p, tp_pct, sl_pct, cfg.round_trip_cost_pct))
+    if long:
+        a.ev_long = ev
+    else:
+        a.ev_short = ev
+
+    a.strength = ""
+    for label, cut in STRUCTURE_RANKS:
+        if np.isfinite(a.rank) and a.rank >= cut:
+            a.strength = label
+            break
+    lvl = "the next swing" if long else "the last swing"
+    stop = "the last swing" if long else "the next swing"
+    if a.strength:
+        f = float(kelly_full(p, tp_pct, sl_pct))
+        a.size_pct = min(cfg.kelly_fraction * max(f, 0.05) * 100.0, cfg.max_position_pct)
+        a.action = f"ENTER {side} NOW"
+        a.side = side
+        a.reason = (f"A {a.strength} signal — this reading is stronger than "
+                    f"{100 * a.rank:.0f}% of the last 90 days'. Target at {lvl} "
+                    f"({'+' if long else '-'}{tp_pct:.2f}%), stop at {stop}.")
+        a.diagnostic = (f"p(target first) {p:.3f}; rank {a.rank:.3f} over "
+                        f"{len(past)} bars; EV {ev:+.3f}% after costs; barriers on structure")
+        return a
+    a.action = "WAIT"
+    if np.isfinite(a.rank):
+        a.reason = (f"No {side.lower()} entry: this reading is weaker than "
+                    f"{100 * (1 - a.rank):.0f}% of the last 90 days'; it calls only "
+                    f"from the strongest {100 * (1 - STRUCTURE_RANKS[-1][1]):.0f}%.")
+        a.diagnostic = (f"p(target first) {p:.3f}; rank {a.rank:.3f} over "
+                        f"{len(past)} bars; EV {ev:+.3f}%; barriers on structure")
+    else:
+        a.reason = f"No {side.lower()} entry: not enough recent history to rank this reading."
+        a.diagnostic = f"p(target first) {p:.3f}; fewer than 50 trailing scores"
+    return a
+
+
 def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
              name: str, opened_at, ends_at, bars_left: int) -> Analysis:
     """Run one frozen model over the newest row and fill in an Analysis."""
@@ -418,6 +531,8 @@ def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
 
     a = Analysis(name=name, opened_at=opened_at, ends_at=ends_at,
                  bars_left=bars_left)
+    if getattr(judge.cfg, "geometry", "atr") == "structure":
+        return _evaluate_structure(judge, bars, X, a)
 
     p_up = float(judge.predict_proba(X.iloc[[-1]])[0])
     lab = triple_barrier(bars, judge.cfg)

@@ -849,6 +849,10 @@ class TradingService:
             "levels": _levels(chosen, price),
             "calibration_note": (
                 "Probability is the chance a long entered at this bar's close "
+                "reaches the next confirmed swing before breaking the last one, "
+                "within the window; the target and stop are those levels."
+                if getattr(a, "geometry", "atr") == "structure" else
+                "Probability is the chance a long entered at this bar's close "
                 "reaches +1 ATR before -1 ATR within the window. On the last "
                 "evaluation this feature set scored at chance, so treat it as "
                 "a measurement of the model, not a forecast of the market."),
@@ -1724,10 +1728,13 @@ def _levels(a, price) -> Dict[str, Any]:
         # rather than putting a stop on the wrong side of the price
         # during the window between deploying the server and
         # installing the build.
-        "tp_pct": _num((a.upper / a.entry - 1.0) * 100.0)
-        if _num(a.entry) else None,
-        "sl_pct": _num((1.0 - a.lower / a.entry) * 100.0)
-        if _num(a.entry) else None,
+        # magnitudes of THIS trade's target and stop. they were upper-minus-
+        # entry and entry-minus-lower, which is the same thing only while the
+        # barriers are symmetric; on structure a short's target is the lower
+        "tp_pct": _num(abs(a.tp_price / a.entry - 1.0) * 100.0)
+        if _num(a.entry) and _num(a.tp_price) else None,
+        "sl_pct": _num(abs(a.sl_price / a.entry - 1.0) * 100.0)
+        if _num(a.entry) and _num(a.sl_price) else None,
         # SIGNED, and measured off the actual level rather than the
         # long-oriented barrier — so `price * (1 + pct/100)` is right
         # for both directions and there is no convention to remember.
@@ -1846,9 +1853,25 @@ def _choose(primary, secondary):
     "BUY" next to "51.7%" on screen, which reads as incoherent because the two
     numbers were answering different questions.
     """
-    if primary.action.startswith("ENTER"):
+    p_in, s_in = primary.action.startswith("ENTER"), secondary.action.startswith("ENTER")
+    if p_in and s_in:
+        # both sides of a structure timeframe firing at once is rare and
+        # means the levels are tight; the more confident one speaks
+        pr, sr = getattr(primary, "rank", float("nan")), getattr(secondary, "rank", float("nan"))
+        if np.isfinite(pr) and np.isfinite(sr) and sr > pr:
+            return secondary
         return primary
-    return secondary if secondary.action.startswith("ENTER") else primary
+    if p_in:
+        return primary
+    if s_in:
+        return secondary
+    # neither: on a structure timeframe the card speaks for the side nearer
+    # to calling, so "weaker than 93% of the last 90 days" is about the side
+    # that was closest, not always the short model that sits in slot 2
+    pr, sr = getattr(primary, "rank", float("nan")), getattr(secondary, "rank", float("nan"))
+    if np.isfinite(pr) and np.isfinite(sr) and sr > pr:
+        return secondary
+    return primary
 
 
 def _gate_by_verdict(symbol: str, interval: str,
@@ -1866,7 +1889,14 @@ def _gate_by_verdict(symbol: str, interval: str,
     """
     if rec.get("action") not in ("BUY", "SELL"):
         return rec
-    usable, why = model_usable(symbol, interval)
+    # PER SLOT. The call is gated on the verdict of the model that MADE it,
+    # not on "any horizon of this timeframe". The pooled daily model's
+    # 5-day half failed its shuffle while the 10-day half cleared, and the
+    # timeframe-wide gate let the 5-day calls through on the strength of a
+    # model that was not making them. On a structure timeframe the slots
+    # are the two sides, and a short model at chance must not ride on a
+    # long model that is not.
+    usable, why = model_usable(symbol, interval, slot=rec.get("slot"))
     if usable:
         return rec
     return {"action": "FLAT", "tone": "flat",
@@ -1940,15 +1970,21 @@ def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
                                "these windows have expired - is the "
                                "collector running?")}
     a = _choose(primary, secondary)
+    # which model slot this reading came from, for the per-slot gate:
+    # ANALYSIS A is h1, ANALYSIS B is h2
+    slot = "h1" if str(a.name).endswith("A") else "h2"
     if a.action.startswith("ENTER"):
         tone = "up" if a.side == "LONG" else "down"
         word = "BUY" if a.side == "LONG" else "SELL"
         return {"action": word, "tone": tone, "detail": a.reason,
                 "diagnostic": getattr(a, "diagnostic", "") or "",
                 "size_pct": _num(a.size_pct),
-                "ev": _num(max(a.ev_long, a.ev_short)),
+                "ev": _num(np.nanmax([a.ev_long, a.ev_short])),
                 "window_bars": a.bars_left,
                 "p_up": _num(a.p_up),
+                "slot": slot,
+                "rank": _num(getattr(a, "rank", float("nan"))),
+                "geometry": getattr(a, "geometry", "atr"),
                 # strong | medium | small. The server reports the strongest
                 # level this entry clears; the app decides whether the user's
                 # chosen sensitivity is satisfied. Computing it once here and
@@ -1961,9 +1997,12 @@ def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
             "diagnostic": getattr(a, "diagnostic", "") or "",
             "strength": "",
             "p_needed": _num(getattr(a, "p_needed", float("nan"))),
-            "ev": _num(max(a.ev_long, a.ev_short)),
+            "ev": _num(np.nanmax([a.ev_long, a.ev_short])),
             "window_bars": a.bars_left,
             "p_up": _num(a.p_up),
+            "slot": slot,
+            "rank": _num(getattr(a, "rank", float("nan"))),
+            "geometry": getattr(a, "geometry", "atr"),
             "window_ends": a.ends_at.isoformat()}
 
 

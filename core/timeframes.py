@@ -104,7 +104,13 @@ HISTORY_START: Dict[str, str] = {
 BARRIERS: Dict[str, Tuple[float, int]] = {
     "15m": (2.0, 8),        # span ~1.11%, hold 2h
     "1h": (1.0, 2),         # span ~1.28%, hold 2h
-    "4h": (1.0, 2),         # span ~3.06%, hold 8h
+    # SIXTEEN BARS, ON THE CHART'S LEVELS. 4h is the structure timeframe
+    # (see GEOMETRY below): the barriers are the nearest confirmed swing
+    # ahead and behind, ~0.8 ATR each on the median bar, and a target that
+    # far takes longer to reach than a fixed ATR. Measured at 8/16/32 bars:
+    # 16 was the best out of time. The k here is the FALLBACK distance for
+    # a bar with no usable level on one side.
+    "4h": (1.0, 16),        # levels ~0.8 ATR each way, hold 64h
     # TEN DAYS, NOT TWO. Measured, not chosen: with a 2-day window every
     # daily model on every coin sat at its shuffled control (0 of 15). The
     # window curve rose monotonically -- 0.498 at 2 days, 0.508 at 5,
@@ -115,15 +121,39 @@ BARRIERS: Dict[str, Tuple[float, int]] = {
 }
 
 
+# Which timeframes ask the STRUCTURE question rather than the ATR one. On a
+# structure timeframe the two model slots are not two horizons but two
+# SIDES: h1 is the long model, h2 the short model, both on the same hold.
+# Everything that reads `model_paths` still finds two files; everything that
+# reads `barriers_for` still gets two holds (equal). What changes is what
+# each model was asked, and `evaluate` reads that from the model's own cfg.
+GEOMETRY: Dict[str, str] = {
+    "4h": "structure",
+}
+
+
+def geometry_for(interval: str) -> str:
+    return GEOMETRY.get(interval, "atr")
+
+
 def barriers_for(interval: str) -> Tuple[float, int, int]:
     """(k ATR each side, h1 hold in bars, h2 hold in bars).
 
     h1 is the half-way horizon the monitor reads once a window is partly
     spent — the same "different question with less time left" split that has
-    always separated h1 from h2, generalised past 1-and-2 bars.
+    always separated h1 from h2, generalised past 1-and-2 bars. On a
+    structure timeframe both slots hold for the full window, because the
+    slots are sides, not horizons.
     """
     k, h2 = BARRIERS.get(interval, (1.0, 2))
+    if geometry_for(interval) == "structure":
+        return k, h2, h2
     return k, max(1, h2 // 2), h2
+
+
+def slot_side(interval: str, slot: int) -> str:
+    """Which side a model slot answers for, on a structure timeframe."""
+    return "long" if slot == 1 else "short"
 
 
 def pandas_rule(interval: str) -> str:
@@ -228,12 +258,14 @@ _VERDICTS: dict = {}
 
 
 def model_usable(symbol: str, interval: str,
-                 output_dir: Optional[Path] = None) -> Tuple[bool, str]:
+                 output_dir: Optional[Path] = None,
+                 slot: Optional[str] = None) -> Tuple[bool, str]:
     """(usable, reason). Usable when no verdict exists -- an unevaluated
     model is the status quo, and gating it on a file nobody has written
-    would silence every pair on the day this ships. Usable when at least
-    one horizon beats its shuffle. Otherwise not, and the reason says so
-    in words the dashboard can show."""
+    would silence every pair on the day this ships. With `slot` ("h1" or
+    "h2"), usable when THAT model beats its shuffle; without, when at
+    least one does. Otherwise not, and the reason says so in words the
+    dashboard can show."""
     import json
 
     path = eval_path(symbol, interval, output_dir)
@@ -258,6 +290,15 @@ def model_usable(symbol: str, interval: str,
     # Recomputed from the numbers, never read from the stored flag: the rule
     # is `beats_shuffle`, in one place, and tightening it must not require
     # rewriting every verdict file already on disk.
+    if slot and slot in hs:
+        h = hs[slot]
+        if beats_shuffle(h.get("auc"), h.get("shuffle"), h.get("spread")):
+            return True, ""
+        what = h.get("side") or slot
+        return False, (
+            f"No call on {interval}: the {what} model does not beat a control "
+            f"trained on scrambled labels (AUC {h.get('auc', 0):.3f} vs shuffle "
+            f"{h.get('shuffle', 0):.3f}). A call from it would be a coin flip.")
     if any(beats_shuffle(h.get("auc"), h.get("shuffle"), h.get("spread"))
            for h in hs.values()):
         return True, ""

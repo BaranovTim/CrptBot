@@ -17,7 +17,8 @@ from api.alerts import AlertEngine                                  # noqa: E402
 from api.push import _priority, is_kind_muted                       # noqa: E402
 from marketdata.hyperliquid import (iter_leaderboard, positions_from_state,  # noqa: E402
                                     symbol_for)
-from smartmoney.select import (TraderStats, candidates, fill_stats,  # noqa: E402
+from smartmoney.episodes import reconstruct                       # noqa: E402
+from smartmoney.select import (TraderStats, candidates, record_stats,  # noqa: E402
                                score_of, select_traders)
 from smartmoney.tracker import Tracker, diff_books                  # noqa: E402
 
@@ -74,69 +75,100 @@ def test_leaderboard_is_read_one_row_at_a_time_and_filtered():
     assert [c.address for c in picked] == ["0xaaaa"]
 
 
-# ------------------------------------------------------------------ fills
-def _fill(days_ago, coin, pnl, fee=1.0, close=True):
-    t = NOW - timedelta(days=days_ago)
-    return {"coin": coin, "time": int(t.timestamp() * 1000),
-            "dir": ("Close Long" if close else "Open Long"),
-            "closedPnl": str(pnl), "fee": str(fee)}
+# ------------------------------------------------------------------ the record
+T0 = int(NOW.timestamp() * 1000)
 
 
-def test_fill_stats_count_reducing_fills_net_of_fees_by_week():
-    fills = [_fill(1, "BTC", 100), _fill(2, "BTC", 50), _fill(3, "ETH", -30),
-             _fill(9, "kPEPE", 80), _fill(10, "BTC", 1.5, fee=2.0),  # a loss net of fee
-             _fill(16, "SOL", 200), _fill(1, "BTC", 0, close=False),  # an opening fill
-             _fill(120, "BTC", 9999)]                                   # outside 90 days
-    s = fill_stats(fills, now=NOW)
-    assert s["closed_trades"] == 6 and s["wins"] == 4
-    assert abs(s["win_rate"] - 4 / 6) < 1e-9
-    assert s["weeks_covered"] == 3 and s["weeks_positive"] == 3
-    assert s["coins"] == ["1000PEPEUSDT", "BTCUSDT", "ETHUSDT", "SOLUSDT"]
-    assert 0 < s["profit_factor"] < 99
-    assert s["active_days"] == 6 and 0 < s["fills_per_day"] < 1
+def _fill(days_ago, coin, px, sz, side, start, pnl=0.0, fee=1.0, crossed=True, liq=False, tid=None):
+    t = T0 - int(days_ago * 86_400_000)
+    return {"coin": coin, "px": str(px), "sz": str(sz), "side": side, "time": t,
+            "startPosition": str(start), "closedPnl": str(pnl), "fee": str(fee),
+            "crossed": crossed, "liquidation": liq, "tid": tid or t}
+
+
+def _round_trip(days_ago, coin, px_in, px_out, sz, pnl, hold_h=6.0, crossed=True, liq=False):
+    """One long: open, close `hold_h` later."""
+    return [_fill(days_ago, coin, px_in, sz, "B", 0, crossed=crossed, tid=f"{days_ago}a{coin}"),
+            _fill(days_ago - hold_h / 24, coin, px_out, sz, "A", sz, pnl=pnl, liq=liq, tid=f"{days_ago}b{coin}")]
+
+
+def test_episodes_are_rebuilt_from_the_stated_position():
+    fills = [_fill(10, "BTC", 100, 1.0, "B", 0), _fill(9.9, "BTC", 99, 1.0, "B", 1.0, crossed=False),
+             _fill(9.5, "BTC", 105, 1.0, "A", 2.0, pnl=5), _fill(9.4, "BTC", 106, 1.0, "A", 1.0, pnl=6),
+             _fill(9.0, "BTC", 106, 2.0, "A", 0), _fill(8.8, "BTC", 104, 3.0, "B", -2.0, pnl=4),
+             _fill(8.5, "BTC", 103, 1.0, "A", 1.0, pnl=-1), _fill(8.0, "ETH", 10, 5.0, "B", 0)]
+    eps = reconstruct(fills)
+    assert [(e.coin, e.side, e.n_entry, e.n_exit) for e in eps] == [
+        ("BTC", "LONG", 2, 2), ("BTC", "SHORT", 1, 1), ("BTC", "LONG", 1, 1)]
+    assert abs(eps[0].entry_vwap - 99.5) < 1e-9 and abs(eps[0].exit_vwap - 105.5) < 1e-9
+    assert abs(eps[0].maker_entry - 0.5) < 1e-9 and eps[0].pnl < 11
+    assert eps[1].ret_pct > 0 and eps[2].ret_pct < 0          # the flip split both ways
+    return True
+
+
+def test_the_record_counts_position_trades_and_their_weeks():
+    fills = []
+    for d in range(0, 70, 5):                        # a trade every 5 days, 14 of them
+        fills += _round_trip(d + 1, "BTC", 100, 103 if d % 15 else 97, 100, 300 if d % 15 else -300)
+    fills += _round_trip(3, "BTC", 100, 100.5, 100, 50, hold_h=0.2)     # too short: not a position
+    fills += _round_trip(4, "BTC", 100, 102, 1, 2)                        # $100: too small
+    fills += _round_trip(200, "BTC", 100, 150, 100, 5000)                 # outside the window
+    s = record_stats(fills, now=NOW)
+    assert s["position_trades"] == 14 and s["wins"] == 9
+    assert abs(s["win_rate"] - 9 / 14) < 1e-9
+    assert s["pnl_record"] > 0 and s["payoff"] > 0.5
+    assert s["weeks_covered"] >= 9 and s["weeks_positive"] >= 5
+    assert s["coins"] == ["BTCUSDT"] and s["liquidations"] == 0
+    assert abs(s["median_hold_h"] - 6.0) < 1e-9
+    return True
 
 
 def test_a_record_needs_every_axis_at_once():
     base = dict(address="0x1", account_value=1e6, pnl_30d=1e6, roi_30d=0.5,
-                volume_30d=1e7, pnl_all=2e6, closed_trades=300, wins=200,
-                win_rate=0.66, profit_factor=2.0, weeks_covered=4, weeks_positive=4,
-                active_days=20, fills_per_day=8.0, coins=["BTCUSDT"])
+                volume_30d=1e7, pnl_all=2e6, position_trades=20, wins=13,
+                win_rate=0.65, pnl_record=2e5, avg_win_pct=4.0, avg_loss_pct=-3.0,
+                payoff=1.33, weeks_covered=10, weeks_positive=7, median_hold_h=20.0,
+                maker_share=0.3, liquidations=1, coins=["BTCUSDT"])
     good = TraderStats(**base)
     assert good.qualifies and score_of(good) > 0
-    assert not TraderStats(**{**base, "closed_trades": 50}).qualifies
-    assert not TraderStats(**{**base, "win_rate": 0.5}).qualifies
-    assert not TraderStats(**{**base, "profit_factor": 1.0}).qualifies
-    assert not TraderStats(**{**base, "weeks_positive": 2}).qualifies   # 2 of 4
-    assert TraderStats(**{**base, "weeks_positive": 3}).qualifies       # 3 of 4
-    assert not TraderStats(**{**base, "weeks_covered": 1, "weeks_positive": 1}).qualifies
-    # the bot filter: a book that never loses, a hundred closes a day, or
-    # nothing but spot indices is not a trader with a view
-    assert not TraderStats(**{**base, "win_rate": 1.0, "profit_factor": 99}).qualifies
-    assert not TraderStats(**{**base, "profit_factor": 99}).qualifies   # never a realised loss
-    assert not TraderStats(**{**base, "fills_per_day": 140.0}).qualifies
-    assert not TraderStats(**{**base, "active_days": 4}).qualifies
+    assert not TraderStats(**{**base, "position_trades": 5}).qualifies
+    assert not TraderStats(**{**base, "pnl_record": -1.0}).qualifies
+    assert not TraderStats(**{**base, "win_rate": 0.45}).qualifies
+    assert not TraderStats(**{**base, "win_rate": 0.99}).qualifies      # never loses: a bot
+    assert not TraderStats(**{**base, "weeks_covered": 3}).qualifies
+    assert not TraderStats(**{**base, "weeks_positive": 4}).qualifies   # 4 of 10
+    assert not TraderStats(**{**base, "liquidations": 4}).qualifies
+    assert not TraderStats(**{**base, "maker_share": 0.99}).qualifies   # a market maker
     assert not TraderStats(**{**base, "coins": []}).qualifies
-    # a bigger month with the same record scores higher, and a perfect
-    # tiny month does not beat a good big one
-    small = TraderStats(**{**base, "pnl_30d": 5e4, "win_rate": 0.9, "profit_factor": 5})
-    assert score_of(good) > score_of(small)
+    # a bigger record with the same shape scores higher; a great month
+    # with no record scores nothing
+    assert score_of(TraderStats(**{**base, "pnl_record": 2e6})) > score_of(good)
+    assert score_of(TraderStats(**{**base, "position_trades": 3, "pnl_30d": 5e7})) == 0
+    return True
 
 
-def test_select_reads_fills_only_for_candidates_and_ranks_by_score():
+def test_select_reads_a_record_for_each_candidate_and_ranks_by_it():
     path = _board([_row("0xaaaa", 2e6, 5e5, 9e6), _row("0xbbbb", 2e6, 3e6, 9e6),
                    _row("0xcccc", 2e6, 5e5, 9e6)])
     asked = []
 
     def fills(addr):
         asked.append(addr)
-        if addr == "0xcccc":                  # a scalper that bleeds
-            return [_fill(d % 20, "BTC", 1 if d % 3 else -50) for d in range(150)]
-        return [_fill(d % 25, "BTC", 30 if d % 4 else -20) for d in range(150)]
+        out = []
+        for d in range(0, 70, 5):
+            if addr == "0xcccc":                          # loses more than it wins
+                out += _round_trip(d + 1, "ETH", 100, 99, 100, -100)
+            else:
+                win = (d // 5) % 3 != 0
+                size = 3000 if addr == "0xaaaa" else 300  # aaaa has the bigger record
+                out += _round_trip(d + 1, "BTC", 100, 103 if win else 98, 100, size if win else -size / 2)
+        return out
 
     picked = select_traders(path, fills_fn=fills, now=NOW)
     assert sorted(asked) == ["0xaaaa", "0xbbbb", "0xcccc"]
-    assert [t.address for t in picked] == ["0xbbbb", "0xaaaa"]   # bigger month first
-    assert all(t.score > 0 for t in picked)
+    assert [t.address for t in picked] == ["0xaaaa", "0xbbbb"], [t.address for t in picked]
+    assert all(t.score > 0 and t.position_trades == 14 for t in picked)
+    return True
 
 
 # ------------------------------------------------------------- differencing
@@ -177,9 +209,9 @@ class Venue:
 
 def _trader(addr, **kw):
     base = dict(address=addr, account_value=1e6, pnl_30d=2e6, roi_30d=0.4,
-                volume_30d=1e7, pnl_all=3e6, closed_trades=400, wins=280,
-                win_rate=0.7, profit_factor=2.2, weeks_covered=4, weeks_positive=4,
-                score=3.0)
+                volume_30d=1e7, pnl_all=3e6, position_trades=40, wins=28,
+                win_rate=0.7, pnl_record=8e5, payoff=2.2, weeks_covered=8,
+                weeks_positive=7, coins=["BTCUSDT"], score=3.0)
     base.update(kw)
     return TraderStats(**base)
 
@@ -288,7 +320,7 @@ def test_an_event_becomes_a_labelled_alert_once():
     v = Venue()
     v.books["0xe867fbdad3291530e41530301ecb77693850c78e"] = {}
     t, _ = _tracker(v, [_trader("0xe867fbdad3291530e41530301ecb77693850c78e",
-                               pnl_30d=22.1e6, win_rate=0.69, closed_trades=873)])
+                               pnl_record=22.1e6, win_rate=0.69, position_trades=873)])
     t.reselect(); t.poll(NOW)
     engine = AlertEngine(SmartSvc(t), pairs=[],
                          state_path=Path(tempfile.mkdtemp()) / "a.json")
@@ -305,7 +337,7 @@ def test_an_event_becomes_a_labelled_alert_once():
     assert a.symbol == "BTCUSDT" and a.interval == "" and a.strength == ""
     assert a.title == "BTCUSDT: 0xe867…c78e opened LONG"
     assert a.body.splitlines() == ["10× · $2.1M @ 63,120.00",
-                                   "69% win rate · +$22.1M / 30d · 873 trades",
+                                   "69% win rate · +$22.1M / 6mo · 873 trades",
                                    "1 of 1 followed long, 0 short"]
     assert a.extra["event"] == "opened" and a.extra["side"] == "LONG"
     assert engine.refresh() == []                          # not twice
@@ -322,3 +354,40 @@ def test_the_phone_can_silence_the_kind_and_the_relay_ranks_it_high():
     class A:
         kind, strength = "smart", ""
     assert _priority(A()) == 4
+
+
+def test_polling_continues_while_a_selection_runs():
+    """A selection is hours of paged reads. The loop must keep polling
+    books while one is in flight, and take the new list when it lands."""
+    import threading
+    import time as _t
+
+    v = Venue()
+    v.books["0xaaaa"] = {"BTC": _pos("LONG", 1)}
+    gate = threading.Event()
+
+    def slow_select():
+        gate.wait(5)
+        return [_trader("0xaaaa"), _trader("0xbbbb")]
+
+    t, _ = _tracker(v, [_trader("0xaaaa")])
+    t.reselect()                                   # the initial, synchronous one
+    t.poll(NOW)
+    t._select_fn = slow_select
+    t.selected_at = "2000-01-01T00:00:00+00:00"    # long overdue
+    t.start(poll_seconds=0.05, reselect_seconds=3600)
+    try:
+        _t.sleep(0.3)
+        v.books["0xaaaa"]["ETH"] = _pos("LONG", 2)   # a change WHILE selecting
+        _t.sleep(0.3)
+        assert any(e.kind == "opened" and e.coin == "ETH" for e in t.events), \
+            "polling stopped during selection"
+        assert len(t.traders) == 1                  # not swapped yet
+        gate.set()
+        deadline = _t.time() + 3
+        while len(t.traders) != 2 and _t.time() < deadline:
+            _t.sleep(0.05)
+        assert len(t.traders) == 2, "the finished selection was not applied"
+    finally:
+        t.stop()
+    return True

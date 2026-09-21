@@ -32,6 +32,13 @@ class Agent5Config:
     k_dn: float = 1.0               # stop-loss distance, in ATRs
     max_hold_bars: int = 24         # vertical barrier (time-out)
     atr_period: int = 14
+    # WHERE THE BARRIERS SIT. "atr": +k_up / -k_dn ATR from the close, the
+    # symmetric question every model asked until September 2026. "structure":
+    # the nearest confirmed swing ahead and behind (agent5/structure.py),
+    # one model per SIDE because a short's target is not a long's mirror.
+    # Measured: 4h AUC 0.51 -> 0.58-0.61, and it holds out of time.
+    geometry: str = "atr"           # atr | structure
+    side: str = "long"              # long | short; only read for structure
 
     # --- sampling ----------------------------------------------------------
     sample_every: int = 1           # every bar; CUSUM sampling is a later upgrade
@@ -109,6 +116,10 @@ class Agent5Config:
             raise ValueError("kelly_fraction must be in (0, 1]")
         if self.model not in ("auto", "logistic", "lightgbm"):
             raise ValueError("model must be auto, logistic or lightgbm")
+        if self.geometry not in ("atr", "structure"):
+            raise ValueError("geometry must be atr or structure")
+        if self.side not in ("long", "short"):
+            raise ValueError("side must be long or short")
 
 
 DEFAULT_CONFIG = Agent5Config()

@@ -182,6 +182,64 @@ picture, 0 of 30 positive 1h books. Written up in the chat of 2026-09-15.
 * **E5 CUSUM, E6 bagging** — both make p *steadier*; neither adds gross edge.
   Worth doing when there is an edge to steady.
 
+### Targets and stops on the structure (research/structure_levels.py, 2026-09-20)
+
+The objection: every TP/SL the app shows is `entry ± k·ATR` — the same
+percentage for every trade on a coin that day, blind to the previous swing,
+the equal highs, yesterday's range. 2R/4R stretched the same blind barriers.
+This puts them on agent1's own causal levels (confirmed swings, PDH/PDL,
+equal-high clusters, the last leg's 1.0/1.618 extensions) and relabels.
+
+| 4h, 16-bar hold, 5 coins × 2 sides | tp/sl (ATR) | AUC / shuffle | top-10% net | books + / sig+ / sig− |
+|---|---|---|---|---|
+| ±1 ATR (reference, same labeller) | 1.00/1.00 | 0.512 / 0.489 | +0.01% | 5/10, 4, 2 |
+| target in front of level, stop beyond | 0.73/1.07 | 0.581 / 0.494 | +0.08% | 7/10, 3, 0 |
+| **target at level, stop at level** | 0.83/0.83 | 0.577 / 0.494 | **+0.12% (top-5% +0.22%)** | 8/10 (10/10), 3 (5), 0 |
+| target at the second level | 1.48/1.07 | 0.585 / 0.493 | +0.21% | 9/10, 4, 0 |
+
+**What holds out of time** (fit < 2025-09-20, score the year after, threshold
+from the training half's OOF, scrambled control on the identical recipe):
+the *ranking* does — test AUC 0.55–0.64 against controls at 0.46–0.56 on
+every row, mean 0.584 vs 0.511. The *book* mostly does not: a training-
+quantile threshold selects zero calls on half the rows (score drift), and
+where it fires the "at" placement nets +0.04% mean (BTC short +0.35% ± 0.16
+on 72 calls, DOGE long −0.35%), with the whole test year hostile to longs
+(all-rows long books −0.17 to −0.45%).
+
+Reading: the levels are right and the model knows it — "reaches the next
+swing before breaking the last one" is far more predictable than "moves
+1 ATR", and stays so in an unseen year. Turning that into money needs (a)
+a decision rule that is a rank cut with a drift-robust threshold, not the
+EV-on-calibrated-p rule, which loses on every structure row; (b) confirmation
+on the other ten coins; (c) the honest expectation that the edge is small
+(+0.04% to +0.2% per 4h trade after fees), not the +0.2% the in-sample cell
+suggests.
+
+### Shipping structure on 4h: the served rule, replayed out of time (2026-09-20)
+
+Before shipping, the exact rule `monitor.py` serves — rank the score against the trailing 540 scores, call from the top 15/10/5% — was replayed on the held-out year (`research/structure_rules.py` over `structure_holdout.py --dump`), beside the current ±1 ATR 2-bar model under the identical protocol:
+
+| 4h, 5 coins × 2 sides, Sep 2025 → Sep 2026 | AUC / control | hit rate | timeouts | top-decile net/trade | books sig− |
+|---|---|---|---|---|---|
+| ±1 ATR, 2 bars (current) | 0.620 / 0.504 | 36% | 34% | −0.07% | 0 |
+| structure, 16 bars, rolling rank | 0.584 / 0.511 | 58% | 4% | −0.04% | 0 |
+| structure, EV-on-p rule (the ATR models' rule) | — | 32% | 4% | −0.15% | 4 |
+| every bar (the year itself) | — | 47% | 3% | −0.13% | 6 |
+
+The year was hostile to the label (every bar −0.13%, longs −0.24%). Neither model made money in it; the structure model turned a losing year into break-even with a 58% hit rate and the target/stop on the chart's levels, and it is the better predictor. **That, not profitability, is the claim it ships on.** Longer trailing windows (1500, 4000 bars), absolute-p cuts and rank×p combinations were all replayed: none beat the 540-bar rank; the top 3% (+0.07%) is a tail not tuned to. Funding rate as a feature: no effect (0.582 vs 0.584).
+
+What ships: `agent5/structure.py` (levels + labeller, pinned to the research code), `Agent5Config.geometry/side`, `core.GEOMETRY = {"4h": "structure"}` with h1 = long model and h2 = short model on a 16-bar hold, `monitor._evaluate_structure` (rank decision, strong/medium/small = top 5/10/15%), per-slot verdict gating (`model_usable(slot=)`, which also closes the daily h1 leak), side-aware levels, the app's 4h horizon at 64h.
+
+### What the best public traders do (research/trader_patterns*.py, 2026-09-20)
+
+A year of fills for 54 Hyperliquid addresses (top-400 by 30-day profit, discretionary-looking): 11,083 episodes, 3,983 position trades. Report: `research/results/trader_patterns.md`.
+
+- **The leaderboard ranks variance.** 21 of 54 are net losers over the year; median 4 liquidations; top-5 trades = 73% of gross profit for the median trader.
+- **Profitable vs losing traders differ in winner size, not win rate** (59% vs 57%; avg win +6.2% vs +2.9%; hold 28h vs 15h; resting-order entries 36% vs 21%).
+- **Entry setup is identifiable**: profitable longs buy high-volume, high-volatility dips (below EMA20, lower third of the 24h range, near PDL, RSI 45), 14:00–17:00 UTC, *fewer* headlines than baseline. A classifier on our features predicts "a profitable trader enters in the next hour" at AUC 0.64–0.68 on BTC/ETH/HYPE (clears shuffle).
+- **Copying the setup loses**: the classifier's top decile as an entry → −0.34%/24h vs +0.08% every bar. The +1.4%/1h after their resting fills is the limit-order effect (fill 1.2% below the next 15m close); from a follower's price it is 0.
+- **What persists**: traders profitable on position trades in H1 (≥5 trades) → their H2 entries, from a follower's price, **+1.52%/24h (se 0.41), both sides, 7/9 traders, 8/10 coins**, vs +0.34% drift. 166 trades, 9 traders — a real but thin result. It says: select on a half-year record of position trades, not the 30-day board; the smartmoney tracker's selection should change to that.
+
 ## 6. What this says about the recommended action
 
 Applying the field's discipline to this system yields one change and one

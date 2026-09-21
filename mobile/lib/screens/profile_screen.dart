@@ -1657,7 +1657,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             icon: Icons.timer_outlined,
             title: "Ask at the model's time limit",
             subtitle: _timeLimit
-                ? 'On — 2h on 1h, 8h on 4h, 2 days on 1d. An entry that '
+                ? 'On — 2h on 1h, 64h on 4h, 10 days on 1d. An entry that '
                     'reaches neither level by then gets a notification: '
                     'keep it open, or close it now marked TIME LIMIT. It '
                     'tells you what the model says at that moment.'

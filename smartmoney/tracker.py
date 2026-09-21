@@ -22,11 +22,11 @@ WHAT IS RECORDED WITH EACH EVENT
     this feed could never be scored, and an unscored feed is a rumour.
 
 THE THREAD
-    One daemon thread: reselects from the leaderboard once a day (the
-    board is refreshed at most every 6 hours, and reading 150 candidates'
-    fills is 150 calls), polls the followed books every minute, persists
-    after every change. All venue calls degrade to "no change" on failure;
-    the loop never dies on a bad minute.
+    One daemon thread: reselects once a day (the board is refreshed at
+    most every 6 hours; reading 400 candidates' 180-day records is a few
+    hundred paged calls, spread out), polls the followed books every
+    minute, persists after every change. All venue calls degrade to "no
+    change" on failure; the loop never dies on a bad minute.
 """
 from __future__ import annotations
 
@@ -144,6 +144,9 @@ class Tracker:
             self.last_error = f"select: {e}"
             log.warning("smartmoney: selection failed: %s", e)
             return len(self.traders)
+        return self._apply_selection(chosen)
+
+    def _apply_selection(self, chosen) -> int:
         if not chosen:
             # a venue that answered nothing keeps yesterday's list rather
             # than emptying the feed
@@ -207,7 +210,8 @@ class Tracker:
             entry=d.get("entry"), leverage=d.get("leverage"),
             at=now.isoformat(), price_at=price,
             trader={"win_rate": t.win_rate, "pnl_30d": t.pnl_30d,
-                    "closed_trades": t.closed_trades, "score": t.score,
+                    "pnl_record": t.pnl_record, "position_trades": t.position_trades,
+                    "closed_trades": t.position_trades, "score": t.score,
                     "account_value": t.account_value,
                     "display_name": t.display_name},
         )
@@ -265,8 +269,10 @@ class Tracker:
                 "traders": [{
                     "address": t.address, "short": short_address(t.address),
                     "name": t.display_name, "score": t.score,
-                    "win_rate": t.win_rate, "closed_trades": t.closed_trades,
-                    "profit_factor": t.profit_factor, "pnl_30d": t.pnl_30d,
+                    "win_rate": t.win_rate, "closed_trades": t.position_trades,
+                    "position_trades": t.position_trades, "payoff": t.payoff,
+                    "pnl_record": t.pnl_record, "pnl_30d": t.pnl_30d,
+                    "median_hold_h": t.median_hold_h,
                     "roi_30d": t.roi_30d, "account_value": t.account_value,
                     "weeks_positive": t.weeks_positive,
                     "weeks_covered": t.weeks_covered, "coins": t.coins,
@@ -288,12 +294,22 @@ class Tracker:
                                    + reselect_seconds)
                 except ValueError:
                     next_select = 0.0
+            selecting: Optional[threading.Thread] = None
             while not self._stop.is_set():
                 try:
-                    if time.time() >= next_select or not self.traders:
-                        self.reselect()
+                    # SELECTION RUNS BESIDE THE LOOP, NOT IN IT. Reading four
+                    # hundred records is hours of paged calls; done inline it
+                    # would stop the minute-by-minute polling for as long, and
+                    # the events -- the whole point -- would be missed
+                    if selecting is not None and not selecting.is_alive():
+                        selecting = None
                         next_select = time.time() + (reselect_seconds if self.traders
                                                      else 900.0)
+                    if selecting is None and (time.time() >= next_select or not self.traders):
+                        selecting = threading.Thread(target=self.reselect, daemon=True,
+                                                     name="smartmoney-select")
+                        selecting.start()
+                        next_select = time.time() + reselect_seconds
                     new = self.poll()
                     if new:
                         log.info("smartmoney: %d event(s): %s", len(new),
