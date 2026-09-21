@@ -114,6 +114,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _lockOn = false, _lockAvailable = false;
   bool _timeLimit = true;
   bool _silenced = false;
+
+  /// The account as this page last learned it. Seeded from the widget and
+  /// replaced when the name changes here, so the header does not wait on
+  /// the parent to rebuild -- it was waiting forever on one of the two
+  /// places the shell builds this page.
+  late Account _account = widget.account;
   String _newsLevel = 'all';
   int _overrideCount = 0;
   bool _mutedLoaded = false;
@@ -299,7 +305,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   /// Change the name shown at the top of this page.
   Future<void> _renameAccount() async {
-    final c = TextEditingController(text: widget.account.username ?? '');
+    final c = TextEditingController(text: _account.username ?? '');
     String? problem;
     final name = await showDialog<String>(
       context: context,
@@ -335,6 +341,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 try {
                   final a = await widget.client.setUsername(c.text.trim());
                   await Settings.instance.saveAccount(a);
+                  if (mounted) setState(() => _account = a);
                   widget.onAccountChanged?.call(a);
                   if (ctx.mounted) Navigator.of(ctx).pop(a.username);
                 } catch (e) {
@@ -955,8 +962,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ------------------------------------------------------------- rendering
   @override
+  void didUpdateWidget(covariant ProfileScreen old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.account, widget.account)) _account = widget.account;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final a = widget.account;
+    final a = _account;
     final stats = JournalStats.of(_trades, prices: _prices);
     return RefreshIndicator(
       onRefresh: () async {
@@ -1638,10 +1651,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _tile(
             icon: Icons.badge_outlined,
             title: 'Shown name',
-            subtitle: (widget.account.username?.isNotEmpty ?? false)
-                ? '${widget.account.username} — tap to change'
+            subtitle: (_account.username?.isNotEmpty ?? false)
+                ? '${_account.username} — tap to change'
                 : 'None set — tap to choose one',
-            onTap: widget.account.operator ? null : _renameAccount,
+            onTap: _account.operator ? null : _renameAccount,
           ),
           _tile(
             icon: Icons.restart_alt_rounded,

@@ -180,54 +180,72 @@ class PositionCard extends StatelessWidget {
               ),
             ],
           ),
-          if (entry.takeProfit != null || entry.stopLoss != null) ...[
+          if (entry.takeProfit != null || entry.stopLoss != null || onEdit != null) ...[
             const SizedBox(height: 14),
-            _targetBar(),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _level('Take profit', entry.takeProfit,
-                      Obsidian.green, entry),
+            if (entry.takeProfit != null || entry.stopLoss != null) ...[
+              _targetBar(),
+              const SizedBox(height: 8),
+            ],
+            // THE LEVELS ARE THE CONTROL. Tapping the row opens the editor;
+            // the small pencil says so without a second button competing
+            // with "close" for the same width.
+            InkWell(
+              onTap: onEdit,
+              borderRadius: BorderRadius.circular(Obsidian.rMd),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _level('Take profit', entry.takeProfit,
+                          Obsidian.green, entry),
+                    ),
+                    if (onEdit != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.10)),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            const Icon(Icons.edit_rounded,
+                                size: 11, color: Obsidian.onSurfaceVariant),
+                            const SizedBox(width: 4),
+                            Text('EDIT',
+                                style: Obsidian.labelSm(
+                                    color: Obsidian.onSurfaceVariant, size: 8.5)),
+                          ]),
+                        ),
+                      ),
+                    Expanded(
+                      child: _level('Stop loss', entry.stopLoss, Obsidian.red,
+                          entry, right: true),
+                    ),
+                  ],
                 ),
-                Expanded(
-                  child: _level('Stop loss', entry.stopLoss, Obsidian.red,
-                      entry, right: true),
-                ),
-              ],
+              ),
             ),
           ],
-          if (onClose != null || onEdit != null) ...[
+          if (onClose != null) ...[
             const SizedBox(height: 12),
-            Row(children: [
-              if (onEdit != null)
-                Expanded(
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(Obsidian.rMd)),
-                    ),
-                    onPressed: onEdit,
-                    icon: const Icon(Icons.tune_rounded, size: 15, color: Obsidian.onSurfaceVariant),
-                    label: Text('Change TP / SL', style: Obsidian.body(size: 12.5)),
-                  ),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(Obsidian.rMd)),
                 ),
-              if (onEdit != null && onClose != null) const SizedBox(width: 8),
-              if (onClose != null)
-                Expanded(
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(Obsidian.rMd)),
-                    ),
-                    onPressed: onClose,
-                    child: Text('Close this position',
-                        style: Obsidian.body(size: 12.5)),
-                  ),
-                ),
-            ]),
+                onPressed: onClose,
+                child: Text('Close this position',
+                    style: Obsidian.body(size: 12.5)),
+              ),
+            ),
           ],
         ],
       ),
@@ -310,93 +328,305 @@ Future<double?> askExitPrice(BuildContext context, TradeEntry t,
 }
 
 
-/// Edit an open entry's target and stop. Returns (takeProfit, stopLoss),
-/// either null to clear it, or null altogether on cancel. Refuses a level
-/// on the wrong side of the entry -- a long's stop above its entry is not
-/// a stop, and would close the trade the moment it was saved.
+/// Edit an open entry's target and stop, in a sheet drawn like the rest of
+/// the app. Returns (tp, sl) -- either null to clear that level -- or null
+/// altogether on cancel.
+///
+/// Refuses a level on the wrong side of the price: a long's stop above the
+/// price is not a stop, and would close the trade the moment it was saved.
+/// Shows the distance of each level and the reward-to-risk as you type, so
+/// the numbers mean something before they are committed.
 Future<({double? tp, double? sl})?> askLevels(BuildContext context, TradeEntry t,
-    {double? livePrice}) async {
-  final tpC = TextEditingController(text: priceInput(t.takeProfit));
-  final slC = TextEditingController(text: priceInput(t.stopLoss));
-  String? problem;
-  return showDialog<({double? tp, double? sl})>(
+    {double? livePrice}) {
+  return showModalBottomSheet<({double? tp, double? sl})>(
     context: context,
-    builder: (ctx) => StatefulBuilder(builder: (ctx, setState) {
-      double? parse(String v) {
-        final x = v.trim().replaceAll(',', '');
-        return x.isEmpty ? null : double.tryParse(x);
-      }
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (ctx) => _LevelsSheet(entry: t, livePrice: livePrice),
+  );
+}
 
-      void save() {
-        final tp = parse(tpC.text), sl = parse(slC.text);
-        final short = t.isShort;
-        final ref = livePrice ?? t.entryPrice;
-        if (tpC.text.trim().isNotEmpty && tp == null ||
-            slC.text.trim().isNotEmpty && sl == null) {
-          setState(() => problem = 'That is not a number.');
-          return;
-        }
-        if (tp != null && (short ? tp >= ref : tp <= ref)) {
-          setState(() => problem = short
-              ? 'A short\'s target must be below the price.'
-              : 'A long\'s target must be above the price.');
-          return;
-        }
-        if (sl != null && (short ? sl <= ref : sl >= ref)) {
-          setState(() => problem = short
-              ? 'A short\'s stop must be above the price.'
-              : 'A long\'s stop must be below the price.');
-          return;
-        }
-        Navigator.of(ctx).pop((tp: tp, sl: sl));
-      }
 
-      return AlertDialog(
-        backgroundColor: Obsidian.surfaceContainer,
-        title: Text('Change the levels', style: Obsidian.headlineMd()),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-                t.trailed
-                    ? 'A daily entry is trailed: leave the target empty and the '
-                        'stop follows the swings from wherever you put it. It '
-                        'only ever tightens.'
-                    : 'Leave a field empty to have no level there. The app closes '
-                        'the entry when price touches either.',
-                style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: tpC,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              style: Obsidian.dataTable(size: 15),
-              decoration: const InputDecoration(labelText: 'Take profit'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: slC,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              style: Obsidian.dataTable(size: 15),
-              decoration: const InputDecoration(labelText: 'Stop loss'),
-            ),
-            if (problem != null) ...[
-              const SizedBox(height: 8),
-              Text(problem!, style: Obsidian.body(color: Obsidian.error, size: 11.5)),
+class _LevelsSheet extends StatefulWidget {
+  const _LevelsSheet({required this.entry, this.livePrice});
+  final TradeEntry entry;
+  final double? livePrice;
+
+  @override
+  State<_LevelsSheet> createState() => _LevelsSheetState();
+}
+
+class _LevelsSheetState extends State<_LevelsSheet> {
+  late final TextEditingController _tp =
+      TextEditingController(text: priceInput(widget.entry.takeProfit));
+  late final TextEditingController _sl =
+      TextEditingController(text: priceInput(widget.entry.stopLoss));
+  String? _problem;
+
+  TradeEntry get e => widget.entry;
+  double get _ref => widget.livePrice ?? e.entryPrice;
+
+  @override
+  void initState() {
+    super.initState();
+    _tp.addListener(_changed);
+    _sl.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    _tp.dispose();
+    _sl.dispose();
+    super.dispose();
+  }
+
+  void _changed() => setState(() => _problem = null);
+
+  static double? _parse(String v) {
+    final x = v.trim().replaceAll(',', '');
+    return x.isEmpty ? null : double.tryParse(x);
+  }
+
+  /// Signed distance from the entry, in the trade's favour.
+  double? _pct(double? level) {
+    if (level == null) return null;
+    final s = e.isShort ? -1.0 : 1.0;
+    return 100 * s * (level / e.entryPrice - 1);
+  }
+
+  String? _check(double? tp, double? sl) {
+    final short = e.isShort;
+    if (_tp.text.trim().isNotEmpty && tp == null ||
+        _sl.text.trim().isNotEmpty && sl == null) {
+      return 'That is not a number.';
+    }
+    if (tp != null && (short ? tp >= _ref : tp <= _ref)) {
+      return short
+          ? 'A short\'s target has to be below the price.'
+          : 'A long\'s target has to be above the price.';
+    }
+    if (sl != null && (short ? sl <= _ref : sl >= _ref)) {
+      return short
+          ? 'A short\'s stop has to be above the price.'
+          : 'A long\'s stop has to be below the price.';
+    }
+    return null;
+  }
+
+  void _save() {
+    final tp = _parse(_tp.text), sl = _parse(_sl.text);
+    final problem = _check(tp, sl);
+    if (problem != null) {
+      setState(() => _problem = problem);
+      return;
+    }
+    Navigator.of(context).pop((tp: tp, sl: sl));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tp = _parse(_tp.text), sl = _parse(_sl.text);
+    final tpPct = _pct(tp), slPct = _pct(sl);
+    final rr = (tpPct != null && slPct != null && slPct < 0)
+        ? tpPct / -slPct
+        : null;
+    final short = TradeRow.short(e.symbol);
+    final tone = e.isShort ? Obsidian.red : Obsidian.green;
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(Obsidian.containerPadding, 0,
+            Obsidian.containerPadding, Obsidian.containerPadding + bottom),
+        child: GlassPanel(
+          active: true,
+          padding: const EdgeInsets.fromLTRB(22, 18, 22, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Text('CHANGE THE LEVELS', style: Obsidian.labelSm(size: 11)),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: tone.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text('$short ${e.side}',
+                        style: Obsidian.labelSm(color: tone, size: 9.5)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(child: _fact('Entry', money(e.entryPrice))),
+                  Expanded(child: _fact('Now', money(widget.livePrice))),
+                  Expanded(child: _fact('Timeframe', e.interval ?? '—')),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _field(
+                controller: _tp,
+                label: e.trailed ? 'TAKE PROFIT (optional)' : 'TAKE PROFIT',
+                tone: Obsidian.green,
+                hint: e.isShort ? 'below the price' : 'above the price',
+                reading: tpPct == null
+                    ? (e.trailed ? 'none — the trail is the exit' : 'none')
+                    : '${tpPct >= 0 ? '+' : ''}${tpPct.toStringAsFixed(2)}% from entry',
+              ),
+              const SizedBox(height: 10),
+              _field(
+                controller: _sl,
+                label: e.trailed ? 'STOP LOSS (trails from here)' : 'STOP LOSS',
+                tone: Obsidian.red,
+                hint: e.isShort ? 'above the price' : 'below the price',
+                reading: slPct == null
+                    ? 'none'
+                    : '${slPct.toStringAsFixed(2)}% from entry',
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(
+                      _problem != null
+                          ? Icons.error_outline_rounded
+                          : Icons.balance_rounded,
+                      size: 14,
+                      color: _problem != null ? Obsidian.error : Obsidian.outline),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                        _problem ??
+                            (rr != null
+                                ? 'Reward to risk ${rr.toStringAsFixed(2)} : 1'
+                                : e.trailed
+                                    ? 'The stop follows each new swing and never moves back.'
+                                    : 'Leave a field empty to have no level there.'),
+                        style: Obsidian.body(
+                            color: _problem != null ? Obsidian.error : Obsidian.outline,
+                            size: 11.5)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 44,
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(Obsidian.rMd)),
+                        ),
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: Text('Cancel', style: Obsidian.body(size: 13)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: SizedBox(
+                      height: 44,
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Obsidian.primary,
+                          foregroundColor: Obsidian.surfaceLowest,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(Obsidian.rMd)),
+                        ),
+                        onPressed: _save,
+                        child: Text('Save levels',
+                            style: Obsidian.body(
+                                    color: Obsidian.surfaceLowest, size: 13)
+                                .copyWith(fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ],
-          ],
+          ),
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: Text('Cancel', style: Obsidian.body())),
-          TextButton(
-              onPressed: save,
-              child: Text('Save', style: Obsidian.body(color: Obsidian.primary))),
+      ),
+    );
+  }
+
+  Widget _fact(String k, String v) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(k, style: Obsidian.body(color: Obsidian.outline, size: 10.5)),
+          const SizedBox(height: 2),
+          Text(v,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Obsidian.dataTable(size: 12.5)),
         ],
       );
-    }),
-  );
+
+  Widget _field({
+    required TextEditingController controller,
+    required String label,
+    required Color tone,
+    required String hint,
+    required String reading,
+  }) =>
+      Container(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(Obsidian.rMd),
+          border: Border.all(color: tone.withValues(alpha: 0.28)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(label, style: Obsidian.labelSm(color: tone, size: 9.5)),
+                  TextField(
+                    controller: controller,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: Obsidian.dataTable(size: 18),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: InputBorder.none,
+                      hintText: hint,
+                      hintStyle: Obsidian.body(color: Obsidian.outline, size: 13),
+                      contentPadding: const EdgeInsets.only(top: 6, bottom: 2),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(reading,
+                textAlign: TextAlign.right,
+                style: Obsidian.body(color: Obsidian.onSurfaceVariant, size: 11)),
+          ],
+        ),
+      );
 }
 
 
