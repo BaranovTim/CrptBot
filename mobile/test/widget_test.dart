@@ -10,6 +10,7 @@ import 'package:tradingbot_app/theme/liquid_obsidian.dart';
 import 'package:tradingbot_app/widgets/positions_panel.dart';
 import 'package:tradingbot_app/widgets/acknowledgement.dart';
 import 'package:tradingbot_app/widgets/signals_panel.dart';
+import 'package:tradingbot_app/widgets/analysis_panels.dart';
 import 'package:tradingbot_app/widgets/smart_money_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
@@ -2404,6 +2405,66 @@ void main() {
       final d = Dashboard.fromJson(payload('atr'));
       expect(d.levelsAreFixed, isFalse);
       expect(d.liveStopLoss(87000.0), closeTo(87000.0 * (1 - 0.0918), 1e-6));
+    });
+
+    // DOGE, 2026-09-21: +13% on the day, a +1.2% target gone in the first
+    // hour of the bar, and the card still said BUY with the target printed
+    // below the price. The trade the model scored was over.
+    test('a call whose target the price is past is settled, not entered', () {
+      final d = Dashboard.fromJson(payload('structure'));
+      expect(d.outcome(87000.0), '');            // open: between the levels
+      expect(d.outcome(88527.0), 'target');      // at the target
+      expect(d.outcome(90000.0), 'target');      // past it
+      expect(d.outcome(77000.0), 'stop');        // through the stop
+      expect(d.outcome(null), '');               // no live price: nothing to say
+    });
+
+    test('a short settles the other way round', () {
+      final j = payload('structure');
+      j['recommendation'] = {'action': 'SELL', 'tone': 'down', 'detail': 'd',
+                             'strength': 'medium', 'geometry': 'structure'};
+      j['levels'] = {...(j['levels'] as Map<String, dynamic>),
+                     'side': 'SHORT', 'take_profit': 77509.0, 'stop_loss': 88527.0};
+      final d = Dashboard.fromJson(j);
+      expect(d.outcome(80000.0), '');
+      expect(d.outcome(77000.0), 'target');
+      expect(d.outcome(89000.0), 'stop');
+    });
+
+    test('ATR levels, FLAT calls and the server reading', () {
+      // ATR levels re-anchor to the price and are never behind it
+      expect(Dashboard.fromJson(payload('atr')).outcome(90000.0), '');
+      // no call, nothing to settle
+      final flat = payload('structure');
+      flat['recommendation'] = {'action': 'FLAT', 'tone': 'flat', 'detail': 'd'};
+      expect(Dashboard.fromJson(flat).outcome(90000.0), '');
+      // the server has already settled it: its reading wins whatever the price does
+      final settled = payload('structure');
+      settled['recommendation'] = {'action': 'WAIT', 'tone': 'flat', 'detail': 'gone',
+                                   'called': 'BUY', 'outcome': 'target'};
+      settled['levels'] = {...(settled['levels'] as Map<String, dynamic>), 'reached': 'target'};
+      final d = Dashboard.fromJson(settled);
+      expect(d.outcome(80000.0), 'target');
+      expect(d.recommendation.called, 'BUY');
+    });
+
+    testWidgets('the levels panel says a reached target is reached', (t) async {
+      await t.pumpWidget(MaterialApp(home: Scaffold(body: ListView(children: const [
+        LevelsPanel(price: 90000.0, takeProfit: 88527.0, stopLoss: 77509.0,
+                    side: 'LONG', outcome: 'target', fixed: true, interval: '4h'),
+      ]))));
+      expect(find.text('Take Profit (TP1) — reached'), findsOneWidget);
+      expect(find.textContaining('not a level to enter against'), findsOneWidget);
+      expect(find.text('Stop Loss (SL)'), findsOneWidget);
+    });
+
+    testWidgets('a FLAT band the price has left says so', (t) async {
+      await t.pumpWidget(MaterialApp(home: Scaffold(body: ListView(children: const [
+        LevelsPanel(price: 0.0992, takeProfit: 0.09131, stopLoss: 0.08369,
+                    side: '', fixed: true, interval: '1d'),
+      ]))));
+      expect(find.textContaining('already left this band'), findsOneWidget);
+      expect(find.text('Upper barrier'), findsOneWidget);
     });
   });
 

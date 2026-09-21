@@ -108,13 +108,22 @@ class Recommendation {
         ev = _d(j['ev']),
         strength = j['strength'] as String? ?? '',
         smartNote = j['smart_note'] as String? ?? '',
+        called = j['called'] as String? ?? '',
+        outcome = j['outcome'] as String? ?? '',
         pNeeded = _d(j['p_needed']),
         sizePct = _d(j['size_pct']);
 
+  /// BUY, SELL, FLAT, STALE -- or WAIT: a call the forming bar has already
+  /// settled. Its target was reached or its stop was hit before the bar
+  /// closed, so there is nothing to enter until the next close.
   final String action;
   final String? tone;
   final String detail;
   final double? ev, sizePct;
+
+  /// On WAIT: what the model said at the close (BUY or SELL), and what the
+  /// bar did to it ("target" reached, or "stop" hit). Empty otherwise.
+  final String called, outcome;
 
   /// "Smart money agrees: 2 followed traders opened LONG in the last 24h."
   /// -- set when the followed traders' entries changed or confirmed this
@@ -217,6 +226,7 @@ class Dashboard {
         tpOffsetPct = _d((j['levels'] as Map)['tp_offset_pct']),
         slOffsetPct = _d((j['levels'] as Map)['sl_offset_pct']),
         side = (j['levels'] as Map)['side'] as String? ?? '',
+        levelsReached = (j['levels'] as Map)['reached'] as String? ?? '',
         levelGeometry = (j['levels'] as Map)['geometry'] as String? ??
             (j['recommendation'] as Map?)?['geometry'] as String? ??
             'atr',
@@ -277,6 +287,39 @@ class Dashboard {
   /// swing -- PRICES, fixed on the chart, never re-anchored.
   final String levelGeometry;
   bool get levelsAreFixed => levelGeometry == 'structure';
+
+  /// What the forming bar had already done to the call's levels when the
+  /// server built this: "target", "stop" or "". The server reads the bar's
+  /// high and low, which the phone does not have.
+  final String levelsReached;
+
+  /// The call's outcome as of NOW: the server's reading, or -- between
+  /// server refreshes -- the live price sitting past one of the levels.
+  ///
+  /// Only for a call with fixed levels. A structure call names two prices
+  /// and the model's number is the chance of reaching one before the other
+  /// from the close; once the price is past the target, that trade is over
+  /// and a "BUY" with the target below the price is a call to chase, not to
+  /// enter. DOGE did +13% in a day and the card kept saying BUY with the
+  /// target 2% under the price. ATR levels re-anchor to the live price and
+  /// can never be behind it, so they never settle here.
+  String outcome(double? live) {
+    if (recommendation.outcome.isNotEmpty) return recommendation.outcome;
+    if (levelsReached.isNotEmpty) return levelsReached;
+    final a = recommendation.action;
+    if ((a != 'BUY' && a != 'SELL') || !levelsAreFixed || live == null) {
+      return '';
+    }
+    final tp = takeProfit, sl = stopLoss;
+    if (isShort) {
+      if (sl != null && live >= sl) return 'stop';
+      if (tp != null && live <= tp) return 'target';
+    } else {
+      if (sl != null && live <= sl) return 'stop';
+      if (tp != null && live >= tp) return 'target';
+    }
+    return '';
+  }
 
   double? liveTakeProfit(double? live) {
     if (live == null || levelsAreFixed) return takeProfit;

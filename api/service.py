@@ -824,6 +824,13 @@ class TradingService:
         if price is None or not np.isfinite(price):
             price = close_price
 
+        rec = _gate_by_trend(interval, bars, _gate_by_verdict(
+            symbol, interval, _recommendation(b, a, stale)))
+        levels = _levels(chosen, price)
+        # WHAT THE FORMING BAR HAS ALREADY DONE TO THE CALL. A structure
+        # call names two prices; the bar can reach one before it closes.
+        rec, levels["reached"] = _settle_call(rec, chosen, live)
+
         short = next((sh for sy, _, sh in UNIVERSE if sy == symbol), symbol)
         return {
             "symbol": symbol,
@@ -850,10 +857,8 @@ class TradingService:
             "live": live,
             "indicators": _indicators(snap, interval=interval, htf=htf),
             "analyses": [_analysis(a), _analysis(b)],
-            "recommendation": _gate_by_trend(
-                interval, bars, _gate_by_verdict(
-                    symbol, interval, _recommendation(b, a, stale))),
-            "levels": _levels(chosen, price),
+            "recommendation": rec,
+            "levels": levels,
             # the long-term trend, for the card and for the daily rule
             "trend": _trend(interval, bars),
             # what the followed traders did on this coin in the last day,
@@ -889,9 +894,15 @@ class TradingService:
         w.reset(bars.index[-1], float(bars["close"].iloc[-1]))
         r = w.read(f, atr_price_estimate(bars, X),
                    SpikeWatcher.volume_baseline(bars, cfg), now=now)
+        # THE BAR'S RANGE SO FAR, not only its last price. A level the bar
+        # wicked through and came back from is still a level that went:
+        # `_settle_call` reads these the way the terminal monitor always has.
+        rng = {"high": _num(f.high), "low": _num(f.low)}
         if r is None:
-            return {"price": _num(f.close), "elapsed": _num(f.elapsed_fraction(now))}
+            return dict(rng, price=_num(f.close),
+                        elapsed=_num(f.elapsed_fraction(now)))
         return {
+            **rng,
             "price": _num(r.price),
             "move_pct": _num(r.move_pct),
             "move_atr": _num(r.move_atr),
@@ -2053,6 +2064,81 @@ def _trend(interval: str, bars) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return {"span_days": t["span"], "ema": _num(t["ema"]), "above": t["above"]}
+
+
+def _settle_call(rec: Dict[str, Any], a, live: Optional[Dict[str, Any]]
+                 ) -> Tuple[Dict[str, Any], str]:
+    """The call after the forming bar has had its say.
+
+    A structure call names two PRICES -- the next swing and the last one --
+    and the model's number is the chance of reaching the first before the
+    second, from the close. The forming bar can settle that before it
+    closes. DOGE ran +13% in a day and went through a +1.2% target inside
+    the first hour of the bar; the dashboard kept saying BUY, strong, with
+    the target printed below the price. Nothing was wrong with the levels.
+    The call was over, and nothing said so.
+
+    `Analysis.resolution` is what the terminal monitor has always done with
+    the bar's high and low; this wires it to the app. A call whose level is
+    gone becomes WAIT: nothing to enter until the next close, and the card
+    says which level went and what that meant for the side.
+
+    Structure levels only. ATR levels are distances the app re-anchors to
+    the live price, so they are never "behind" it; equities stay as they
+    were. Returns the (possibly replaced) recommendation and the outcome:
+    "target", "stop" or "".
+    """
+    if rec.get("action") not in ("BUY", "SELL") or not live:
+        return rec, ""
+    if getattr(a, "geometry", "atr") != "structure" or a.side not in ("LONG", "SHORT"):
+        return rec, ""
+    # the bar's extremes, with the last price folded in: a feed that only
+    # knows the price still knows whether it is past the level
+    highs = [v for v in (live.get("high"), live.get("price")) if v is not None]
+    lows = [v for v in (live.get("low"), live.get("price")) if v is not None]
+    if not highs or not lows:
+        return rec, ""
+    state, why = a.resolution(max(highs), min(lows))
+    if state == "OPEN":
+        return rec, ""
+    long = a.side == "LONG"
+    won = (state == "UPPER") if long else (state == "LOWER")
+    outcome = "target" if won and state != "BOTH" else "stop"
+    from .alerts import _price_text
+    word = rec["action"]
+    closes = ""
+    if live.get("bar_closes_at"):
+        try:
+            closes = f" ({pd.Timestamp(live['bar_closes_at']):%H:%M} UTC)"
+        except (ValueError, TypeError):
+            closes = ""
+    if state == "BOTH":
+        detail = (f"Both of the {word} call's levels were touched during the "
+                  f"current bar. Counted as the stop, the labeller's convention. "
+                  f"Nothing to enter until the next bar close{closes}.")
+    elif outcome == "target":
+        pct = (a.tp_price / a.entry - 1.0) * 100.0 if _num(a.entry) else None
+        detail = (f"The {word} call's target ({_price_text(a.tp_price)}"
+                  + (f", {pct:+.2f}% from the close" if pct is not None else "")
+                  + ") was reached during the current bar, so the call has "
+                  "already played out. Entering here would be chasing a "
+                  "target that is behind the price. The next call comes at "
+                  f"the bar close{closes}.")
+    else:
+        detail = (f"The {word} call's stop ({_price_text(a.sl_price)}) was hit "
+                  "during the current bar; the call failed. Nothing to enter "
+                  f"until the next bar close{closes}.")
+    out = dict(rec)
+    out.update({
+        "action": "WAIT", "tone": "flat",
+        # what the model said at the close, and what the bar did to it
+        "called": word, "outcome": outcome,
+        "detail": detail,
+        "diagnostic": why + ("; " + rec["diagnostic"] if rec.get("diagnostic") else ""),
+        # not a call any more: no grade, no size, no confluence line
+        "strength": "", "size_pct": None, "smart_note": "",
+    })
+    return out, outcome
 
 
 def _gate_by_trend(interval: str, bars, rec: Dict[str, Any]) -> Dict[str, Any]:

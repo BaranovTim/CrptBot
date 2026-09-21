@@ -144,6 +144,8 @@ class LevelsPanel extends StatelessWidget {
     this.windowBars,
     this.interval = '',
     this.side = '',
+    this.outcome = '',
+    this.fixed = false,
   });
 
   final double? price, takeProfit, stopLoss, pUp;
@@ -153,8 +155,28 @@ class LevelsPanel extends StatelessWidget {
   /// LONG, SHORT, or "" when the call is FLAT and no entry was proposed.
   final String side;
 
+  /// "target" when the price has already reached the take profit, "stop"
+  /// when it has already hit the stop, "" while the call is open. A level
+  /// that is gone is labelled as gone: a take profit printed BELOW the
+  /// current price, with no word about it, was the question this answers.
+  final String outcome;
+
+  /// Levels that are prices on the chart (structure) rather than distances
+  /// re-anchored to the live price. Only fixed levels can be left behind.
+  final bool fixed;
+
   bool get _short => side == 'SHORT';
   bool get _flat => side != 'LONG' && side != 'SHORT';
+
+  /// A FLAT band the current bar has already left: both barriers on the
+  /// same side of the price. The model's question was asked from the last
+  /// close; the market has since answered it, one way or the other.
+  bool get _left {
+    final p = price, tp = takeProfit, sl = stopLoss;
+    if (!fixed || p == null || tp == null || sl == null) return false;
+    final hi = tp > sl ? tp : sl, lo = tp > sl ? sl : tp;
+    return p > hi || p < lo;
+  }
 
   /// The chance the trade the panel describes WINS.
   ///
@@ -173,26 +195,53 @@ class LevelsPanel extends StatelessWidget {
             _row('Current Price', money(price), Obsidian.onSurface),
             _divider(),
             _row(
-              _flat ? 'Upper barrier' : 'Take Profit (TP1)',
+              _flat
+                  ? 'Upper barrier'
+                  : outcome == 'target'
+                      ? 'Take Profit (TP1) — reached'
+                      : 'Take Profit (TP1)',
               money(takeProfit),
-              _flat ? Obsidian.onSurface : Obsidian.green,
+              _flat
+                  ? Obsidian.onSurface
+                  : outcome == 'target'
+                      ? Obsidian.outline
+                      : Obsidian.green,
               sub: _flat
-                  ? 'No entry is proposed right now, so these two are the '
-                      "model's barriers rather than a trade's levels."
-                  : _short
-                      ? 'Below the price, because the call is a SELL — the '
-                          'short is closed in profit down here.'
-                      : null,
+                  ? (_left
+                      ? 'No entry is proposed, and the price has already '
+                          'left this band during the current bar. New '
+                          'barriers come at the next close.'
+                      : 'No entry is proposed right now, so these two are the '
+                          "model's barriers rather than a trade's levels.")
+                  : outcome == 'target'
+                      ? 'The price went through it during this bar. The '
+                          'trade the model scored is over; this is not a '
+                          'level to enter against.'
+                      : _short
+                          ? 'Below the price, because the call is a SELL — the '
+                              'short is closed in profit down here.'
+                          : null,
             ),
             _divider(),
             _row(
-              _flat ? 'Lower barrier' : 'Stop Loss (SL)',
+              _flat
+                  ? 'Lower barrier'
+                  : outcome == 'stop'
+                      ? 'Stop Loss (SL) — hit'
+                      : 'Stop Loss (SL)',
               money(stopLoss),
-              _flat ? Obsidian.onSurface : Obsidian.red,
-              sub: _short
-                  ? 'Above the price. A short loses as price rises, so the '
-                      'stop sits over it, not under.'
-                  : null,
+              _flat
+                  ? Obsidian.onSurface
+                  : outcome == 'stop'
+                      ? Obsidian.outline
+                      : Obsidian.red,
+              sub: outcome == 'stop'
+                  ? 'The price went through it during this bar. The call '
+                      'failed; the next one comes at the close.'
+                  : _short && !_flat
+                      ? 'Above the price. A short loses as price rises, so the '
+                          'stop sits over it, not under.'
+                      : null,
             ),
             if (_pWin != null) ...[
               _divider(),

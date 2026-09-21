@@ -179,8 +179,9 @@ const List<HowToStep> howToSteps = [
           'confirmed swing ahead and the last one behind — and a call comes '
           "only when the model's confidence is in the top tenth of its last "
           'ninety days on that coin. Both were measured on a year the model '
-          'never saw. 1h and 15m are shown; their moves are too small to '
-          'clear a market-order fee, so treat their calls as context.',
+          'never saw. The levels are prices, so a fast bar can reach one '
+          'before it closes: the card then reads WAIT and says which level '
+          'went. A target already behind the price is not one to chase.',
       Obsidian.amber,
       'THE TIMEFRAMES'),
   HowToStep(

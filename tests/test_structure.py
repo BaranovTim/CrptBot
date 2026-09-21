@@ -398,3 +398,108 @@ def test_the_rank_is_on_the_raw_score_not_the_calibrated_plateaus():
                  bars.index[-1], bars.index[-1] + 16 * HOUR, 16)
     assert abs(b.rank - 0.5) < 1e-9, b.rank
     return True
+
+
+def _priced_call(side, entry=0.0973, tp=0.09849, sl=0.09075):
+    """A structure call with its levels as prices, DOGE 4h on 2026-09-21."""
+    a = _call(side, "strong")
+    a.entry = entry; a.tp_price = tp; a.sl_price = sl
+    a.upper, a.lower = (tp, sl) if side == "LONG" else (sl, tp)
+    return a
+
+
+def test_a_call_whose_target_the_bar_already_reached_is_wait_not_buy():
+    from api.service import _settle_call
+
+    a = _priced_call("LONG")
+    rec = {"action": "BUY", "tone": "up", "strength": "strong", "size_pct": 1.25,
+           "smart_note": "Smart money agrees", "diagnostic": "rank 0.956",
+           "window_ends": "2026-09-24T07:59:59+00:00"}
+    live = {"price": 0.0997, "high": 0.09996, "low": 0.09521,
+            "bar_closes_at": "2026-09-21T19:59:59.999000+00:00"}
+    out, outcome = _settle_call(rec, a, live)
+    assert outcome == "target"
+    assert out["action"] == "WAIT" and out["called"] == "BUY" and out["outcome"] == "target"
+    assert out["strength"] == "" and out["size_pct"] is None and out["smart_note"] == ""
+    assert "target" in out["detail"] and "19:59 UTC" in out["detail"]
+    assert "already played out" in out["detail"]
+    assert out["window_ends"] == rec["window_ends"]      # the rest carried
+    assert rec["action"] == "BUY"                        # copied, not mutated
+    return True
+
+
+def test_a_wicked_level_counts_even_when_the_price_came_back():
+    from api.service import _settle_call
+
+    a = _priced_call("LONG")
+    # the bar went through the stop and bounced: the call failed on the way
+    out, outcome = _settle_call({"action": "BUY", "tone": "up"}, a,
+                                {"price": 0.0960, "high": 0.0980, "low": 0.0900})
+    assert outcome == "stop" and out["action"] == "WAIT" and "stop" in out["detail"]
+    # both touched: the labeller's convention, a loss
+    _, both = _settle_call({"action": "BUY", "tone": "up"}, a,
+                           {"price": 0.0960, "high": 0.0990, "low": 0.0900})
+    assert both == "stop"
+    # a feed that only knows the price still settles on it
+    _, px = _settle_call({"action": "BUY", "tone": "up"}, a, {"price": 0.0990})
+    assert px == "target"
+    return True
+
+
+def test_a_short_settles_the_other_way_round():
+    from api.service import _settle_call
+
+    a = _priced_call("SHORT", entry=0.0973, tp=0.09075, sl=0.09849)
+    _, hit = _settle_call({"action": "SELL", "tone": "down"}, a,
+                          {"price": 0.0995, "high": 0.0999, "low": 0.0970})
+    assert hit == "stop"
+    out, won = _settle_call({"action": "SELL", "tone": "down"}, a,
+                            {"price": 0.0915, "high": 0.0975, "low": 0.0905})
+    assert won == "target" and out["called"] == "SELL"
+    return True
+
+
+def test_an_open_call_and_a_flat_one_are_left_alone():
+    from api.service import _settle_call
+
+    a = _priced_call("LONG")
+    rec = {"action": "BUY", "tone": "up"}
+    out, outcome = _settle_call(rec, a, {"price": 0.0980, "high": 0.0982, "low": 0.0970})
+    assert outcome == "" and out is rec
+    flat = {"action": "FLAT", "tone": "flat"}
+    out, outcome = _settle_call(flat, a, {"price": 0.0999, "high": 0.0999, "low": 0.0970})
+    assert outcome == "" and out is flat
+    # no forming bar at all: nothing to settle on
+    out, outcome = _settle_call(rec, a, None)
+    assert outcome == "" and out is rec
+    # ATR levels are re-anchored by the app and never sit behind the price
+    b = _priced_call("LONG"); b.geometry = "atr"
+    out, outcome = _settle_call(rec, b, {"price": 0.0999, "high": 0.0999, "low": 0.0970})
+    assert outcome == "" and out is rec
+    return True
+
+
+def test_two_coins_with_the_same_history_length_keep_their_own_levels():
+    """BTC, ETH, ADA, BNB and DOGE, all seeded from the same date, wore
+    each other's targets for a day: the memo was keyed on length and last
+    close time alone."""
+    from monitor import _LEVELS_CACHE, _structure_labels
+
+    _LEVELS_CACHE.clear()
+    bars = _bars()
+    # a different coin with the same length and the same close times
+    other = bars.copy()
+    for c in ("open", "high", "low", "close"):
+        other[c] = bars[c].iloc[::-1].to_numpy()
+    judge = RankedJudge("long", np.full(len(bars), 0.5))
+    a = _structure_labels(judge, bars)
+    b = _structure_labels(judge, other)
+    assert a is not b
+    assert float(a.tp_pct.iloc[-1]) != float(b.tp_pct.iloc[-1])
+    # the same frame again is the memoised object; a frame whose last bar
+    # merely shares the timestamp is not
+    assert _structure_labels(judge, bars) is a
+    third = bars.copy()
+    third.loc[third.index[-1], "close"] = float(third["close"].iloc[-1]) * 1.001
+    assert _structure_labels(judge, third) is not a
+    return True

@@ -718,8 +718,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // A daily entry is trailed, not targeted: its stop follows the
             // swings and there is no take profit to seed. The level ahead
             // is still on the levels panel, as information.
-            suggestedTp:
-                widget.interval == '1d' ? null : d.liveTakeProfit(_livePrice),
+            // A target the price is already past is not a target to log.
+            suggestedTp: widget.interval == '1d' ||
+                    d.outcome(_livePrice) == 'target'
+                ? null
+                : d.liveTakeProfit(_livePrice),
             suggestedSl: d.liveStopLoss(_livePrice),
             onLogged: _loadPositions,
           ),
@@ -1347,18 +1350,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _recommendation(Dashboard d) {
     final r = d.recommendation;
 
+    // A CALL THE BAR HAS ALREADY SETTLED. The levels are prices; the live
+    // price can be past one of them before the bar closes. Then the trade
+    // the model scored is over — won or lost — and the word on the card is
+    // WAIT, not the BUY it was at the close. The server says so once it
+    // has rebuilt; between rebuilds the live price says so here.
+    final outcome = d.outcome(_livePrice);
+    final settled = outcome.isNotEmpty;
+
     // The server reports the strongest level this entry clears; the user
     // decides how strong is strong enough. A withheld call becomes FLAT and
     // SAYS SO — a recommendation that silently does not exist is worse than
     // one that explains why it is being held back.
-    final gated = r.action != 'FLAT' &&
+    final gated = !settled &&
+        r.action != 'FLAT' &&
         r.action != 'STALE' &&
         r.strength.isNotEmpty &&
         !r.clears(_sensitivity);
 
-    final action = gated ? 'FLAT' : r.action;
-    final tone = gated ? 'flat' : r.tone;
+    final action = settled
+        ? 'WAIT'
+        : gated
+            ? 'FLAT'
+            : r.action;
+    final tone = settled || gated ? 'flat' : r.tone;
     final c = Obsidian.tone(tone);
+    final detail = settled
+        ? (r.outcome.isNotEmpty ? r.detail : _settledDetail(d, outcome))
+        : gated
+            ? 'A ${r.strength} signal is available here. Your setting is '
+                '"$_sensitivity", so it is not shown as a call — change '
+                'it in Profile to act on weaker ones.'
+            : r.detail;
     final glowing = tone == 'up' || tone == 'down';
     return GlassPanel(
       active: true,
@@ -1381,14 +1404,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          Text(
-              gated
-                  ? 'A ${r.strength} signal is available here. Your setting is '
-                      '"$_sensitivity", so it is not shown as a call — change '
-                      'it in Profile to act on weaker ones.'
-                  : r.detail,
+          Text(detail,
               textAlign: TextAlign.center, style: Obsidian.body(size: 14.5)),
-          if (!gated && r.strength.isNotEmpty) ...[
+          if (settled) ...[
+            const SizedBox(height: 10),
+            _outcomeChip(d, outcome),
+          ],
+          if (!settled && !gated && r.strength.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text('${r.strength.toUpperCase()} SIGNAL',
                 style: Obsidian.labelSm(color: c, size: 10)),
@@ -1398,7 +1420,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           // calls their agreement was worth +0.6% a trade and their
           // disagreement -0.4%, so the call is raised or lowered a level and
           // the card says which.
-          if (r.smartNote.isNotEmpty) ...[
+          if (!settled && r.smartNote.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(r.smartNote,
                 textAlign: TextAlign.center,
@@ -1408,7 +1430,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         : Obsidian.amber,
                     size: 10.5)),
           ],
-          if (!gated && r.sizePct != null && r.sizePct! > 0) ...[
+          if (!settled && !gated && r.sizePct != null && r.sizePct! > 0) ...[
             const SizedBox(height: 10),
             Text('quarter-Kelly size ${r.sizePct!.toStringAsFixed(2)}% of equity',
                 style: Obsidian.labelSm(color: c, size: 10.5)),
@@ -1432,6 +1454,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  /// The card's explanation when the phone settled the call itself — the
+  /// live price is past a level and the server has not rebuilt yet.
+  String _settledDetail(Dashboard d, String outcome) {
+    final word = d.recommendation.action;
+    if (outcome == 'target') {
+      return "The $word call's target (${priceText(d.takeProfit)}) is already "
+          'behind the price, so the call has played out. Entering here would '
+          'be chasing it. The next call comes at the bar close.';
+    }
+    return "The $word call's stop (${priceText(d.stopLoss)}) has been hit; "
+        'the call failed. Nothing to enter until the next bar close.';
+  }
+
+  /// TARGET REACHED in green, STOP HIT in red — the one line that says why
+  /// the card reads WAIT where it read BUY an hour ago.
+  Widget _outcomeChip(Dashboard d, String outcome) {
+    final won = outcome == 'target';
+    final c = won ? Obsidian.green : Obsidian.red;
+    final called = d.recommendation.called.isNotEmpty
+        ? d.recommendation.called
+        : d.recommendation.action;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: c.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(won ? Icons.flag_rounded : Icons.block_rounded, size: 13, color: c),
+          const SizedBox(width: 6),
+          Text(
+              won
+                  ? '$called · TARGET REACHED ${priceText(d.takeProfit)}'
+                  : '$called · STOP HIT ${priceText(d.stopLoss)}',
+              style: Obsidian.labelSm(color: c, size: 10.5)),
+        ],
+      ),
+    );
+  }
+
   // -------------------------------------------------------------- levels
   Widget _levels(Dashboard d) {
     // TP and SL follow the LIVE price: the model fixed the barrier DISTANCE
@@ -1446,6 +1511,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       windowBars: d.windowBars,
       interval: d.interval,
       side: d.side,
+      outcome: d.outcome(_livePrice),
+      fixed: d.levelsAreFixed,
     );
   }
 

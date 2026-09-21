@@ -436,10 +436,26 @@ _LEVELS_CACHE: dict = {}
 
 def _structure_labels(judge, bars: pd.DataFrame):
     """The per-bar barriers for this model's side, memoised on the newest
-    bar so the long and the short model do not each rebuild the levels."""
+    bar so the long and the short model do not each rebuild the levels.
+
+    KEYED ON THE BARS' CONTENT, NOT ONLY THEIR SHAPE. The first key was
+    (length, last close time, side, hold) -- and every coin seeded from the
+    same date has the same length and the same last close time. For a day
+    BTC, ETH, ADA, BNB and DOGE took turns wearing each other's levels:
+    DOGE's card showed a target +1.23% away that was ADA's +1.23%, then
+    BNB's +3.18%, applied to DOGE's own price. The probability and the
+    rank were never touched (they come from the features, not from here);
+    the target, the stop, the EV and the size were another coin's. The
+    last bar's own prices and volume are in the key now, which two coins
+    cannot share.
+    """
     from agent5.labels import triple_barrier
 
-    key = (len(bars), bars.index[-1], judge.cfg.side, judge.cfg.max_hold_bars)
+    last = bars.iloc[-1]
+    key = (len(bars), bars.index[-1],
+           float(last["close"]), float(last["high"]), float(last["low"]),
+           float(last.get("volume", 0.0)),
+           judge.cfg.side, judge.cfg.max_hold_bars)
     hit = _LEVELS_CACHE.get(key)
     if hit is None:
         if len(_LEVELS_CACHE) > 16:
