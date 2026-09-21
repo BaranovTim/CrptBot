@@ -576,11 +576,18 @@ class AlertEngine:
             # FLAT would read as a new trade.
             tp, sl = levels.get("take_profit"), levels.get("stop_loss")
             tp_pct = levels.get("tp_offset_pct")
+            # A DAILY entry is trailed, not targeted: the level ahead is
+            # information, the stop is where the trail starts. Naming it
+            # "take profit" invited setting one, which the measured rule
+            # says not to do (agent5/trail.py).
+            trailed = iv == "1d"
             if tp is not None:
-                lines.append(f"Take profit {_price_text(tp)}" + (
+                lines.append((f"Next level {_price_text(tp)}" if trailed
+                              else f"Take profit {_price_text(tp)}") + (
                     f"; {tp_pct:+.2f}%" if tp_pct is not None else ""))
             if sl is not None:
-                lines.append(f"Stop loss {_price_text(sl)}")
+                lines.append(f"Stop {_price_text(sl)} (trails the swings)" if trailed
+                             else f"Stop loss {_price_text(sl)}")
         lines.append("News that could affect: " + ("yes" if ctx else "no"))
         body = "\n".join(lines)
 

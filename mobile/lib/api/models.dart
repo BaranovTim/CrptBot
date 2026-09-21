@@ -217,6 +217,9 @@ class Dashboard {
         tpOffsetPct = _d((j['levels'] as Map)['tp_offset_pct']),
         slOffsetPct = _d((j['levels'] as Map)['sl_offset_pct']),
         side = (j['levels'] as Map)['side'] as String? ?? '',
+        levelGeometry = (j['levels'] as Map)['geometry'] as String? ??
+            (j['recommendation'] as Map?)?['geometry'] as String? ??
+            'atr',
         trendAbove = (j['trend'] as Map?)?['above'] as bool?,
         trendEma = _d((j['trend'] as Map?)?['ema']),
         calibrationNote = j['calibration_note'] as String? ?? '';
@@ -269,14 +272,20 @@ class Dashboard {
   /// flipped by `side` — an older server sends only the magnitudes, and on a
   /// SHORT those have to be inverted here or the panel contradicts the call
   /// printed directly above it.
+  /// How the levels were placed. "atr": a distance from the close, which
+  /// follows the live price. "structure": the next swing and the last
+  /// swing -- PRICES, fixed on the chart, never re-anchored.
+  final String levelGeometry;
+  bool get levelsAreFixed => levelGeometry == 'structure';
+
   double? liveTakeProfit(double? live) {
-    if (live == null) return takeProfit;
+    if (live == null || levelsAreFixed) return takeProfit;
     final off = tpOffsetPct ?? (tpPct == null ? null : (isShort ? -tpPct! : tpPct!));
     return off == null ? takeProfit : live * (1 + off / 100);
   }
 
   double? liveStopLoss(double? live) {
-    if (live == null) return stopLoss;
+    if (live == null || levelsAreFixed) return stopLoss;
     final off = slOffsetPct ?? (slPct == null ? null : (isShort ? slPct! : -slPct!));
     return off == null ? stopLoss : live * (1 + off / 100);
   }

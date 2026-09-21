@@ -1,5 +1,5 @@
 """Agent 1 — the pattern detector.
-
+git
 A thermometer, not a doctor.  It reads 38.5 and reports 38.5; deciding whether
 that is bad is Agent 5's job.
 

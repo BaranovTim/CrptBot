@@ -936,11 +936,16 @@ class TradingService:
             except Exception as e:
                 log.warning("consensus %s %s: %s", sym, tf, e)
                 continue
+            # the side the CARD speaks for, not slot 2. On a structure
+            # timeframe slot 2 is the short model, and its "p_up" is one
+            # minus the chance its own target is hit -- a different number
+            # from the long model's, and not the one on the card
+            lv = d.get("levels") or {}
             a = d["analyses"][-1] if d["analyses"] else {}
             rows.append({
                 "interval": tf,
                 "htf": htf_for(tf),
-                "p_up": a.get("p_up"),
+                "p_up": lv.get("p_up", a.get("p_up")),
                 "action": d["recommendation"]["action"],
                 "tone": d["recommendation"]["tone"],
                 "stale": d["stale"],
@@ -1751,6 +1756,13 @@ def _levels(a, price) -> Dict[str, Any]:
     """
     return {
         "current": _num(price),
+        # HOW TO READ THE LEVELS. "atr": distances from the close, which
+        # the app re-anchors to the live price. "structure": PRICES -- the
+        # next swing and the last swing -- which do not move with the price
+        # and must never be re-anchored. The app read this wrong for the
+        # first day of structure levels: a long's stop drifted up with a
+        # rising price to above the swing low it was supposed to sit at.
+        "geometry": getattr(a, "geometry", "atr"),
         # the SAME window the recommendation speaks for
         "window_bars": a.bars_left,
         "p_up": _num(a.p_up),

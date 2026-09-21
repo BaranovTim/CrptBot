@@ -2375,4 +2375,35 @@ void main() {
       expect(howToSteps.map((h) => h.title).join(' | '), contains('confirms, it does not decide'));
     });
   });
+
+  group('structure levels are prices, not distances', () {
+    Map<String, dynamic> payload(String geometry) => {
+          'symbol': 'BTCUSDT', 'pair': 'BTC / USDT', 'interval': '4h', 'htf': '1d',
+          'timeframes': [], 'generated_at': '2026-09-21T00:00:00+00:00',
+          'last_closed_bar': '2026-09-21T00:00:00+00:00', 'stale': false,
+          'status': {'active': true, 'label': 'WATCHING', 'detail': '', 'trades': false},
+          'price': 85346.0, 'close_price': 85346.0, 'live': null, 'indicators': [],
+          'analyses': [],
+          'recommendation': {'action': 'BUY', 'tone': 'up', 'detail': 'd', 'strength': 'medium',
+                             'geometry': geometry},
+          'levels': {'current': 85346.0, 'window_bars': 16, 'p_up': 0.6,
+                     'take_profit': 88527.0, 'stop_loss': 77509.0, 'side': 'LONG',
+                     'anchor': 85346.0, 'tp_pct': 3.73, 'sl_pct': 9.18,
+                     'tp_offset_pct': 3.73, 'sl_offset_pct': -9.18, 'geometry': geometry},
+          'calibration_note': 'n',
+        };
+
+    test('a structure level stays where the chart put it as the price moves', () {
+      final d = Dashboard.fromJson(payload('structure'));
+      expect(d.levelsAreFixed, isTrue);
+      expect(d.liveTakeProfit(87000.0), 88527.0);
+      expect(d.liveStopLoss(87000.0), 77509.0);
+    });
+
+    test('an ATR level still follows the price', () {
+      final d = Dashboard.fromJson(payload('atr'));
+      expect(d.levelsAreFixed, isFalse);
+      expect(d.liveStopLoss(87000.0), closeTo(87000.0 * (1 - 0.0918), 1e-6));
+    });
+  });
 }

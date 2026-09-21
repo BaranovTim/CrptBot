@@ -156,12 +156,16 @@ def main() -> int:
     ap.add_argument("--holds", default="10,20,40")
     ap.add_argument("--q", type=float, default=0.90)
     ap.add_argument("--out", default="research/results/swing_daily.json")
+    ap.add_argument("--trend", default="own", choices=("own", "btc", "both"),
+                    help="the 200-day average that gates longs: the coin's own, Bitcoin's, or both")
     a = ap.parse_args()
     cutoff = pd.Timestamp(a.cutoff, tz="UTC")
     cut_day = int((cutoff - EPOCH) / pd.Timedelta(days=1))
     syms = sorted(p.name.split("_1d_")[0] for p in FRAMES.glob("*_1d_frames.pkl"))
     print(f"{len(syms)} coins with daily frames: {', '.join(syms)}")
     frames = {s: pickle.load(open(FRAMES / f"{s}_1d_frames.pkl", "rb")) for s in syms}
+    btc_c = frames["BTCUSDT"][0]["close"]
+    btc_up = (btc_c > btc_c.ewm(span=200, adjust=False).mean())
     levels = {}
     for s, (bars, fr, warm) in frames.items():
         atr = _atr(bars, 14).to_numpy(float)
@@ -227,7 +231,9 @@ def main() -> int:
                 # this test row's bar index in its own coin's frame
                 i = bars.index.get_loc(test.index[j])
                 ema = bars["close"].ewm(span=200, adjust=False).mean().iloc[i]
-                trend_up = float(bars["close"].iloc[i]) > float(ema)
+                own_up = float(bars["close"].iloc[i]) > float(ema)
+                b_up = bool(btc_up.reindex([bars.index[i]], method="ffill").iloc[0])
+                trend_up = {"own": own_up, "btc": b_up, "both": own_up and b_up}[a.trend]
                 aligned = trend_up if side_u == "LONG" else not trend_up
                 n_entries += 1
                 for mode in outs:

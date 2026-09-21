@@ -586,3 +586,17 @@ def test_the_smart_money_line_sits_under_the_strength():
     assert lines[0] == "STRONG" and lines[1].startswith("Smart money agrees"), lines
     assert lines[2].startswith("Take profit"), lines
     return True
+
+
+def test_a_daily_entry_notification_names_the_level_not_a_target():
+    svc = StubService(action="FLAT")
+    svc.interval = "1d"
+    svc.RECORD_INTERVALS = ("1d",)
+    e = _engine(svc)
+    svc.action = "BUY"
+    a = e.refresh()[0]
+    lines = a.body.split("\n")
+    assert lines[1].startswith("Next level"), lines
+    assert lines[2].startswith("Stop ") and "trails" in lines[2], lines
+    assert "Take profit" not in a.body
+    return True

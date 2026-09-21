@@ -249,6 +249,12 @@ Causal cohort (followed = ≥8 position trades, positive, 50–92% win in the tr
 - Daily (research/smart_daily.py, trailed entries, one year): a 24h window lands on 5% of calls (unusable); 72h on 15%. Agree (42 calls): trail +10.7%, half-out +7.1%; silent (~800): −0.2%/−0.3%; disagree (50): −1.5%/−0.35% — not worse than silence, and the sign flips between longs and shorts. A followed trader's entry ALONE, trailed on daily: longs +5.8% ±2.6 (n=122), shorts +2.7% ±1.5 (n=94), median negative, ~2σ — not acted on.
 - Shipped as an overlay (`api/service._smart_overlay`, SMART_OVERLAY): 4h 24h window, agree raises / disagree lowers; 1d 72h window, agree raises / disagree only annotates: agreement raises the strength one level, disagreement lowers one, a small call it contradicts is withdrawn; never creates a call. One held-out year, ~300 rows with a signal — measure live.
 
+### Bitcoin as context for the altcoins (research/btc_context.py, 2026-09-21)
+
+No model reads any coin but its own. Tested: a BTC block (momentum 4h/24h/7d, EMA20/50/200 distance, RSI, vol percentile, above-200, 7d range position, structure state vs its last confirmed swings) plus relative strength (coin − BTC 24h/7d, rolling beta/corr) added to each alt's 4h structure models, fit < 2025-09-20, scored after. **26 models: test AUC +0.0001 ± 0.002, better on 11/26; calls net −0.02% → −0.09%.** Null. At 4h the alt's own bars already contain the BTC move (lead–lag is minutes), and the label is the alt's own level race.
+
+As a RULE: the daily long gate on BTC's 200-day instead of the coin's own — same edge sliced differently. 2025→26 trailed: own +4.8% (n=55), BTC +5.5% (51), both +8.4% ±4.8 (32); 2024→25: own +5.1% (433), BTC +3.8% (519), both +6.0% ±2.5 (386). "Both" is ~+1–3%/trade better in each year at ~0.5–1σ with 15–40% fewer trades. Not changed; a candidate if a third year agrees.
+
 ## 6. What this says about the recommended action
 
 Applying the field's discipline to this system yields one change and one

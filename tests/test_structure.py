@@ -45,6 +45,11 @@ class RankedJudge:
         n = len(X)
         return self._scores[-n:] if n <= len(self._scores) else np.resize(self._scores, n)
 
+    # the stand-in's raw and calibrated scores are the same series; the
+    # production judge's are not, and `test_the_rank_is_on_the_raw_score`
+    # covers that split with a real calibrator
+    raw_scores = predict_proba
+
 
 def _bars(n=900):
     bars = make_bars(n)
@@ -361,4 +366,35 @@ def test_the_overlay_windows_and_asymmetry_are_the_measured_ones():
     _smart_overlay(b, {"net": -2, "longs": 0, "shorts": 2, "hours": 72}, lower=False)
     assert b.strength == "small" and b.action.startswith("ENTER") and b.smart_effect == "noted"
     assert "the call stands" in b.reason
+    return True
+
+
+def test_the_rank_is_on_the_raw_score_not_the_calibrated_plateaus():
+    """A calibrated score takes a handful of values; ranking it counts a
+    whole plateau as ties and starves the top of the window of calls."""
+    from agent5.calibration import Calibrator
+
+    class PlateauJudge(RankedJudge):
+        def predict_proba(self, X):
+            r = self.raw_scores(X)
+            return np.where(r >= 0.55, 0.62, 0.48)      # two plateaus
+
+        def raw_scores(self, X):
+            n = len(X)
+            return self._scores[-n:] if n <= len(self._scores) else np.resize(self._scores, n)
+
+    bars = _bars()
+    X = _X(bars)
+    rng = np.random.default_rng(5)
+    base = rng.uniform(0.40, 0.60, len(bars)); base[-1] = 0.61   # the best raw score
+    a = evaluate(PlateauJudge("long", base), bars, X, "ANALYSIS A",
+                 bars.index[-1], bars.index[-1] + 16 * HOUR, 16)
+    assert a.rank == 1.0, a.rank                    # on raw: top of the window
+    assert abs(a.p_up - 0.62) < 1e-9                # the probability shown is the calibrated one
+    assert a.action.startswith("ENTER")
+    # ties count half, not zero
+    tie = np.full(len(bars), 0.5); tie[-1] = 0.5
+    b = evaluate(RankedJudge("long", tie), bars, X, "ANALYSIS A",
+                 bars.index[-1], bars.index[-1] + 16 * HOUR, 16)
+    assert abs(b.rank - 0.5) < 1e-9, b.rank
     return True

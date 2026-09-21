@@ -142,10 +142,29 @@ class JudgeAgent:
                 f"on: {missing[:6]}{'...' if len(missing) > 6 else ''}. "
                 f"the column set and its ORDER must match exactly, or values "
                 f"land on the wrong features and nothing raises")
+        return self.calibrator.transform(self.raw_scores(X))
+
+    def raw_scores(self, X: pd.DataFrame) -> np.ndarray:
+        """The model's own score per row, BEFORE calibration.
+
+        For RANKING, not for reading as a probability. Isotonic calibration
+        is a step function: over a 90-day window of 4h bars it collapses
+        ~500 distinct raw scores into 10-20 plateaus, and a rank that counts
+        ties as "not above" then drops the calls that share the top plateau
+        (measured: 4-5% of bars, and a reading of 0.52 that was 0.71 on the
+        raw score). The research that set the rank thresholds ranked raw
+        scores; so does the monitor.
+        """
+        if not self._fitted:
+            raise RuntimeError("JudgeAgent is not fitted")
+        missing = [c for c in self.columns if c not in X.columns]
+        if missing:
+            raise ValueError(
+                f"missing {len(missing)} feature columns the model was fitted "
+                f"on: {missing[:6]}{'...' if len(missing) > 6 else ''}")
         # a DataFrame, not an array - see the note in model.fit_cv about
         # LightGBM feature names
-        raw = self.model.predict_proba(X[self.columns].astype(float))[:, 1]
-        return self.calibrator.transform(raw)
+        return self.model.predict_proba(X[self.columns].astype(float))[:, 1]
 
     def decide(self, bars: pd.DataFrame, X: pd.DataFrame) -> pd.DataFrame:
         """Full pipeline: features -> probability -> EV -> size."""

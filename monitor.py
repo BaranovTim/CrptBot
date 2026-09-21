@@ -478,11 +478,17 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
     long = cfg.side == "long"
     side = "LONG" if long else "SHORT"
     tail = X.iloc[-min(TRAIL_BARS, len(X)):]
-    scores = judge.predict_proba(tail)
-    p = float(scores[-1])
-    past = scores[:-1]
+    # RANK ON THE RAW SCORE, READ THE CALIBRATED ONE. See JudgeAgent.raw_scores
+    # for why the two must not be the same array. Ties -- still possible on
+    # a logistic model -- count half, so a repeated score ranks in the
+    # middle of its run rather than under it.
+    raw = judge.raw_scores(tail) if hasattr(judge, "raw_scores") else judge.predict_proba(tail)
+    p = float(judge.predict_proba(tail.iloc[[-1]])[0])
+    cur = float(raw[-1])
+    past = raw[:-1]
     past = past[np.isfinite(past)]
-    a.rank = float((past < p).mean()) if len(past) >= 50 else float("nan")
+    a.rank = (float((past < cur).mean() + 0.5 * (past == cur).mean())
+              if len(past) >= 50 else float("nan"))
 
     a.entry = entry
     a.p_up = p if long else 1.0 - p          # p is P(this side's target first)
