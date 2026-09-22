@@ -68,7 +68,28 @@ def _to_utc(series: pd.Series) -> pd.Series:
     return pd.to_datetime(v, unit=unit, utc=True)
 
 
-def _download(url: str, dest: Path, retries: int = 3, timeout: int = 60) -> bool:
+def _missing_marker(dest: Path) -> Path:
+    """Where a remembered 404 for `dest` is recorded."""
+    return dest.with_suffix(dest.suffix + ".missing")
+
+
+def _known_missing(dest: Path, miss_ttl: Optional[float]) -> bool:
+    """Has this file already been found absent, recently enough to trust?
+
+    `miss_ttl` is None for "a day that is closed: if the archive is not
+    published now it never will be", and a number of seconds for a day
+    still being written.
+    """
+    m = _missing_marker(dest)
+    try:
+        age = time.time() - m.stat().st_mtime
+    except OSError:
+        return False
+    return miss_ttl is None or age < miss_ttl
+
+
+def _download(url: str, dest: Path, retries: int = 3, timeout: int = 60,
+              miss_ttl: Optional[float] = 0.0) -> bool:
     """Fetch to ``dest``, streaming through a .part file.
 
     Streaming rather than ``r.read()`` matters once aggTrades enter the
@@ -79,9 +100,24 @@ def _download(url: str, dest: Path, retries: int = 3, timeout: int = 60) -> bool
     The .part rename is what keeps the cache trustworthy — an interrupted
     download leaves no file, so a later run retries cleanly instead of
     parsing a truncated zip.
+
+    A 404 IS REMEMBERED, and that is the difference between a fast serve and
+    a slow one. These archives are one file per day and a missing day stays
+    missing: DOGE's bars start 2021-01 while its open-interest archive starts
+    2021-12, so 334 days of it can never exist. Without a marker every
+    dashboard build asked for all 334 again, plus fourteen liquidation days
+    Binance stopped publishing years ago — around 350 doomed round trips
+    before a single feature was computed, on every rebuild of every pair.
+
+    `miss_ttl` says how long to trust the marker: None for a day that has
+    closed (the archive is published or it never will be), seconds for a
+    recent day that may still appear. The default 0 means "do not trust it
+    at all", so every existing caller behaves exactly as it did.
     """
     if dest.exists() and dest.stat().st_size > 0:
         return True
+    if _known_missing(dest, miss_ttl):
+        return False
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     for attempt in range(retries):
@@ -94,7 +130,12 @@ def _download(url: str, dest: Path, retries: int = 3, timeout: int = 60) -> bool
         except urllib.error.HTTPError as e:
             tmp.unlink(missing_ok=True)
             if e.code == 404:
-                return False          # not published (yet) — expected
+                # not published (yet) — expected, and worth remembering
+                try:
+                    _missing_marker(dest).touch()
+                except OSError:
+                    pass
+                return False
             if attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
@@ -106,7 +147,7 @@ def _download(url: str, dest: Path, retries: int = 3, timeout: int = 60) -> bool
     return False
 
 
-def prefetch(jobs, workers: int = 8) -> int:
+def prefetch(jobs, workers: int = 8, miss_ttl: Optional[float] = 0.0) -> int:
     """Warm the on-disk cache for many files at once. Returns how many landed.
 
     WHY THIS EXISTS
@@ -136,14 +177,16 @@ def prefetch(jobs, workers: int = 8) -> int:
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    jobs = [(u, d) for u, d in jobs if not (d.exists() and d.stat().st_size > 0)]
+    jobs = [(u, d) for u, d in jobs
+            if not (d.exists() and d.stat().st_size > 0)
+            and not _known_missing(d, miss_ttl)]
     if not jobs:
         return 0
 
     def one(job) -> bool:
         url, dest = job
         try:
-            return _download(url, dest)
+            return _download(url, dest, miss_ttl=miss_ttl)
         except Exception:
             # Swallowed on purpose. This is a cache warm-up: anything it fails
             # to get, the caller's own loop will try again and handle in the

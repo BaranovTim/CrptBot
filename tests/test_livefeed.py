@@ -19,8 +19,11 @@ No network: a fake REST layer feeds known bars so the assertions are exact.
 """
 from __future__ import annotations
 
+import io
+import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -324,3 +327,79 @@ if __name__ == "__main__":
         fn()
         print(f"PASS  {fn.__name__}")
     print(f"\nAll {len(tests)} live collector tests passed.")
+
+
+# ---------------------------------------------------------------------------
+# A 404 that is asked for again on every request is a slow dashboard
+# ---------------------------------------------------------------------------
+
+def test_a_missing_archive_day_is_remembered_and_not_asked_for_twice():
+    """These archives are one file per day, and a missing day stays missing.
+
+    DOGE's bars start 2021-01 and its open-interest archive starts 2021-12,
+    so 334 days of it can never exist; the liquidation feed has been
+    restricted for years and 404s every day of every range. Each dashboard
+    build asked for all of them again — around 350 doomed round trips before
+    a single feature was computed.
+    """
+    import urllib.error
+
+    from marketdata import binance
+
+    calls = []
+
+    def fake_urlopen(url, timeout=None):
+        calls.append(url)
+        raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+
+    with tempfile.TemporaryDirectory() as d:
+        dest = Path(d) / "DOGEUSDT-metrics-2021-05-01.zip"
+        real = binance.urllib.request.urlopen
+        binance.urllib.request.urlopen = fake_urlopen
+        try:
+            # a settled day: asked once, remembered for good
+            assert binance._download("http://x/a.zip", dest, miss_ttl=None) is False
+            assert binance._download("http://x/a.zip", dest, miss_ttl=None) is False
+            assert len(calls) == 1, calls
+            # the marker is trusted only as long as the caller says
+            assert binance._download("http://x/a.zip", dest, miss_ttl=3600) is False
+            assert len(calls) == 1, "a fresh marker was re-requested"
+            assert binance._download("http://x/a.zip", dest, miss_ttl=0.0) is False
+            assert len(calls) == 2, "miss_ttl=0 must behave as it always did"
+            # and a day whose marker has aged past the TTL is asked again --
+            # this is the recent day that gets published a few hours later
+            m = binance._missing_marker(dest)
+            os.utime(m, (time.time() - 7200, time.time() - 7200))
+            body = io.BytesIO(b"hello")
+            binance.urllib.request.urlopen = lambda url, timeout=None: _Resp(body)
+            assert binance._download("http://x/a.zip", dest, miss_ttl=3600) is True
+            assert dest.read_bytes() == b"hello"
+        finally:
+            binance.urllib.request.urlopen = real
+    return True
+
+
+class _Resp:
+    """The minimum `urlopen` result `_download` streams from."""
+
+    def __init__(self, body):
+        self._b = body
+
+    def read(self, n=-1):
+        return self._b.read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_a_day_that_may_still_be_published_is_retried_but_an_old_one_is_not():
+    from marketdata.derivatives import RECENT_MISS_TTL, _miss_ttl
+
+    now = pd.Timestamp("2026-09-22", tz="UTC")
+    assert _miss_ttl(pd.Timestamp("2021-05-01", tz="UTC"), now) is None
+    assert _miss_ttl(pd.Timestamp("2026-09-21", tz="UTC"), now) == RECENT_MISS_TTL
+    assert _miss_ttl(pd.Timestamp("2026-09-22", tz="UTC"), now) == RECENT_MISS_TTL
+    return True

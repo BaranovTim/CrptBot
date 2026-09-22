@@ -317,3 +317,38 @@ docker compose exec collector python3 collect.py --status \
 A collector that is silently failing is worse than one that is loudly down —
 `--status` reports gaps, and the app shows `STALE` rather than presenting an
 expired window as current.
+
+## The flow cache, and why a wiped `data_cache` is slow for an hour
+
+Agent 4's open-interest and liquidation inputs come from data.binance.vision
+as **one archive file per day**. A dashboard build asks for its whole live
+window, so before September 2026 a single 4h rebuild parsed ~1,700 daily
+zips into half a million rows — and re-requested the ~350 days that can
+never exist, because a coin's perpetual archive starts long after its spot
+bars do (DOGE: bars from 2021-01, metrics from 2021-12). Sixty pairs doing
+that on a timer is how the API came to be killed by the out-of-memory
+reaper nineteen times in a week, spending its life warming up again.
+
+Three things fixed it, and they are worth knowing about when the box looks
+busy:
+
+* `data_cache/flow_cache/SYMBOL_interval_kind.csv` — one row per BAR, which
+  is all a build uses. Exact rather than approximate: the resample is a
+  backward `merge_asof`, so a bar's value depends on that bar's past alone
+  (`marketdata/flow_cache.py`).
+* `*.missing` marker files beside the archives — a 404 for a settled day is
+  remembered instead of asked again every build.
+* `Monitor.live_window` above an hour is the measured multiple of the
+  warm-up rather than a flat 20,000 bars, which on 4h was the entire store.
+
+**After a `data_cache` wipe the first build of each pair is slow** (it fills
+the cache). `data_cache` is excluded from the deploy rsync, so this only
+happens on a fresh box — and the caches can be built on a laptop and copied,
+which is far kinder to a 967 MB droplet than letting it do the cold pass:
+
+```bash
+rsync -az data_cache/flow_cache/ bot:/root/tradingbot/data_cache/flow_cache/
+```
+
+Measured on the droplet, warm-up of 33 pairs: **1,056s → 258s**, per-pair
+builds 60–180s → 4–14s, API at rest 0.02% CPU and 182 MB.

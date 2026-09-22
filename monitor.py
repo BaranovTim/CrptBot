@@ -722,11 +722,33 @@ class Monitor:
         the warmup keeps that below 1e-5, far under anything the model
         resolves.
 
+        THE 20,000 FLOOR WAS A ONE-MINUTE NUMBER, and on 4h it meant no
+        window at all: the store holds 12,450 bars, so every "live read"
+        computed the whole 3.4 years. That is not merely CPU — Agent 4's
+        inputs are ONE ARCHIVE FILE PER DAY, so the span of the window is
+        the number of daily files opened, and the number of days asked for
+        over the network. A 4h dashboard was re-parsing 1,756 daily
+        open-interest files and re-requesting ~350 that cannot exist, every
+        rebuild, to read one row.
+
+        Above an hour the window is the measured multiple instead, with two
+        floors that say what it is for: every detector warm (`need`), and
+        the rank's trailing window full several times over (`TRAIL_BARS`).
+        Checked on DOGE 4h against the full-history computation: p, rank and
+        the action identical to six decimals, worst feature drift 3.8e-08
+        (the 200-EMA, which by construction only converges asymptotically),
+        at a quarter of the time. Below an hour nothing changes: that is
+        where the table above was measured, and 1m fits 240 bars into an
+        hour of the same drift.
+
         TRAINING STILL USES EVERYTHING. This is the live read only; `train.py`
         calls the agents directly on the full history.
         """
         need = self.required_bars(bars)
-        want = max(need * 4, 20_000)
+        if self.delta.total_seconds() >= 3600:
+            want = max(need * 4, need + 3 * TRAIL_BARS)
+        else:
+            want = max(need * 4, 20_000)
         return bars if len(bars) <= want else bars.tail(want)
 
     def required_bars(self, bars: pd.DataFrame) -> int:

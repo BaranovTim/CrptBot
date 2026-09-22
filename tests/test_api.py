@@ -604,6 +604,13 @@ def test_the_dashboard_ttl_tracks_the_bar_period():
 
     The old fixed 5s TTL against a 10-46s build meant the cache was expired
     every time it was read.
+
+    The upper bound used to be 900s so that a closed bar was never more than
+    fifteen minutes from being noticed. `_bar_is_newer` notices it within a
+    poll now, so the clock's only remaining job is the live price inside the
+    payload and it is allowed to be an hour — sixty pairs rebuilding four
+    times an hour to refresh a price the phone streams itself was most of a
+    core on the box that kept meeting the OOM killer.
     """
     from api.service import TradingService
 
@@ -611,7 +618,7 @@ def test_the_dashboard_ttl_tracks_the_bar_period():
     t = lambda iv: svc._dash_ttl(("BTCUSDT", iv))
     assert t("1m") < t("15m") < t("1h")
     assert t("1m") >= 30.0                        # never hammer a slow box
-    assert t("1d") <= 900.0                       # never serve a stale day
+    assert t("1d") <= 3600.0                      # and never an unbounded one
 
     # and it backs off from what the build ACTUALLY costs. 27s is the measured
     # 1m build on the one-core droplet; a 30s TTL there means never stopping.
@@ -1619,4 +1626,54 @@ def test_calls_right_now_applies_the_same_guards_as_the_dashboard():
         finally:
             T.eval_path = real
             T._VERDICTS.clear()
+    return True
+
+
+def test_a_closed_bar_triggers_the_rebuild_and_the_clock_only_covers_the_price():
+    """Sixty pairs rebuilding on a 15-minute clock was most of a core spent
+    refreshing a price the phone streams for itself. A payload's model
+    output can only change when a bar closes, so that is what schedules the
+    rebuild; the clock is the fallback."""
+    import time as _t
+
+    from api.service import TradingService, _Cached
+
+    svc = TradingService.__new__(TradingService)
+    svc._lock = __import__("threading").RLock()
+    svc._dash = {}
+    svc._build_cost = {}
+
+    key = ("BTCUSDT", "4h")
+    svc._dash[key] = _Cached(_t.time(), {"last_closed_bar": "2026-09-21T16:00:00+00:00"})
+
+    class Store:
+        def __init__(self, last):
+            self.last = last
+
+        def last_close_time(self):
+            return self.last
+
+    import livefeed
+    real = livefeed.BarStore
+    try:
+        livefeed.BarStore = lambda *a: Store(pd.Timestamp("2026-09-21T16:00:00+00:00"))
+        assert svc._bar_is_newer(key) is False, "the same bar must not rebuild"
+        livefeed.BarStore = lambda *a: Store(pd.Timestamp("2026-09-21T20:00:00+00:00"))
+        assert svc._bar_is_newer(key) is True, "a closed bar must rebuild"
+        # a naive timestamp in the payload is still comparable
+        svc._dash[key] = _Cached(_t.time(), {"last_closed_bar": "2026-09-21T16:00:00"})
+        assert svc._bar_is_newer(key) is True
+        # anything unreadable schedules nothing rather than raising
+        livefeed.BarStore = lambda *a: Store(None)
+        assert svc._bar_is_newer(key) is False
+        svc._dash[key] = _Cached(_t.time(), {})
+        assert svc._bar_is_newer(key) is False
+        assert svc._bar_is_newer(("NOPE", "4h")) is False
+    finally:
+        livefeed.BarStore = real
+
+    # the clock: long enough that it is not the thing finding closed bars
+    svc._build_cost[key] = 12.0
+    assert svc._dash_ttl(key) == 3600.0
+    assert svc._dash_ttl(("BTCUSDT", "1d")) == 3600.0
     return True

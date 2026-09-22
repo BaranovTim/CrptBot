@@ -36,6 +36,18 @@ METRIC_COLUMNS = [
     "count_long_short_ratio", "sum_taker_long_short_vol_ratio",
 ]
 
+# How old a day must be before "not published" means "never will be".
+# Binance writes each daily archive the following day, occasionally late.
+SETTLED_DAYS = 2
+# and how often to ask again about a day inside that window
+RECENT_MISS_TTL = 6 * 3600.0
+
+
+def _miss_ttl(day, end_ts) -> Optional[float]:
+    """How long to trust a remembered 404 for `day`: None = forever."""
+    return (None if (end_ts - pd.Timestamp(day)).days > SETTLED_DAYS
+            else RECENT_MISS_TTL)
+
 
 def _read_csv_zip(path: Path, names: List[str]) -> Optional[pd.DataFrame]:
     try:
@@ -78,12 +90,22 @@ def load_open_interest(
     # if they are made one at a time — measured at 40 minutes of wall clock for
     # a single fit, of which 4 minutes was CPU. This fetches them together
     # first; the loop below is unchanged and simply finds them already on disk.
+    #
+    # A DAY THAT 404s IS REMEMBERED (`_download(miss_ttl=)`). The archive for
+    # a coin starts when Binance listed its perpetual, which is long after the
+    # spot bars begin — DOGE's bars start 2021-01 and its metrics archive
+    # 2021-12 — so a serving request asked for 334 days that cannot exist,
+    # every single rebuild. A day more than two days old is published or it
+    # never will be; a newer one is retried every few hours.
     days = list(_days(start_ts, end_ts))
-    prefetch(_paths(d) for d in days)
+    ttls = {d: _miss_ttl(d, end_ts) for d in days}
+    prefetch((_paths(d) for d in days if ttls[d] is None), miss_ttl=None)
+    prefetch((_paths(d) for d in days if ttls[d] is not None),
+             miss_ttl=RECENT_MISS_TTL)
 
     for day in days:
         url, dest = _paths(day)
-        if not _download(url, dest):
+        if not _download(url, dest, miss_ttl=ttls[day]):
             continue
         df = _read_csv_zip(dest, METRIC_COLUMNS)
         if df is None or "sum_open_interest" not in df.columns:
@@ -134,7 +156,7 @@ def load_liquidations(
         stem = f"{sym}-liquidationSnapshot-{day:%Y-%m-%d}"
         url = f"{VISION_BASE}/futures/um/daily/liquidationSnapshot/{sym}/{stem}.zip"
         dest = Path(cache_dir) / "futures/um" / "liquidations" / sym / f"{stem}.zip"
-        if not _download(url, dest):
+        if not _download(url, dest, miss_ttl=_miss_ttl(day, end_ts)):
             misses += 1
             if misses >= give_up_after and not frames:
                 # nothing has ever downloaded and the streak is long: the feed

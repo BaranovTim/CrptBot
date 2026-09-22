@@ -593,7 +593,40 @@ class TradingService:
         """
         floor = interval_seconds(key[1]) / 4.0
         cost = self._build_cost.get(key, 0.0)
-        return min(max(floor, cost * 4.0, 30.0), 900.0)
+        # THE CAP WAS 900s, AND A CLOSED BAR USED TO BE FOUND BY THE CLOCK.
+        # It is found by `_bar_is_newer` now, within a poll of happening, so
+        # the clock has one job left: the live price inside the payload. At
+        # 900s every one of sixty pairs rebuilt four times an hour to
+        # refresh a price the phone already streams for itself -- most of a
+        # core, permanently, on the box that kept meeting the OOM killer.
+        return min(max(floor, cost * 4.0, 30.0), 3600.0)
+
+    def _bar_is_newer(self, key: Tuple[str, str]) -> bool:
+        """Has a bar closed since the cached payload was built?
+
+        Cheap on purpose: the newest month's CSV, not the whole store. A
+        failure here answers "no" — this only ever schedules work, and the
+        clock still covers the case where it is wrong.
+        """
+        from livefeed import BarStore
+
+        with self._lock:
+            hit = self._dash.get(key)
+        if hit is None:
+            return False
+        built = (hit.value or {}).get("last_closed_bar")
+        if not built:
+            return False
+        try:
+            last = BarStore(*key).last_close_time()
+            if last is None:
+                return False
+            built_at = pd.Timestamp(built)
+            if built_at.tzinfo is None:
+                built_at = built_at.tz_localize("UTC")
+            return bool(last > built_at)
+        except Exception:
+            return False
 
     def _key_lock(self, key: Tuple[str, str]) -> threading.Lock:
         """One lock per (symbol, interval), so a slow 1m build cannot block 4h."""
@@ -688,11 +721,17 @@ class TradingService:
         """
         key = self._pair(symbol, interval)
         ttl = self._dash_ttl(key) if ttl is None else ttl
+        # A NEW BAR IS THE ONLY THING THAT CHANGES THE ANSWER, so it does not
+        # wait for the clock: the alert engine asks for every pair every 30
+        # seconds, and this turns the first of those after a close into the
+        # rebuild. The clock TTL is then only about the live price block,
+        # which is why it can be long (see `_dash_ttl`).
+        fresh_bar = self._bar_is_newer(key)
         with self._lock:
             self._last_seen[key] = time.time()
             hit = self._dash.get(key)
             if hit:
-                if time.time() - hit.at >= ttl:
+                if fresh_bar or time.time() - hit.at >= ttl:
                     self._refresh_soon(key)
                 # Both guards at SERVE time, on the cached copy. A verdict
                 # written today must gate a payload built yesterday -- the

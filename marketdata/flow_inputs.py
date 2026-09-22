@@ -71,21 +71,43 @@ def flow_inputs(symbol: str, interval: str, bars: pd.DataFrame,
         tape = None
 
     oi = liq = None
+    # SERVING READS THE PER-BAR CACHE, TRAINING READS THE ARCHIVES.
+    #
+    # These inputs are one archive file per DAY, and the live window spans
+    # years of them, so a dashboard rebuilt on a timer re-parsed ~1,700
+    # daily files into half a million rows to use one number per bar --
+    # sixty pairs of that on one core is what kept the API being killed for
+    # memory and warming up again. The cache holds exactly what the build
+    # uses (one row per bar), tops itself up from the newest bars only, and
+    # is exact because the resample is a backward merge (see flow_cache).
+    # `backfill=True` is training: it takes the original path untouched, so
+    # the two can never disagree about a number the model was fitted on.
+    use_cache = not backfill
     try:
         from marketdata.derivatives import load_open_interest, resample_to_bars
+        from marketdata.flow_cache import aligned
 
-        raw_oi = load_open_interest(symbol, start=start or since)
-        if raw_oi is not None and not raw_oi.empty:
-            oi = resample_to_bars(raw_oi, bars.index, how="last")
+        if use_cache:
+            oi = aligned(symbol, interval, "open_interest", bars.index,
+                         lambda s: load_open_interest(symbol, start=s), how="last")
+        else:
+            raw_oi = load_open_interest(symbol, start=start or since)
+            if raw_oi is not None and not raw_oi.empty:
+                oi = resample_to_bars(raw_oi, bars.index, how="last")
     except Exception as e:
         log.warning("open interest %s: %s", symbol, e)
 
     try:
         from marketdata.derivatives import load_liquidations, resample_to_bars
+        from marketdata.flow_cache import aligned
 
-        raw_liq = load_liquidations(symbol, start=start or since)
-        if raw_liq is not None and not raw_liq.empty:
-            liq = resample_to_bars(raw_liq, bars.index, how="sum")
+        if use_cache:
+            liq = aligned(symbol, interval, "liquidations", bars.index,
+                          lambda s: load_liquidations(symbol, start=s), how="sum")
+        else:
+            raw_liq = load_liquidations(symbol, start=start or since)
+            if raw_liq is not None and not raw_liq.empty:
+                liq = resample_to_bars(raw_liq, bars.index, how="sum")
     except Exception as e:
         # Binance's liquidation archives are patchy; empty is a normal answer
         log.info("liquidations %s unavailable: %s", symbol, e)

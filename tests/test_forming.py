@@ -437,3 +437,48 @@ def test_the_live_window_never_trims_below_what_detectors_need():
         mon = Monitor("BTCUSDT", interval, h1, h2)
         assert len(mon.live_window(bars)) >= mon.required_bars(bars), interval
     return True
+
+
+def test_above_an_hour_the_live_window_is_bounded_by_what_it_is_for():
+    """A 4h dashboard read the whole 3.4-year store to produce one row.
+
+    The 20,000-bar floor was measured on 1m, where it is two weeks; on 4h
+    it is nine years, so it never bound anything and every rebuild walked
+    the entire history — and with it one open-interest archive PER DAY of
+    that history, 1,756 files parsed and ~350 requested that cannot exist.
+    Above an hour the window is the measured multiple with two floors that
+    name their purpose: detectors warm, and the rank's trailing window
+    full several times over.
+    """
+    from monitor import TRAIL_BARS
+    from livefeed import BarStore
+
+    if not all(p.exists() for p in MODELS):
+        return True
+    bars = BarStore("BTCUSDT", "4h").load()
+    h1, h2 = __import__("core").model_paths("BTCUSDT", "4h")
+    if bars.empty or not (h1.exists() and h2.exists()):
+        return True
+    mon = Monitor("BTCUSDT", "4h", h1, h2)
+    need = mon.required_bars(bars)
+    w = mon.live_window(bars)
+    assert len(w) >= need * 4, "shorter than the multiple the drift was measured at"
+    assert len(w) >= need + 3 * TRAIL_BARS, "the rank window would run short"
+    if len(bars) > need * 4 + 3 * TRAIL_BARS:
+        assert len(w) < len(bars), "a long 4h store must still be trimmed"
+    return True
+
+
+def test_below_an_hour_nothing_about_the_window_changed():
+    """1m is where the drift table was measured; it keeps its floor."""
+    import pandas as pd
+
+    if not all(p.exists() for p in MODELS):
+        return True
+    mon = Monitor("BTCUSDT", "1m", MODELS[0], MODELS[1])
+    idx = pd.date_range("2026-01-01", periods=60_000, freq="1min", tz="UTC")
+    bars = pd.DataFrame({c: 1.0 for c in ("open", "high", "low", "close", "volume")},
+                        index=idx)
+    want = max(mon.required_bars(bars) * 4, 20_000)
+    assert len(mon.live_window(bars)) == min(want, len(bars))
+    return True

@@ -10,6 +10,7 @@ right answer is known by construction.
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -201,3 +202,94 @@ if __name__ == "__main__":
         fn()
         print(f"PASS  {fn.__name__}")
     print(f"\nAll {len(tests)} tape tests passed.")
+
+
+# ---------------------------------------------------------------------------
+# The per-bar flow cache: exact, or it has no business existing
+# ---------------------------------------------------------------------------
+
+def _raw_oi(index) -> pd.DataFrame:
+    """Five-minute open-interest samples across the span of `index`."""
+    t = pd.date_range(index[0] - pd.Timedelta(days=2), index[-1], freq="5min", tz="UTC")
+    rng = np.random.default_rng(11)
+    return pd.DataFrame({"open_interest": rng.uniform(1e6, 2e6, len(t)),
+                         "open_interest_usd": rng.uniform(1e8, 2e8, len(t))},
+                        index=pd.DatetimeIndex(t, name="time"))
+
+
+def test_the_flow_cache_answers_exactly_what_the_archives_would():
+    """The cache exists to stop a dashboard re-parsing 1,700 daily archive
+    files to use one number per bar. It is only allowed to exist because a
+    backward merge_asof makes a bar's value depend on that bar's past
+    alone, so filling the newest bars from a short slice is identical."""
+    from marketdata.derivatives import resample_to_bars
+    from marketdata.flow_cache import aligned
+
+    index = pd.date_range("2026-06-01", periods=400, freq="4h", tz="UTC")
+    raw = _raw_oi(index)
+    calls = []
+
+    def fetch(since):
+        calls.append(since)
+        return raw[raw.index >= pd.Timestamp(since, tz="UTC")]
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        want = resample_to_bars(raw, index, how="last")["open_interest"].to_numpy(float)
+
+        first = aligned("TESTUSDT", "4h", "open_interest", index, fetch, cache_dir=d)
+        assert np.allclose(first["open_interest"].to_numpy(float), want, equal_nan=True)
+        assert len(calls) == 1
+
+        # every bar known: no archive is opened at all
+        again = aligned("TESTUSDT", "4h", "open_interest", index, fetch, cache_dir=d)
+        assert np.allclose(again["open_interest"].to_numpy(float), want, equal_nan=True)
+        assert len(calls) == 1, "a fully cached window still went to the archives"
+
+        # a bar closes: the newest rows are topped up, the rest reused
+        grown = pd.date_range("2026-06-01", periods=403, freq="4h", tz="UTC")
+        raw = _raw_oi(grown)
+        out = aligned("TESTUSDT", "4h", "open_interest", grown, fetch, cache_dir=d)
+        assert len(calls) == 2
+        assert pd.Timestamp(calls[-1], tz="UTC") > index[-1] - pd.Timedelta(days=31)
+        direct = resample_to_bars(raw, grown, how="last")["open_interest"].to_numpy(float)
+        assert np.allclose(out["open_interest"].to_numpy(float)[-3:], direct[-3:], equal_nan=True)
+
+        # a window that grows BACKWARDS is filled from the older end, not
+        # carried across the gap from the cache's newest row
+        back = pd.date_range("2026-05-20", periods=470, freq="4h", tz="UTC")
+        raw = _raw_oi(back)
+        out = aligned("TESTUSDT", "4h", "open_interest", back, fetch, cache_dir=d)
+        early = resample_to_bars(raw, back, how="last")["open_interest"].to_numpy(float)
+        assert np.allclose(out["open_interest"].to_numpy(float)[:60], early[:60], equal_nan=True)
+    return True
+
+
+def test_a_broken_cache_file_is_recomputed_not_served():
+    from marketdata.flow_cache import aligned, path_for
+
+    index = pd.date_range("2026-06-01", periods=50, freq="4h", tz="UTC")
+    raw = _raw_oi(index)
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        p = path_for("TESTUSDT", "4h", "open_interest", d)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("not,a,frame\n@@@\n")
+        out = aligned("TESTUSDT", "4h", "open_interest", index,
+                      lambda s: raw, cache_dir=d)
+        assert out is not None and len(out) == len(index)
+        assert np.isfinite(out["open_interest"].to_numpy(float)).all()
+    return True
+
+
+def test_a_feed_that_publishes_nothing_stays_missing():
+    """Empty is Agent 4's honest answer for liquidations; the cache must not
+    turn it into zeros."""
+    from marketdata.flow_cache import aligned
+
+    index = pd.date_range("2026-06-01", periods=50, freq="4h", tz="UTC")
+    with tempfile.TemporaryDirectory() as d:
+        out = aligned("TESTUSDT", "4h", "liquidations", index,
+                      lambda s: pd.DataFrame(), how="sum", cache_dir=Path(d))
+        assert out is None
+    return True
