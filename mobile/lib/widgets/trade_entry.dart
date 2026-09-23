@@ -72,8 +72,14 @@ class _LogEntryCardState extends State<LogEntryCard> {
   late final TextEditingController _tp;
   late final TextEditingController _sl;
   String _side = 'LONG';
-  double? _balance;
-  int? _pct;
+
+  /// The dollar amount the size came from, when a dollar button set it:
+  /// the coins follow the entry price while it is set, and typing the
+  /// coins yourself clears it.
+  double? _usd;
+
+  /// The dollar figure behind "Your amount", remembered between trades.
+  double? _customUsd;
   bool _saving = false;
   String? _error;
 
@@ -86,8 +92,8 @@ class _LogEntryCardState extends State<LogEntryCard> {
     _tp = TextEditingController(text: priceInput(widget.suggestedTp));
     _sl = TextEditingController(text: priceInput(widget.suggestedSl));
     _side = widget.suggestedSide == 'SHORT' ? 'SHORT' : 'LONG';
-    Trades.instance.balance().then(
-        (b) => mounted ? setState(() => _balance = b) : null);
+    Trades.instance.customUsd().then(
+        (v) => mounted ? setState(() => _customUsd = v) : null);
   }
 
   // every digit the coin moves in -- see `priceDecimals`
@@ -113,22 +119,58 @@ class _LogEntryCardState extends State<LogEntryCard> {
     return _side == 'SHORT' ? -raw : raw;
   }
 
-  Future<void> _pickBalance() async {
-    final c = TextEditingController(text: _balance?.toString() ?? '');
+  /// THE SIZE IN DOLLARS. A trade is usually decided as "$250 of this",
+  /// not as a number of coins; the buttons turn dollars into coins at the
+  /// entry price (the limit when the call has one, else the price you typed,
+  /// else the live price) and write them where the coins are typed.
+  static const _usdButtons = [100.0, 250.0, 1000.0];
+
+  void _fillFromUsd(double usd) {
+    final px = _entryPrice ?? widget.livePrice;
+    if (px == null || px <= 0) {
+      setState(() => _error = 'Enter the entry price first, then pick the amount.');
+      return;
+    }
+    setState(() {
+      _usd = usd;
+      _error = null;
+      _size.text = _coins(usd / px);
+    });
+  }
+
+  /// Coins to type: enough digits for a $100 position in BTC (0.001163)
+  /// and none wasted on one in PEPE (18,904,109.59).
+  static String _coins(double q) {
+    String t;
+    if (q >= 1000) {
+      t = q.toStringAsFixed(2);
+    } else if (q >= 1) {
+      t = q.toStringAsFixed(4);
+    } else {
+      t = q.toStringAsPrecision(6);
+    }
+    if (t.contains('.') && !t.contains('e')) {
+      t = t.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+    }
+    return t;
+  }
+
+  Future<void> _pickAmount() async {
+    final c = TextEditingController(
+        text: _customUsd == null ? '' : _customUsd!.toStringAsFixed(0));
     final v = await showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Obsidian.surfaceContainer,
-        title: Text('Available ${widget.short}',
-            style: Obsidian.headlineMd()),
+        title: Text('Your amount', style: Obsidian.headlineMd()),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-                'Vanth holds no exchange key, so it cannot read your '
-                'balance. Enter it yourself and the percentage buttons will '
-                'work from that figure.',
+                'How many dollars to put into this trade. The app works out '
+                'the number of ${widget.short} at the entry price and fills it '
+                'in, and remembers the amount for next time.',
                 style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
             const SizedBox(height: 12),
             TextField(
@@ -136,7 +178,9 @@ class _LogEntryCardState extends State<LogEntryCard> {
               autofocus: true,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               style: Obsidian.dataTable(size: 15),
-              decoration: InputDecoration(hintText: '1.42',
+              decoration: InputDecoration(
+                  prefixText: '\$ ',
+                  hintText: '500',
                   hintStyle: Obsidian.dataTable(size: 15, color: Obsidian.outline)),
             ),
           ],
@@ -146,16 +190,17 @@ class _LogEntryCardState extends State<LogEntryCard> {
               onPressed: () => Navigator.of(ctx).pop(),
               child: Text('Cancel', style: Obsidian.body())),
           TextButton(
-              onPressed: () => Navigator.of(ctx)
-                  .pop(double.tryParse(c.text.replaceAll(',', ''))),
-              child: Text('Save',
-                  style: Obsidian.body(color: Obsidian.primary))),
+              onPressed: () => Navigator.of(ctx).pop(
+                  double.tryParse(c.text.replaceAll(',', '').replaceAll('\$', '').trim())),
+              child: Text('Use it', style: Obsidian.body(color: Obsidian.primary))),
         ],
       ),
     );
     if (v == null || v <= 0 || !mounted) return;
-    await Trades.instance.saveBalance(v);
-    if (mounted) setState(() => _balance = v);
+    await Trades.instance.saveCustomUsd(v);
+    if (!mounted) return;
+    setState(() => _customUsd = v);
+    _fillFromUsd(v);
   }
 
   Future<void> _submit() async {
@@ -184,6 +229,7 @@ class _LogEntryCardState extends State<LogEntryCard> {
     ));
     if (!mounted) return;
     _size.clear();
+    _usd = null;
     setState(() => _saving = false);
     widget.onLogged?.call();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -240,33 +286,30 @@ class _LogEntryCardState extends State<LogEntryCard> {
           const SizedBox(height: 16),
           _sideToggle(),
           const SizedBox(height: 18),
-          _label('SIZE / AMOUNT', trailing: GestureDetector(
-            onTap: _pickBalance,
-            child: Text(
-                _balance == null
-                    ? 'Set available'
-                    : 'Avail: ${_balance!.toStringAsFixed(4)} ${widget.short}',
-                style: Obsidian.dataTable(size: 11.5, color: Obsidian.outline)),
-          )),
+          _label('SIZE / AMOUNT'),
           const SizedBox(height: 8),
           _field(_size, hint: '0.00', suffix: widget.short, onChanged: (_) {
-            setState(() => _pct = null);
+            // typed by hand: the coins are yours now, not a dollar button's
+            setState(() => _usd = null);
           }, approx: () {
             final s = _sizeVal, e = _entryPrice ?? widget.livePrice;
             return (s == null || e == null) ? null : '≈ ${_money(s * e, dp: 2)}';
           }()),
           const SizedBox(height: 10),
-          _percentRow(),
+          _dollarRow(),
           const SizedBox(height: 18),
           _label('ENTRY PRICE'),
           const SizedBox(height: 8),
           _field(_entry,
               hint: '0.00',
-              onChanged: (_) => setState(() {}),
+              onChanged: (_) => setState(_followUsd),
               trailingLabel: widget.livePrice == null ? null : 'MARKET',
               onTrailingTap: widget.livePrice == null
                   ? null
-                  : () => setState(() => _entry.text = _fmt(widget.livePrice))),
+                  : () => setState(() {
+                        _entry.text = _fmt(widget.livePrice);
+                        _followUsd();
+                      })),
           const SizedBox(height: 18),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -357,52 +400,56 @@ class _LogEntryCardState extends State<LogEntryCard> {
     );
   }
 
-  Widget _percentRow() {
-    final disabled = _balance == null;
+  /// A dollar button's size keeps its dollars when the entry price moves.
+  void _followUsd() {
+    final usd = _usd, px = _entryPrice ?? widget.livePrice;
+    if (usd != null && px != null && px > 0) _size.text = _coins(usd / px);
+  }
+
+  Widget _dollarRow() {
+    final custom = _customUsd;
+    final buttons = <(String, double?)>[
+      for (final v in _usdButtons) ('\$${v.toStringAsFixed(0)}', v),
+      (custom == null ? 'Your amount' : '\$${custom.toStringAsFixed(custom % 1 == 0 ? 0 : 2)}', null),
+    ];
     return Row(
-      children: [25, 50, 75, 100].map((p) {
-        final on = _pct == p;
-        return Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(right: p == 100 ? 0 : 8),
-            child: GestureDetector(
-              onTap: () {
-                if (disabled) {
-                  _pickBalance();
-                  return;
-                }
-                setState(() {
-                  _pct = p;
-                  _size.text =
-                      (_balance! * p / 100).toStringAsFixed(6);
-                });
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 11),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: on
-                      ? Obsidian.green.withValues(alpha: 0.14)
-                      : Colors.white.withValues(alpha: 0.04),
-                  borderRadius: BorderRadius.circular(Obsidian.rSm + 4),
-                  border: Border.all(
-                      color: on
-                          ? Obsidian.green.withValues(alpha: 0.6)
-                          : Colors.transparent),
-                ),
-                child: Text('$p%',
-                    style: Obsidian.dataTable(
-                        size: 12.5,
-                        color: on
-                            ? Obsidian.green
-                            : (disabled
-                                ? Obsidian.outline.withValues(alpha: 0.5)
-                                : Obsidian.onSurface))),
-              ),
+      children: [
+        for (var i = 0; i < buttons.length; i++)
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(right: i == buttons.length - 1 ? 0 : 8),
+              child: _usdChip(buttons[i].$1, buttons[i].$2, i == buttons.length - 1),
             ),
           ),
-        );
-      }).toList(),
+      ],
+    );
+  }
+
+  Widget _usdChip(String label, double? usd, bool isCustom) {
+    final on = _usd != null &&
+        (isCustom ? (_customUsd != null && _usd == _customUsd && !_usdButtons.contains(_usd))
+                  : _usd == usd);
+    return GestureDetector(
+      // the custom one always opens its dialog, prefilled with the amount
+      // it remembers, so changing it is never hidden behind a gesture
+      onTap: () => isCustom ? _pickAmount() : _fillFromUsd(usd!),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: on
+              ? Obsidian.green.withValues(alpha: 0.14)
+              : Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(Obsidian.rSm + 4),
+          border: Border.all(
+              color: on ? Obsidian.green.withValues(alpha: 0.6) : Colors.transparent),
+        ),
+        child: Text(label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Obsidian.dataTable(
+                size: 12.5, color: on ? Obsidian.green : Obsidian.onSurface)),
+      ),
     );
   }
 

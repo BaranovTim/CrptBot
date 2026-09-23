@@ -479,6 +479,11 @@ class Trades extends ChangeNotifier {
   /// enter, and they stay disabled until you do.
   static const _balanceKey = 'trades.balance.v1';
 
+  /// The dollar amount behind the "Your amount" size button, remembered so
+  /// it is one tap the next time. Dollars, not coins: the button turns it
+  /// into coins at the entry price.
+  static const _customUsdKey = 'trades.custom_usd.v1';
+
   List<TradeEntry>? _cache;
 
   /// Set when the last read FAILED, as opposed to finding nothing.
@@ -969,6 +974,21 @@ class Trades extends ChangeNotifier {
     try {
       await (await SharedPreferences.getInstance())
           .setDouble(_balanceKey, v);
+    } catch (_) {}
+  }
+
+  Future<double?> customUsd() async {
+    try {
+      final v = (await SharedPreferences.getInstance()).getDouble(_customUsdKey);
+      return (v == null || v <= 0) ? null : v;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveCustomUsd(double v) async {
+    try {
+      await (await SharedPreferences.getInstance()).setDouble(_customUsdKey, v);
     } catch (_) {}
   }
 }

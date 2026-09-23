@@ -12,6 +12,7 @@ import 'package:tradingbot_app/widgets/acknowledgement.dart';
 import 'package:tradingbot_app/widgets/signals_panel.dart';
 import 'package:tradingbot_app/widgets/momentum_panel.dart';
 import 'package:tradingbot_app/widgets/record_panel.dart';
+import 'package:tradingbot_app/widgets/trade_entry.dart';
 import 'package:tradingbot_app/widgets/analysis_panels.dart';
 import 'package:tradingbot_app/widgets/smart_money_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -2628,6 +2629,65 @@ void main() {
       expect(opened, isNull);
       await t.tap(find.text('NEAR +90%'));
       expect(opened, 'NEARUSDT');
+    });
+  });
+
+  group('the size in dollars', () {
+    Future<void> pump(WidgetTester t, {double? entry, double live = 86000.0}) async {
+      SharedPreferences.setMockInitialValues({});
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: LogEntryCard(
+                      symbol: 'BTCUSDT', short: 'BTC', interval: '4h',
+                      livePrice: live, suggestedSide: 'LONG',
+                      suggestedEntry: entry)))));
+      await t.pumpAndSettle();
+    }
+
+    TextField sizeField(WidgetTester t) => t.widget<TextField>(find.byType(TextField).first);
+
+    testWidgets('the buttons are dollars, and fill in the coins', (t) async {
+      await pump(t, entry: 80000.0);
+      expect(find.text('25%'), findsNothing);
+      for (final l in [r'$100', r'$250', r'$1000', 'Your amount']) {
+        expect(find.text(l), findsOneWidget);
+      }
+      await t.tap(find.text(r'$100'));
+      await t.pump();
+      expect(sizeField(t).controller!.text, '0.00125');       // 100 / 80,000
+      await t.tap(find.text(r'$1000'));
+      await t.pump();
+      expect(sizeField(t).controller!.text, '0.0125');
+    });
+
+    testWidgets('the coins follow the entry price, until you type them', (t) async {
+      await pump(t, entry: 80000.0);
+      await t.tap(find.text(r'$250'));
+      await t.pump();
+      expect(sizeField(t).controller!.text, '0.003125');
+      // the entry price is the second field
+      await t.enterText(find.byType(TextField).at(1), '100000');
+      await t.pump();
+      expect(sizeField(t).controller!.text, '0.0025');         // still $250
+      await t.enterText(find.byType(TextField).first, '0.01');
+      await t.pump();
+      await t.enterText(find.byType(TextField).at(1), '50000');
+      await t.pump();
+      expect(sizeField(t).controller!.text, '0.01', reason: 'typed coins are left alone');
+    });
+
+    testWidgets('your amount asks once and is remembered', (t) async {
+      await pump(t, entry: 0.25);
+      await t.tap(find.text('Your amount'));
+      await t.pumpAndSettle();
+      await t.enterText(find.byType(TextField).last, '500');
+      await t.tap(find.text('Use it'));
+      await t.pumpAndSettle();
+      expect(sizeField(t).controller!.text, '2000');           // 500 / 0.25
+      expect(find.text(r'$500'), findsOneWidget);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getDouble('trades.custom_usd.v1'), 500.0);
     });
   });
 
