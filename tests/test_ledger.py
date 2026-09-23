@@ -1,0 +1,204 @@
+"""The live record (api/ledger.py), the notifications for a fill and for a
+trade's end, and the seed-bagged model (agent5.model.SeedBag)."""
+from __future__ import annotations
+
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import numpy as np
+import pandas as pd
+
+from api.ledger import COST_PCT, OrderLedger, pool_installed_at
+
+
+def _ledger():
+    return OrderLedger(Path(tempfile.mkdtemp()) / "orders.json")
+
+
+def _row(placed, state, long=True, fill=None, ret=None, closed=None, **kw):
+    r = {"placed_at": pd.Timestamp(placed, tz="UTC"), "state": state, "long": long,
+         "limit": 99.0, "stop": 94.0, "target": 104.0, "rank": 0.98, "fill": fill,
+         "filled_at": None, "exit": None,
+         "closed_at": pd.Timestamp(closed, tz="UTC") if closed else None, "ret_pct": ret}
+    r.update(kw)
+    return r
+
+
+# ------------------------------------------------------------- the ledger
+def test_the_ledger_counts_trades_not_orders():
+    L = _ledger()
+    book = {"strong": [_row("2026-09-23 00:00", "target", fill=99.0, ret=5.05, closed="2026-09-23 12:00"),
+                       _row("2026-09-23 04:00", "stop", fill=99.0, ret=-5.05, closed="2026-09-23 16:00"),
+                       _row("2026-09-23 08:00", "expired"),
+                       _row("2026-09-23 12:00", "replaced"),
+                       _row("2026-09-23 16:00", "open")]}
+    assert L.record("BTCUSDT", "4h", book, pool="crypto-4h-20260922T191908Z") == 5
+    s = L.summary()["levels"]["strong"]
+    assert s["closed"] == 2 and s["targets"] == 1 and s["stops"] == 1
+    assert s["expired"] == 1 and s["open_orders"] == 1
+    assert s["orders"] == 4                    # the replaced one is the same order, moved
+    assert s["win_rate"] == 0.5
+    assert abs(s["avg_net_pct"] - (-COST_PCT)) < 1e-9     # +5.05 and -5.05, less the fee each
+    assert L.summary()["levels"]["medium"]["closed"] == 0
+    return True
+
+
+def test_a_finished_order_is_never_rewritten_and_the_file_survives_a_restart():
+    L = _ledger()
+    L.record("ETHUSDT", "4h", {"strong": [_row("2026-09-23 00:00", "filled", fill=99.0)]})
+    L.record("ETHUSDT", "4h", {"strong": [_row("2026-09-23 00:00", "target", fill=99.0, ret=5.0,
+                                               closed="2026-09-23 12:00")]})
+    # a later replay whose window has lost the order's start sees it differently
+    assert L.record("ETHUSDT", "4h", {"strong": [_row("2026-09-23 00:00", "open")]}) == 0
+    again = OrderLedger(L.path)
+    rows = again.rows()
+    assert len(rows) == 1 and rows[0]["state"] == "target" and rows[0]["ret_pct"] == 5.0
+    assert again.since is not None
+    return True
+
+
+def test_orders_placed_before_the_model_was_installed_are_left_out():
+    L = _ledger()
+    pool = "crypto-4h-20260922T191908Z"
+    book = {"strong": [_row("2026-09-22 16:00", "target", fill=99.0, ret=5.0, closed="2026-09-22 20:00"),
+                       _row("2026-09-22 20:00", "open")]}
+    L.record("SOLUSDT", "4h", book, pool=pool, not_before=pool_installed_at(pool))
+    assert [r["placed_at"][:16] for r in L.rows()] == ["2026-09-22T20:00"]
+    assert pool_installed_at("not-a-pool") is None
+    return True
+
+
+def test_the_recent_trades_are_kept_per_level():
+    L = _ledger()
+    t = _row("2026-09-23 00:00", "target", fill=99.0, ret=5.0, closed="2026-09-23 12:00")
+    L.record("BTCUSDT", "4h", {"strong": [t], "medium": [t], "small": [t]})
+    rec = L.summary()["recent"]
+    assert [len(rec[k]) for k in ("strong", "medium", "small")] == [1, 1, 1]
+    assert abs(rec["strong"][0]["net_pct"] - (5.0 - COST_PCT)) < 1e-9
+    return True
+
+
+# ------------------------------------- the monitor hands over every level
+def test_the_card_carries_every_levels_orders():
+    from tests.test_orders import _card
+    from tests.test_structure import _bars
+
+    bars = _bars()
+    sc = np.full(len(bars), 0.5); sc[-1] = 0.99
+    a, bars = _card(sc, bars)
+    assert set(a.order_book) == {"strong", "medium", "small"}
+    live = a.order_book["strong"][-1]
+    assert live["state"] == "open" and live["long"] and live["ret_pct"] is None
+    assert live["placed_at"] == a.order_info["placed_at"]
+    assert abs(live["limit"] - a.order_info["limit"]) < 1e-12
+    return True
+
+
+# ------------------------------------------------- fill and end alerts
+def _order_engine():
+    from tests.test_alerts import StubService, _engine
+
+    svc = StubService(action="BUY", strength="strong")
+    base = svc.dashboard
+    state = {"order": {"state": "open", "limit": 99.0, "stop": 94.0, "target": 104.0,
+                       "placed_at": "2026-09-22T12:00:00+00:00",
+                       "valid_until": "2026-09-23T12:00:00+00:00",
+                       "hold_until": "2026-09-25T04:00:00+00:00", "level": "strong"}}
+
+    def dash(symbol=None, interval=None):
+        d = base(symbol, interval)
+        d["recommendation"]["action"] = svc.action
+        d["recommendation"]["order"] = dict(state["order"])
+        return d
+
+    svc.dashboard = dash
+    return svc, state, _engine(svc)
+
+
+def test_a_fill_and_the_trades_end_are_announced_once_each():
+    svc, state, e = _order_engine()
+    assert e.refresh() == []
+    svc.action = "WAIT"
+    state["order"].update(state="filled", fill=99.0)
+    got = e.refresh()
+    assert len(got) == 1 and "order filled" in got[0].title, [a.title for a in got]
+    assert "Filled at 99.00" in got[0].body and "Take profit 104.00" in got[0].body
+    assert got[0].strength == "strong"
+    assert e.refresh() == []                                   # still filled: silence
+    svc.action = "FLAT"
+    state["order"].update(state="target", exit=104.0)
+    end = e.refresh()
+    assert len(end) == 1 and "target reached" in end[0].title, [a.title for a in end]
+    assert "+5.05% from the fill" in end[0].body
+    assert e.refresh() == []
+    return True
+
+
+def test_a_fill_and_stop_in_one_bar_is_one_notice():
+    svc, state, e = _order_engine()
+    e.refresh()
+    svc.action = "FLAT"
+    state["order"].update(state="stop", fill=99.0, exit=94.0)
+    got = e.refresh()
+    assert len(got) == 1 and "stopped out" in got[0].title
+    assert "-5.05% from the fill" in got[0].body
+    return True
+
+
+def test_the_order_state_survives_a_restart():
+    from api.alerts import AlertEngine
+
+    svc, state, e = _order_engine()
+    e.refresh()
+    fresh = AlertEngine(svc, state_path=e._state_path)
+    fresh._calendar = lambda: []
+    svc.action = "WAIT"
+    state["order"].update(state="filled", fill=99.0)
+    got = fresh.refresh()
+    assert any("order filled" in a.title for a in got), [a.title for a in got]
+    return True
+
+
+# ------------------------------------------------------------ seed bagging
+def test_a_bagged_model_averages_its_members_and_round_trips():
+    from agent5 import Agent5Config, JudgeAgent
+    from agent5.model import SeedBag, fit_final
+    from agent5.dataset import Dataset
+
+    rng = np.random.default_rng(0)
+    n = 1500
+    X = pd.DataFrame(rng.normal(size=(n, 5)), columns=list("abcde"))
+    y = pd.Series((X["a"] + 0.5 * rng.normal(size=n) > 0).astype(float))
+    ds = Dataset(X=X, y=y, weight=pd.Series(np.ones(n)), t1=np.arange(n) + 2.0,
+                 positions=np.arange(n), blocks={}, index=pd.date_range("2024", periods=n, freq="4h"))
+    cfg = Agent5Config(bag_seeds=(7, 11, 13))
+    model, cols = fit_final(ds, cfg, list("abcde"))
+    assert isinstance(model, SeedBag) and len(model) == 3
+    p = model.predict_proba(X)[:, 1]
+    each = np.mean([m.predict_proba(X)[:, 1] for m in model.members], axis=0)
+    assert np.allclose(p, each)
+    single, _ = fit_final(ds, Agent5Config(), list("abcde"))
+    assert not isinstance(single, SeedBag)
+    j = JudgeAgent(cfg); j.model, j.columns, j._fitted = model, cols, True
+    from agent5.calibration import fit_calibrator
+    j.calibrator = fit_calibrator(p, y.to_numpy(), np.ones(n))
+    path = Path(tempfile.mkdtemp()) / "bag.joblib"
+    j.save(path)
+    back = JudgeAgent.load(path)
+    assert np.allclose(back.raw_scores(X), j.raw_scores(X))
+    assert back.cfg.bag_seeds == (7, 11, 13)
+    return True
+
+
+def test_an_old_config_has_no_bag():
+    from agent5.config import Agent5Config
+    cfg = Agent5Config()
+    assert tuple(cfg.bag_seeds) == ()
+    try:
+        Agent5Config(bag_seeds=(7, 7))
+    except ValueError:
+        return True
+    raise AssertionError("duplicate seeds were accepted")

@@ -466,6 +466,11 @@ class ApiClient {
   Future<Momentum> momentum() async =>
       Momentum.fromJson(await _get('/api/momentum'));
 
+  /// The live record of the 4h calls: orders placed, filled, and how the
+  /// trades ended, per sensitivity. See `api/ledger.py`.
+  Future<LiveRecord> record() async =>
+      LiveRecord.fromJson(await _get('/api/record'));
+
   Future<Consensus> consensus({String? symbol}) async =>
       Consensus.fromJson(await _get('/api/consensus${_q(symbol, null)}'));
 

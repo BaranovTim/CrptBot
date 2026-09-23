@@ -65,9 +65,19 @@ import research.pooled_daily as PD                      # noqa: E402
 INTERVAL = "4h"
 STOP_BUFFER_ATR = 0.5
 # THE ENTRY (research/improve_4h.py, monitor.resting_orders): a resting order
-# 0.5 ATR better than the call's close, good for 4 bars, stop moved with it.
+# 0.5 ATR better than the call's close, stop moved with it, good for 6 bars
+# (a day). 4 bars was chosen on a replay that let the account pick among
+# orders knowing which would fill; re-tuned on the served policy (round
+# four), 6 bars beat 4 on the development half-years for all four models
+# tried and on the holdout for three of them. 0.25/0.75/1.0 ATR and a
+# limit AT the level were all worse than 0.5 ATR.
 ENTRY_OFFSET_ATR = 0.5
-ENTRY_VALID_BARS = 4
+ENTRY_VALID_BARS = 6
+# SEED BAGGING (agent5.model.SeedBag): the final fit under five seeds,
+# averaged. One reseed of the same model moved the served account from
+# Sharpe 2.22/2.22 to 1.82/1.40; the bag beat the average seed on both
+# periods and every seed on the six-half-year total.
+BAG_SEEDS = (7, 11, 13, 17, 19)
 EPOCH = pd.Timestamp("2015-01-01", tz="UTC")
 BAR = pd.Timedelta(hours=4)
 # the fifteen the walk-forward validated, which are also the ones served
@@ -199,7 +209,7 @@ def main(argv=None) -> int:
 
     verdict = {"symbol": "POOLED", "interval": INTERVAL, "source": "pooled",
                "coins": sorted(frames), "rank_pool": pool_id,
-               "stop_buffer_atr": a.stop_buffer,
+               "stop_buffer_atr": a.stop_buffer, "bag_seeds": list(BAG_SEEDS),
                "evaluated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                "horizons": {}}
     fitted = {}
@@ -207,7 +217,8 @@ def main(argv=None) -> int:
         side = slot_side(INTERVAL, slot)
         cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k, geometry="structure",
                            side=side, stop_buffer_atr=a.stop_buffer, rank_pool=pool_id,
-                           entry_offset_atr=ENTRY_OFFSET_ATR, entry_valid_bars=ENTRY_VALID_BARS)
+                           entry_offset_atr=ENTRY_OFFSET_ATR, entry_valid_bars=ENTRY_VALID_BARS,
+                           bag_seeds=BAG_SEEDS)
         parts = {}
         for sym, (bars, fr, warm) in frames.items():
             ds = JudgeAgent(cfg).build(bars, warmup=warm, **fr)

@@ -1,0 +1,289 @@
+{
+ "variant": "live_htf",
+ "dev": {
+  "auc": {
+   "long": 0.6000581418915322,
+   "short": 0.6168571570317363
+  },
+  "auc_by_window": {
+   "0": 0.6024957142552971,
+   "1": 0.6059350117162976,
+   "2": 0.6357906243114739,
+   "3": 0.5873928026711586
+  },
+  "rank_coin>=0.90 (shipped rule)": {
+   "n": 13244,
+   "mean": 0.20781326756774035,
+   "w_mean": 0.42342684805761815,
+   "se_week": 0.08943083089517992,
+   "funding": 0.006776649879190749,
+   "hit": 0.6911054062216853
+  },
+  "rank_pool>=0.90": {
+   "n": 12692,
+   "mean": 0.1972108902866689,
+   "w_mean": 0.4254439515952412,
+   "se_week": 0.09098458902441534,
+   "funding": 0.006243020879294186,
+   "hit": 0.6920107154112827
+  },
+  "rank_pool>=0.97": {
+   "n": 4030,
+   "mean": 0.4097282748596052,
+   "w_mean": 0.6619770423366035,
+   "se_week": 0.13808433599181574,
+   "funding": 0.006706318114144163,
+   "hit": 0.7322580645161291
+  },
+  "best 1 of 30 per bar": {
+   "n": 3622,
+   "mean": 0.15732207628371206,
+   "w_mean": 0.42705182148223636,
+   "se_week": 0.09891055598249567,
+   "funding": 0.006640124240751109,
+   "hit": 0.6998895637769188
+  },
+  "portfolio k=3, shipped rule": {
+   "trades": 2686,
+   "win": 0.6909903201787044,
+   "net_per_trade": 0.13390434283411287,
+   "return_pct_per_year": 59.61783772531151,
+   "sharpe": 1.0827061465904348,
+   "max_drawdown_pct": 65.85010781964733,
+   "longs": 1507,
+   "shorts": 1179
+  },
+  "portfolio k=3, rank_pool>=0.90": {
+   "trades": 2626,
+   "win": 0.6862147753236862,
+   "net_per_trade": 0.10773292564452917,
+   "return_pct_per_year": 46.89415617666883,
+   "sharpe": 0.8662802487338263,
+   "max_drawdown_pct": 87.08111872455197,
+   "longs": 1486,
+   "shorts": 1140
+  },
+  "portfolio k=3, rank_pool>=0.97": {
+   "trades": 1560,
+   "win": 0.7166666666666667,
+   "net_per_trade": 0.3144376491449519,
+   "return_pct_per_year": 81.64195048934592,
+   "sharpe": 1.9090264596374225,
+   "max_drawdown_pct": 38.740228252031926,
+   "longs": 934,
+   "shorts": 626
+  },
+  "portfolio k=3, 0.97 held 2 closes": {
+   "trades": 875,
+   "win": 0.7337142857142858,
+   "net_per_trade": 0.39369194054557555,
+   "return_pct_per_year": 57.256540761267374,
+   "sharpe": 1.7893049505704073,
+   "max_drawdown_pct": 32.14330328755322,
+   "longs": 514,
+   "shorts": 361
+  },
+  "portfolio k=3, 0.97 held 3 closes": {
+   "trades": 503,
+   "win": 0.7375745526838966,
+   "net_per_trade": 0.36773244685918405,
+   "return_pct_per_year": 30.870525185693594,
+   "sharpe": 1.2747935085265643,
+   "max_drawdown_pct": 27.516961511667628,
+   "longs": 297,
+   "shorts": 206
+  },
+  "portfolio k=3, 0.97 held 5 closes": {
+   "trades": 147,
+   "win": 0.7210884353741497,
+   "net_per_trade": 0.07769464689402428,
+   "return_pct_per_year": 1.9140065560600867,
+   "sharpe": 0.1442128180406163,
+   "max_drawdown_pct": 22.084875363575893,
+   "longs": 75,
+   "shorts": 72
+  },
+  "portfolio k=3, 0.90 held 5 closes": {
+   "trades": 878,
+   "win": 0.6913439635535308,
+   "net_per_trade": 0.1490835375552605,
+   "return_pct_per_year": 21.81589099558646,
+   "sharpe": 0.7081751139551811,
+   "max_drawdown_pct": 33.10543298732436,
+   "longs": 489,
+   "shorts": 389
+  },
+  "portfolio k=3, rank_pool>=0.97, 1% risk": {
+   "trades": 1560,
+   "win": 0.7166666666666667,
+   "net_per_trade": 0.13924638276031778,
+   "return_pct_per_year": 36.15453276047649,
+   "sharpe": 1.631348413684684,
+   "max_drawdown_pct": 15.753830941067747,
+   "longs": 934,
+   "shorts": 626
+  },
+  "portfolio k=3, shipped rule, 1% risk": {
+   "trades": 2686,
+   "win": 0.6909903201787044,
+   "net_per_trade": 0.04773886031333073,
+   "return_pct_per_year": 21.254632725970172,
+   "sharpe": 0.7159835179192156,
+   "max_drawdown_pct": 26.88132112201613,
+   "longs": 1507,
+   "shorts": 1179
+  },
+  "portfolio k=5, rank_pool>=0.97, 1% risk": {
+   "trades": 2016,
+   "win": 0.7212301587301587,
+   "net_per_trade": 0.23340749872140598,
+   "return_pct_per_year": 46.92638630031678,
+   "sharpe": 1.691663432848483,
+   "max_drawdown_pct": 24.637604528212137,
+   "longs": 1189,
+   "shorts": 827
+  }
+ },
+ "holdout": {
+  "auc": {
+   "long": 0.6229875874443822,
+   "short": 0.6011503443321236
+  },
+  "auc_by_window": {
+   "4": 0.6321382382045757,
+   "5": 0.6018919495070675
+  },
+  "rank_coin>=0.90 (shipped rule)": {
+   "n": 6860,
+   "mean": 0.10811232890713421,
+   "w_mean": 0.31226054678913046,
+   "se_week": 0.13775539671538256,
+   "funding": 0.005175266472303519,
+   "hit": 0.6921282798833819
+  },
+  "rank_pool>=0.90": {
+   "n": 6585,
+   "mean": 0.10145167895811075,
+   "w_mean": 0.29410690215128765,
+   "se_week": 0.14372822915199232,
+   "funding": 0.004037061655277396,
+   "hit": 0.6902050113895216
+  },
+  "rank_pool>=0.97": {
+   "n": 2119,
+   "mean": 0.24646415872484248,
+   "w_mean": 0.5008417412561265,
+   "se_week": 0.1853221210193658,
+   "funding": 0.006258058046248717,
+   "hit": 0.7163756488909863
+  },
+  "best 1 of 30 per bar": {
+   "n": 1616,
+   "mean": 0.11810567896170897,
+   "w_mean": 0.4242018396131498,
+   "se_week": 0.1406311713523171,
+   "funding": 0.0017057116336635378,
+   "hit": 0.6974009900990099
+  },
+  "portfolio k=3, shipped rule": {
+   "trades": 1221,
+   "win": 0.6986076986076986,
+   "net_per_trade": 0.12292271341214964,
+   "return_pct_per_year": 51.87722639472127,
+   "sharpe": 1.0526128908595482,
+   "max_drawdown_pct": 32.40718125046718,
+   "longs": 665,
+   "shorts": 556
+  },
+  "portfolio k=3, rank_pool>=0.90": {
+   "trades": 1195,
+   "win": 0.701255230125523,
+   "net_per_trade": 0.17899313224213506,
+   "return_pct_per_year": 73.93213016639514,
+   "sharpe": 1.463035732091318,
+   "max_drawdown_pct": 32.01821948205799,
+   "longs": 656,
+   "shorts": 539
+  },
+  "portfolio k=3, rank_pool>=0.97": {
+   "trades": 730,
+   "win": 0.7232876712328767,
+   "net_per_trade": 0.2742514756360112,
+   "return_pct_per_year": 69.19915310910528,
+   "sharpe": 1.7164546377214438,
+   "max_drawdown_pct": 24.21071960174988,
+   "longs": 405,
+   "shorts": 325
+  },
+  "portfolio k=3, 0.97 held 2 closes": {
+   "trades": 448,
+   "win": 0.7098214285714286,
+   "net_per_trade": 0.21637686449967633,
+   "return_pct_per_year": 33.50562962404078,
+   "sharpe": 0.9628175390655442,
+   "max_drawdown_pct": 24.755550975654174,
+   "longs": 263,
+   "shorts": 185
+  },
+  "portfolio k=3, 0.97 held 3 closes": {
+   "trades": 274,
+   "win": 0.6970802919708029,
+   "net_per_trade": 0.3938123989444802,
+   "return_pct_per_year": 37.29657009321728,
+   "sharpe": 1.3252801538251777,
+   "max_drawdown_pct": 19.506227416431333,
+   "longs": 164,
+   "shorts": 110
+  },
+  "portfolio k=3, 0.97 held 5 closes": {
+   "trades": 121,
+   "win": 0.7603305785123967,
+   "net_per_trade": 0.7156336148446435,
+   "return_pct_per_year": 30.100912952013026,
+   "sharpe": 1.579857880995787,
+   "max_drawdown_pct": 8.899655571255044,
+   "longs": 80,
+   "shorts": 41
+  },
+  "portfolio k=3, 0.90 held 5 closes": {
+   "trades": 500,
+   "win": 0.706,
+   "net_per_trade": 0.32940274995467417,
+   "return_pct_per_year": 56.76676285810012,
+   "sharpe": 1.75859456620945,
+   "max_drawdown_pct": 26.136353123181777,
+   "longs": 293,
+   "shorts": 207
+  },
+  "portfolio k=3, rank_pool>=0.97, 1% risk": {
+   "trades": 730,
+   "win": 0.7232876712328767,
+   "net_per_trade": 0.10417493684120846,
+   "return_pct_per_year": 26.285427955814384,
+   "sharpe": 1.1994025032242959,
+   "max_drawdown_pct": 18.25348508254813,
+   "longs": 405,
+   "shorts": 325
+  },
+  "portfolio k=3, shipped rule, 1% risk": {
+   "trades": 1221,
+   "win": 0.6986076986076986,
+   "net_per_trade": 0.037919448076869124,
+   "return_pct_per_year": 16.003192071191176,
+   "sharpe": 0.5763875483512759,
+   "max_drawdown_pct": 21.353076591882164,
+   "longs": 665,
+   "shorts": 556
+  },
+  "portfolio k=5, rank_pool>=0.97, 1% risk": {
+   "trades": 958,
+   "win": 0.7139874739039666,
+   "net_per_trade": 0.14270963574805298,
+   "return_pct_per_year": 28.352999052285043,
+   "sharpe": 0.9225989977400881,
+   "max_drawdown_pct": 21.174781851508428,
+   "longs": 533,
+   "shorts": 425
+  }
+ }
+}

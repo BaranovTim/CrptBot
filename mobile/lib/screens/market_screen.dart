@@ -18,12 +18,14 @@ import '../api/models.dart';
 import '../api/widgets.dart';
 import '../api/trades.dart';
 import '../api/muted.dart';
+import '../api/settings.dart';
 import '../api/watchlist.dart';
 import 'add_coin_sheet.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/patient_loader.dart';
 import '../widgets/momentum_panel.dart';
+import '../widgets/record_panel.dart';
 import '../widgets/signals_panel.dart';
 import '../widgets/status_dot.dart';
 
@@ -72,6 +74,23 @@ class _MarketScreenState extends State<MarketScreen> {
   Momentum? _momentum;
   bool _momentumFailed = false;
 
+  /// The live record of the calls (api/ledger.py), shown for the level the
+  /// person follows. Hidden, like the rotation, if the server has none.
+  LiveRecord? _record;
+  bool _recordFailed = false;
+  String _sensitivity = 'strong';
+
+  Future<void> _loadRecord() async {
+    try {
+      final level = await Settings.instance.sensitivity();
+      final r = await widget.client.record();
+      if (mounted) setState(() { _record = r; _sensitivity = level; });
+    } catch (_) {
+      // an older server without the ledger: the panel goes away
+      if (mounted) setState(() => _recordFailed = true);
+    }
+  }
+
   /// Open trades as `SYMBOL:interval` keys (see `SignalsPanel.held`), so
   /// the calls list tags the row you are actually in, not every row of the
   /// coin.
@@ -104,6 +123,7 @@ class _MarketScreenState extends State<MarketScreen> {
 
   Future<void> _loadSignals() async {
     unawaited(_loadMomentum());
+    unawaited(_loadRecord());
     try {
       final s = await widget.client.signals();
       if (mounted) setState(() => _signals = s);
@@ -280,6 +300,13 @@ class _MarketScreenState extends State<MarketScreen> {
               held: _held,
               onOpen: (sig) => widget.onOpenSignal?.call(sig),
             ),
+            // How those calls have actually done since the model went live:
+            // right under them, because it is the answer to "should I trust
+            // the list above".
+            if (!_recordFailed) ...[
+              const SizedBox(height: 26),
+              RecordPanel(data: _record, level: _sensitivity),
+            ],
             // The weekly rotation: a basket, not a call, so it sits under
             // the calls rather than among them. A pick opens on the daily
             // chart -- a 30-day return is a daily question.

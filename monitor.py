@@ -360,6 +360,9 @@ class Analysis:
     # forming bar picks up (`order_info["next"]`). None otherwise.
     order: object = None
     order_info: dict = field(default_factory=dict)
+    # EVERY order of the recent window, per sensitivity level, as plain
+    # dicts with times -- what api/ledger.py keeps as the live record.
+    order_book: dict = field(default_factory=dict)
     # what the followed traders did, and what it did to the call
     # (api/service._smart_overlay). "" when nothing applied.
     smart_note: str = ""
@@ -921,6 +924,20 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
 LEVEL_NAMES = {3: "strong", 2: "medium", 1: "small"}
 
 
+def _order_row(od: "RestingOrder", when, ranks) -> dict:
+    """One replayed order as the live record keeps it. Times are the bar
+    closes as a person reads them; the return is the trade's, gross."""
+    closed = od.state in ("target", "stop", "timeout")
+    return {"placed_at": when(od.placed), "state": od.state, "long": bool(od.long),
+            "limit": float(od.limit), "stop": float(od.stop), "target": float(od.target),
+            "rank": float(ranks[od.placed]) if np.isfinite(ranks[od.placed]) else None,
+            "fill": float(od.fill) if np.isfinite(od.fill) else None,
+            "filled_at": when(od.filled_at) if od.filled_at >= 0 else None,
+            "exit": float(od.exit) if np.isfinite(od.exit) else None,
+            "closed_at": when(od.closed_at) if od.closed_at >= 0 else None,
+            "ret_pct": float(od.ret_pct()) if closed else None}
+
+
 def _px(v: float) -> str:
     """A price with the digits that matter (the alerts' rule, see api/alerts)."""
     try:
@@ -970,20 +987,23 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
     atr = _atr(bars, cfg.atr_period).to_numpy(float)[bi]
     tp = lab.tp_pct.to_numpy(float)[bi]; sl = lab.sl_pct.to_numpy(float)[bi]
 
-    gov = None; last = None
-    for ml in (3, 2, 1):
-        orders = resting_orders(o, h, lo, c, atr, tp, sl, lev, long, k, V, H, min_level=ml)
-        if orders and orders[-1].active:
-            gov = (ml, orders[-1]); break
-        if ml == 1 and orders:
-            last = orders[-1]
-
     def when(j):
         """A bar's close as the boundary it ends at: 23:59:59.999 reads as the
         00:00 close, which is what a person looking at a chart calls it."""
         if not 0 <= j < m:
             return None
         return (pd.Timestamp(times[j]) + pd.Timedelta(milliseconds=1)).floor("min")
+
+    # every level is replayed, even below one with a live order: the card
+    # speaks for the strongest, the live record (api/ledger.py) keeps all three
+    gov = None; last = None
+    for ml in (3, 2, 1):
+        orders = resting_orders(o, h, lo, c, atr, tp, sl, lev, long, k, V, H, min_level=ml)
+        a.order_book[LEVEL_NAMES[ml]] = [_order_row(od, when, ranks) for od in orders]
+        if gov is None and orders and orders[-1].active:
+            gov = (ml, orders[-1])
+        if ml == 1 and orders and gov is None:
+            last = orders[-1]
 
     word = "Buy" if long else "Sell"
     if gov is None:
@@ -1002,6 +1022,8 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
             a.order = last
             a.order_info = {"state": last.state, "limit": last.limit, "stop": last.stop,
                             "target": last.target, "placed_at": placed,
+                            "fill": last.fill if np.isfinite(last.fill) else None,
+                            "exit": last.exit if np.isfinite(last.exit) else None,
                             "level": LEVEL_NAMES[last.level], "next": m, "note": note}
         return False
 

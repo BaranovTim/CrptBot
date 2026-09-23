@@ -131,6 +131,30 @@ def _fit_logistic(Xtr, ytr, wtr, cfg):
     ]).fit(Xtr, ytr, clf__sample_weight=wtr)
 
 
+class SeedBag:
+    """Several fits of one model, differing only in their seed, averaged.
+
+    Quacks like the classifier it wraps (`predict_proba`, `n_features_in_`)
+    so a JudgeAgent holding one scores, saves and loads exactly as before.
+    Averaging probabilities, not votes: the monitor RANKS these scores, and
+    a mean keeps them continuous where a vote would tie."""
+
+    def __init__(self, members: list):
+        if not members:
+            raise ValueError("a bag needs at least one member")
+        self.members = list(members)
+
+    def predict_proba(self, X) -> np.ndarray:
+        return np.mean([m.predict_proba(X) for m in self.members], axis=0)
+
+    @property
+    def n_features_in_(self) -> int:
+        return getattr(self.members[0], "n_features_in_", 0)
+
+    def __len__(self) -> int:
+        return len(self.members)
+
+
 def _fit_lightgbm(Xtr, ytr, wtr, Xval, yval, wval, cfg):
     import lightgbm as lgb
 
@@ -232,8 +256,19 @@ def fit_final(ds: Dataset, cfg: Agent5Config,
     if kind == "lightgbm":
         inner, val = _inner_split(len(y), ds.positions, ds.t1, cfg.inner_val_frac)
         ival = val if len(val) and len(np.unique(y[val])) > 1 else np.arange(0)
-        model = _fit_lightgbm(X.iloc[inner], y[inner], w[inner],
-                              X.iloc[ival], y[ival], w[ival], cfg)
+        seeds = tuple(getattr(cfg, "bag_seeds", ()) or ())
+        if seeds:
+            import dataclasses
+            members = []
+            for sd in seeds:
+                prm = dict(cfg.lgbm_params); prm["seed"] = int(sd)
+                members.append(_fit_lightgbm(X.iloc[inner], y[inner], w[inner],
+                                             X.iloc[ival], y[ival], w[ival],
+                                             dataclasses.replace(cfg, lgbm_params=prm)))
+            model = SeedBag(members)
+        else:
+            model = _fit_lightgbm(X.iloc[inner], y[inner], w[inner],
+                                  X.iloc[ival], y[ival], w[ival], cfg)
     else:
         model = _fit_logistic(X, y, w, cfg)
     return model, cols

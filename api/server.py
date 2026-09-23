@@ -257,7 +257,11 @@ class Handler(BaseHTTPRequestHandler):
                    # which controls exist and what the presets contain, which
                    # is the thing an unsubscribed user needs in order to see
                    # what they would be buying. It contains no market data.
-                   "/api/screener/catalogue")
+                   "/api/screener/catalogue",
+                   # The live RECORD is free too: how the calls have actually
+                   # done is what someone deciding whether to pay needs to
+                   # see, and it names no call that is still live.
+                   "/api/record")
 
     def _bearer(self) -> str:
         header = self.headers.get("Authorization", "")
@@ -359,7 +363,7 @@ class Handler(BaseHTTPRequestHandler):
                                           "/api/horizon", "/api/train",
                                           "/api/train/status", "/api/push",
                                           "/api/range", "/api/signals",
-                                          "/api/momentum"]})
+                                          "/api/momentum", "/api/record"]})
             elif route == "/api/me":
                 operator, user = self._principal()
                 if operator:
@@ -545,6 +549,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(svc.live_signals())
             elif route == "/api/momentum":
                 self._send(svc.momentum())
+            elif route == "/api/record":
+                self._send(svc.live_record())
             elif route == "/api/range":
                 self._send(svc.price_range(symbol=opt("symbol"),
                                            interval=opt("interval") or "1m",

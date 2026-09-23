@@ -40,6 +40,7 @@ MODULES = [
     "tests.test_structure",
     "tests.test_orders",
     "tests.test_momentum",
+    "tests.test_ledger",
     "tests.test_trail",
     "tests.test_schedule",
     "tests.test_alerts",

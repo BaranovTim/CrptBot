@@ -283,6 +283,12 @@ class AlertEngine:
         # the open resting order last seen per pair, (placed_at, limit), so a
         # re-quote -- the same call carrying on at a new price -- is noticed
         self._last_order: Dict[tuple, Optional[tuple]] = {}
+        # the order's life last seen per pair, (placed_at, state), so a FILL
+        # and a trade's END are noticed. Neither changes the action in a way
+        # the transition rule below hears: a fill turns BUY into WAIT, and a
+        # trade ending turns WAIT into FLAT, and neither is an entry or an
+        # exit of a CALL. A person following along still needs to know.
+        self._order_state: Dict[tuple, Optional[tuple]] = {}
         self._spiked_bar: Dict[tuple, Optional[str]] = {}
         self._primed = False
         self._pairs = pairs
@@ -487,6 +493,8 @@ class AlertEngine:
                                 for k, v in raw.get("spiked_bar", {}).items()}
             self._last_order = {tuple(k.split("|")): (tuple(v) if v else None)
                                 for k, v in raw.get("last_order", {}).items()}
+            self._order_state = {tuple(k.split("|")): (tuple(v) if v else None)
+                                 for k, v in raw.get("order_state", {}).items()}
             self._log = [_alert_from_json(a) for a in raw.get("log", [])]
             self._primed = bool(raw.get("primed", False))
             self._smart_cursor = int(raw.get("smart_cursor", 0) or 0)
@@ -515,6 +523,8 @@ class AlertEngine:
                                for k, v in self._spiked_bar.items()},
                 "last_order": {"|".join(k): (list(v) if v else None)
                                for k, v in self._last_order.items()},
+                "order_state": {"|".join(k): (list(v) if v else None)
+                                for k, v in self._order_state.items()},
                 "log": [a.to_json() for a in self._log[-MAX_LOG:]],
                 "smart_cursor": self._smart_cursor,
             }))
@@ -546,7 +556,22 @@ class AlertEngine:
         prev_order = self._last_order.get(key)
         self._last_order[key] = (order.get("placed_at"), order.get("limit")) if order.get("state") == "open" else None
 
+        now_state = ((order.get("placed_at"), order.get("state"))
+                     if order.get("placed_at") and order.get("state") else None)
+        was_state = self._order_state.get(key)
+        self._order_state[key] = now_state
+
         out: List[Alert] = []
+
+        # THE ORDER FILLED, OR ITS TRADE ENDED. Same order (same placement),
+        # a new state. Expiry has its own path below; a replacement is "moved".
+        if now_state and was_state and was_state[0] == now_state[0] and was_state[1] != now_state[1]:
+            if was_state[1] == "open" and now_state[1] == "filled":
+                out.append(self._order_alert(d, iv, rec, order, "filled"))
+                return out
+            if was_state[1] in ("open", "filled") and now_state[1] in ("target", "stop", "timeout"):
+                out.append(self._order_alert(d, iv, rec, order, now_state[1]))
+                return out
 
         # A RESTING ORDER THAT MOVED. The call persisted into a new close, so
         # its order is re-quoted at the new close's price. Acting only on a
@@ -653,9 +678,53 @@ class AlertEngine:
         return out
 
     def _order_alert(self, d: dict, iv: str, rec: dict, order: dict, what: str) -> "Alert":
-        """An order moved to a new price, or expired without filling."""
+        """An order moved to a new price, filled, expired without filling, or
+        its trade ended at the target, the stop or the time limit."""
         sym = d["symbol"]
         word = "Buy" if rec.get("action") == "BUY" or (order.get("target") or 0) > (order.get("stop") or 0) else "Sell"
+        long = word == "Buy"
+        fill = order.get("fill")
+
+        def pct(px):
+            if px is None or not fill:
+                return ""
+            r = (px / fill - 1.0) * 100.0 * (1 if long else -1)
+            return f" ({r:+.2f}% from the fill)"
+
+        if what == "filled":
+            title = f"{sym}: {iv}; {word.lower()} order filled"
+            lines = [f"Filled at {_price_text(fill)}. In the trade.",
+                     f"Take profit {_price_text(order.get('target'))}",
+                     f"Stop loss {_price_text(order.get('stop'))}",
+                     f"Closes by {_hhmm(order.get('hold_until'))}" if order.get("hold_until") else ""]
+            return Alert(
+                id=_hash("order", sym, iv, what, str(order.get("placed_at"))),
+                kind="signal", severity="high", symbol=sym, interval=iv,
+                strength=str(order.get("level") or rec.get("strength") or ""),
+                title=title, body="\n".join(l for l in lines if l),
+                at=utc_now(), detected_at=utc_now(),
+                extra={"bar": d["last_closed_bar"], "window_ends": str(rec.get("window_ends", "")),
+                       "from": rec.get("action"), "to": rec.get("action"), "order": what})
+        if what in ("target", "stop", "timeout"):
+            exit_px = order.get("exit")
+            if exit_px is None:
+                exit_px = order.get("target") if what == "target" else order.get("stop") if what == "stop" else None
+            title = {"target": f"{sym}: {iv}; target reached",
+                     "stop": f"{sym}: {iv}; stopped out",
+                     "timeout": f"{sym}: {iv}; trade closed on time"}[what]
+            lines = [{"target": f"The {word.lower()} trade reached {_price_text(exit_px)}{pct(exit_px)}.",
+                      "stop": f"The {word.lower()} trade was stopped at {_price_text(exit_px)}{pct(exit_px)}.",
+                      "timeout": (f"The {word.lower()} trade ran out of time; close it at the market"
+                                  + (f" (last {_price_text(exit_px)}{pct(exit_px)})." if exit_px else "."))}[what],
+                     "It is in the live record."]
+            return Alert(
+                id=_hash("order", sym, iv, what, str(order.get("placed_at"))),
+                kind="signal", severity="medium", symbol=sym, interval=iv,
+                strength=str(order.get("level") or rec.get("strength") or ""),
+                title=title, body="\n".join(lines),
+                at=utc_now(), detected_at=utc_now(),
+                extra={"bar": d["last_closed_bar"], "window_ends": str(rec.get("window_ends", "")),
+                       "from": rec.get("action"), "to": rec.get("action"), "order": what})
         if what == "moved":
             title = f"{sym}: {iv}; {word.lower()} order moved"
             lines = [str(rec.get("strength") or "").upper(),

@@ -854,6 +854,8 @@ class TradingService:
         # every metric downstream.
         self._record_forward(symbol, interval, mon, last_close, close_price,
                              a, b)
+        # and THE ORDERS, as the app told a person to trade them (api/ledger.py)
+        self._record_orders(symbol, interval, mon, a, b)
 
         # the same staleness rule the terminal uses. a window whose follower
         # has already closed is history, and the app must not paint it green
@@ -1342,6 +1344,37 @@ class TradingService:
         step = min(interval_seconds(iv) for iv in intervals)
         return (step - (now % step)) + 45.0
 
+
+    # ------------------------------------------------------ the live record
+    def ledger(self):
+        led = getattr(self, "_ledger", None)
+        if led is None:
+            from .ledger import OrderLedger
+            led = self._ledger = OrderLedger()
+        return led
+
+    def _record_orders(self, symbol: str, interval: str, mon, *analyses) -> None:
+        """Keep every resting order the closed-bar replay produced. Never
+        raises into the dashboard."""
+        try:
+            from .ledger import pool_installed_at
+            for an, judge in zip(analyses, (mon.h1, mon.h2)):
+                book = getattr(an, "order_book", None)
+                if not book:
+                    continue
+                pool = str(getattr(judge.cfg, "rank_pool", "") or "")
+                self.ledger().record(symbol, interval, book, pool=pool,
+                                     not_before=pool_installed_at(pool))
+        except Exception as e:                      # pragma: no cover - logged, never fatal
+            log.warning("ledger %s %s: %s", symbol, interval, e)
+
+    def live_record(self) -> Dict[str, Any]:
+        """The ledger's summary, next to what the walk-forward expects and
+        what independent studies measured for other bots and signals."""
+        out = self.ledger().summary()
+        out["expected"] = RECORD_EXPECTED
+        out["benchmarks"] = RECORD_BENCHMARKS
+        return out
 
     def _record_forward(self, symbol: str, interval: str, mon,
                         last_close, close_price: float, a, b) -> None:
@@ -2143,6 +2176,34 @@ def _smart_overlay(an, smart: Dict[str, Any], lower: bool = True) -> None:
 # Which timeframes take a long only WITH the 200-day trend. Daily, measured:
 # the same entries below the average lost in both test years under every
 # exit; above it they made the money. See agent5/trail.py.
+# WHAT THE LIVE RECORD SHOULD LOOK LIKE, from the walk-forward (research/
+# wf4h.py + improve_4h.served: six out-of-time half-years, Sep 2023 -> Sep
+# 2026, the bagged pooled model, orders 0.5 ATR better and good for 6 bars).
+# Per TRADE, every coin, no cap on how many are open -- the way the ledger
+# counts -- net of 0.10%. `hold` is the last two half-years alone, which no
+# choice was made on.
+RECORD_EXPECTED = {
+    "source": "walk-forward, Sep 2023 - Sep 2026, out of time",
+    "levels": {
+        "strong": {"win_rate": 0.608, "avg_net_pct": 0.44, "hold_win_rate": 0.580,
+                   "hold_avg_net_pct": 0.16, "trades_per_month": 66,
+                   "targets": 0.57, "stops": 0.30, "timeouts": 0.14},
+        "medium": {"win_rate": 0.595, "avg_net_pct": 0.37, "hold_win_rate": 0.565,
+                   "hold_avg_net_pct": 0.11, "trades_per_month": 95,
+                   "targets": 0.56, "stops": 0.32, "timeouts": 0.13},
+        "small": {"win_rate": 0.568, "avg_net_pct": 0.17, "hold_win_rate": 0.551,
+                  "hold_avg_net_pct": 0.04, "trades_per_month": 155,
+                  "targets": 0.53, "stops": 0.34, "timeouts": 0.13},
+    },
+    "note": ("An account holding at most three trades at once, taking the calls in "
+             "the order they came, did better per trade (+0.43% on the last two "
+             "half-years) than taking every call (+0.16%)."),
+}
+
+# What independent studies measured for other bots and signal sellers, so the
+# record has something to be compared with (research/QUANT.md, round four).
+RECORD_BENCHMARKS: list = []
+
 TREND_GATED = ("1d",)
 
 
@@ -2286,7 +2347,7 @@ def _settle_order(rec: Dict[str, Any], a, live: Optional[Dict[str, Any]]
         outcome = "stop"
     out = dict(rec)
     order = dict(out.get("order") or {})
-    order.update({"state": od.state, "fill": _num(od.fill)})
+    order.update({"state": od.state, "fill": _num(od.fill), "exit": _num(od.exit)})
     out.update({"action": "WAIT", "tone": "flat", "detail": detail, "order": order,
                 "size_pct": None, "smart_note": ""})
     return out, outcome
@@ -2378,7 +2439,7 @@ def _order_json(a) -> Optional[Dict[str, Any]]:
             "fill": _num(info.get("fill")), "placed_at": t(info.get("placed_at")),
             "valid_until": t(info.get("valid_until")), "hold_until": t(info.get("hold_until")),
             "filled_at": t(info.get("filled_at")), "level": info.get("level"),
-            "offset_atr": _num(info.get("offset_atr"))}
+            "offset_atr": _num(info.get("offset_atr")), "exit": _num(info.get("exit"))}
 
 
 def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:

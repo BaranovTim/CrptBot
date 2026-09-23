@@ -70,10 +70,10 @@ def coin_data(coin: str):
     return _BARS[coin]
 
 
-def calls() -> pd.DataFrame:
+def calls(variant: str = VARIANT, cut: float = 0.97) -> pd.DataFrame:
     """Every bar the live rule would call, with its levels as prices."""
-    R = L.with_ranks(pickle.load(open(L.SCORES / f"{VARIANT}_scores.pkl", "rb")))
-    R = R[R["rank_pool"] >= 0.97].copy()
+    R = L.with_ranks(pickle.load(open(L.SCORES / f"{variant}_scores.pkl", "rb")))
+    R = R[R["rank_pool"] >= cut].copy()
     idx = []
     for coin, g in R.groupby("coin"):
         d = coin_data(coin)
@@ -365,3 +365,52 @@ def the_pick() -> None:
 
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "pick":
     the_pick()
+
+
+# ------------------------------------------------- as the server trades it
+def served(C: pd.DataFrame, offset: float = 0.5, wait: int = 4, through: float = 0.0,
+           hold: int = 16) -> pd.DataFrame:
+    """The calls traded exactly as the app tells a person to trade them --
+    `monitor.resting_orders`, the code the server runs: one order resting
+    at the newest call's price, one position at a time per coin and side.
+    (research/QUANT.md, "Correction: the resting-entry figures above are
+    optimistic": the per-call replay above lets an account pick among
+    orders with knowledge of which fill.) Every trade that ended, with the
+    call that placed it."""
+    from monitor import resting_orders
+    rows = []
+    for (coin, side), g in C.groupby(["coin", "side"]):
+        d = coin_data(coin); n = len(d["c"])
+        level = np.zeros(n, int); tp = np.full(n, np.nan); sl = np.full(n, np.nan)
+        ii = g["i"].to_numpy(int); level[ii] = 3
+        tp[ii] = g["tp"].to_numpy(); sl[ii] = g["sl"].to_numpy()
+        meta = g.set_index("i")
+        for od in resting_orders(d["o"], d["h"], d["l"], d["c"], d["atr"], tp, sl, level,
+                                 side == "long", offset, wait, hold, min_level=3, through_atr=through):
+            if od.state in ("target", "stop", "timeout"):
+                m = meta.loc[od.placed]
+                rows.append(dict(coin=coin, side=side, t=m["t"], pos=m["pos"], window=m["window"],
+                                 rank_pool=m["rank_pool"], exit_off=od.closed_at - od.placed,
+                                 pnl=od.ret_pct(), state=od.state))
+    P = pd.DataFrame(rows)
+    P["funding"] = L.funding_paid(P)
+    return P
+
+
+def per_window(D: pd.DataFrame) -> list:
+    """The account's return in each half-year (half the annual rate)."""
+    return [account(D[D["window"] == w]).get("return_pct_per_year", 0) * 0.5 for w in range(6)]
+
+
+def compare(variants, through: float = 0.0) -> None:
+    """Variants of the MODEL, each traded as the server trades it."""
+    for v in variants:
+        D = served(calls(v), through=through)
+        line(v, D)
+        cells = per_window(D)
+        print(f"  {'':<30} half-years " + " ".join(f"{c:+6.1f}%" for c in cells)
+              + f"   total {sum(cells):+.0f}%  positive {sum(c > 0 for c in cells)}/6", flush=True)
+
+
+if __name__ == "__main__" and len(sys.argv) > 2 and sys.argv[1] == "served":
+    compare(sys.argv[2:])

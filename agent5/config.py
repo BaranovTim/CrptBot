@@ -122,6 +122,14 @@ class Agent5Config:
     # habit that separated the profitable big traders from the rest.
     entry_offset_atr: float = 0.0
     entry_valid_bars: int = 0
+    # SEED BAGGING: the final model refit under each of these seeds and
+    # averaged (agent5.model.SeedBag). Empty = one fit, as before. On the
+    # 4h walk-forward, one reseed of the live configuration moved the
+    # served account from Sharpe 2.22/2.22 to 1.82/1.40: the top 3% of a
+    # rank is where fit noise lands. Five seeds averaged beat the average
+    # single seed on both periods and every single seed on the total
+    # (research/QUANT.md, round four).
+    bag_seeds: tuple = ()
 
     # --- regime block -------------------------------------------------------
     vol_window: int = 24            # realized-vol lookback (bars)
@@ -161,6 +169,8 @@ class Agent5Config:
             raise ValueError("the resting entry cannot be negative")
         if self.entry_offset_atr > 0 and self.entry_valid_bars < 1:
             raise ValueError("a resting entry needs at least one bar to fill in")
+        if len(set(self.bag_seeds)) != len(tuple(self.bag_seeds)):
+            raise ValueError("bag_seeds must be distinct")
 
 
 DEFAULT_CONFIG = Agent5Config()

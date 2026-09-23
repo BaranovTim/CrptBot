@@ -320,13 +320,16 @@ def build_stop_buffer(b: float) -> None:
         print(f"{side} stop +{b:g} ATR: {len(D):,} rows", flush=True)
 
 
+BLOCKS = ("geo", "pos", "xs", "flw", "swp", "liq", "cbp", "htf")
+
+
 def feature_sets(D: pd.DataFrame) -> dict:
-    extra = ("geo_", "pos_", "xs_")
+    extra = tuple(f"{b}_" for b in BLOCKS)
     base = [c for c in D.columns if c not in META and not c.startswith(extra)]
-    return {"base": base,
-            "geo": [c for c in D.columns if c.startswith("geo_")],
-            "pos": [c for c in D.columns if c.startswith("pos_")],
-            "xs": [c for c in D.columns if c.startswith("xs_")]}
+    out = {"base": base}
+    for b in BLOCKS:
+        out[b] = [c for c in D.columns if c.startswith(f"{b}_")]
+    return out
 
 
 # ------------------------------------------------------------------ variants
@@ -376,12 +379,45 @@ VARIANTS = {
     "stop_beyond_1":    dict(pooled=True, blocks=["base"], data="sb1"),
     "pooled_sides_base": dict(pooled=True, blocks=["base"], sides=True),
     "pooled_sides_all":  dict(pooled=True, blocks=["base", "geo", "pos", "xs"], sides=True),
+    # ROUND FOUR (research/footprints.py): what big players leave in public
+    # data, on top of the live configuration (stop 0.5 ATR beyond). The
+    # reseeded live configuration is the noise floor every row is read against.
+    "live_seed11":   dict(pooled=True, blocks=["base"], data="sb0.5", params=dict(seed=11)),
+    "live_flw":      dict(pooled=True, blocks=["base", "flw"], data="sb0.5", extra=["flw"]),
+    "live_swp":      dict(pooled=True, blocks=["base", "swp"], data="sb0.5", extra=["swp"]),
+    "live_liq":      dict(pooled=True, blocks=["base", "liq"], data="sb0.5", extra=["liq"]),
+    "live_flw_swp":  dict(pooled=True, blocks=["base", "flw", "swp"], data="sb0.5", extra=["flw", "swp"]),
+    # the map without its geometry: mass near the price, not between the
+    # price and the trade's own levels (which grows with the distance)
+    "live_liq2atr":  dict(pooled=True, blocks=["base", "liq"], data="sb0.5", extra=["liq"],
+                          drop=["liq_short_to_res", "liq_long_to_sup", "liq_short_beyond_res",
+                                "liq_long_beyond_sup"]),
+    "live_recency":  dict(pooled=True, blocks=["base"], data="sb0.5", weight="recency"),
+    "live_htf":      dict(pooled=True, blocks=["base", "htf"], data="sb0.5", extra=["htf"]),
+    "live_htf_bag5": dict(pooled=True, blocks=["base", "htf"], data="sb0.5", extra=["htf"],
+                          seeds=[7, 11, 13, 17, 19]),
+    "live_cbp_bag5": dict(pooled=True, blocks=["base", "cbp"], data="sb0.5", extra=["cbp"],
+                          seeds=[7, 11, 13, 17, 19]),
+    "live_cbp":      dict(pooled=True, blocks=["base", "cbp"], data="sb0.5", extra=["cbp"]),
+    # the noise floor, measured more than once
+    "live_seed13":   dict(pooled=True, blocks=["base"], data="sb0.5", params=dict(seed=13)),
+    "live_seed17":   dict(pooled=True, blocks=["base"], data="sb0.5", params=dict(seed=17)),
+    "live_seed19":   dict(pooled=True, blocks=["base"], data="sb0.5", params=dict(seed=19)),
+    # variance reduction: five seeds averaged; the previous refit blended in
+    "live_bag5":     dict(pooled=True, blocks=["base"], data="sb0.5", seeds=[7, 11, 13, 17, 19]),
+    "live_prev":     dict(pooled=True, blocks=["base"], data="sb0.5", prev_blend=True),
 }
 
 
 def _ds(frame: pd.DataFrame, cols, weight: str) -> Dataset:
     f = frame.sort_values("pos", kind="stable")
     w = f["w"].to_numpy(float)
+    if weight == "recency":
+        # old data is not stale (the learning curve), but it may be less
+        # like tomorrow: halve a row's weight every two years back
+        age = (f["pos"].max() - f["pos"].to_numpy()) / (6 * 365.0)
+        w = w * 0.5 ** (age / 2.0)
+        w = w / np.nanmean(w)
     if weight == "money":
         stake = np.abs(f["pnl"].to_numpy(float))
         stake = np.clip(stake, 0, np.nanpercentile(stake, 99))
@@ -435,11 +471,15 @@ def run(name: str) -> pd.DataFrame:
     if v.get("sides"):
         return _run_sides(name, v)
     out = []
+    prev = {}
     t0 = time.time()
     for side in ("long", "short"):
         D = load(side, v.get("data", ""))
+        for b in v.get("extra", ()):
+            from research.footprints import block
+            D = D.merge(block(b), on=["coin", "t"], how="left")
         fs = feature_sets(D)
-        cols = [c for b in v["blocks"] for c in fs[b]]
+        cols = [c for b in v["blocks"] for c in fs[b] if c not in v.get("drop", ())]
         cfg = Agent5Config(max_hold_bars=HOLD, geometry="structure", side=side)
         if v.get("params") or v.get("cfg"):
             params = dict(cfg.lgbm_params); params.update(v.get("params") or {})
@@ -462,9 +502,30 @@ def run(name: str) -> pd.DataFrame:
                     continue
                 if v.get("objective") == "money":
                     p = _fit_money(tr, sc, cols)
+                elif v.get("seeds"):
+                    # BAGGED: the same fit under several seeds, averaged. The
+                    # top 3% of a rank is where fit noise matters most -- one
+                    # reseed of the live configuration moved the served
+                    # account from Sharpe 2.22/2.22 to 1.82/1.40.
+                    ps = []
+                    for sd in v["seeds"]:
+                        prm = dict(cfg.lgbm_params); prm.update(v.get("params") or {}); prm["seed"] = sd
+                        c_sd = Agent5Config(max_hold_bars=HOLD, geometry="structure", side=side,
+                                            lgbm_params=prm, **(v.get("cfg") or {}))
+                        model, c2 = fit_final(_ds(tr, cols, v.get("weight", "unique")), c_sd, cols)
+                        ps.append(model.predict_proba(sc[c2].astype(float))[:, 1])
+                    p = np.mean(ps, axis=0)
                 else:
                     model, c2 = fit_final(_ds(tr, cols, v.get("weight", "unique")), cfg, cols)
                     p = model.predict_proba(sc[c2].astype(float))[:, 1]
+                    if v.get("prev_blend"):
+                        # the previous refit's model, still scoring: half its
+                        # vote. A refit changes which bars rank top on the day
+                        # it lands; the blend smooths that step.
+                        if prev.get(side) is not None:
+                            pm, pc = prev[side]
+                            p = 0.5 * p + 0.5 * pm.predict_proba(sc[pc].astype(float))[:, 1]
+                        prev[side] = (model, c2)
                 r = sc[["coin", "t", "pos", "exit_off", "y", "w", "pnl", "tp", "sl"]].copy()
                 r["p"] = p; r["side"] = side; r["window"] = i
                 r["in_window"] = r["pos"] >= cut

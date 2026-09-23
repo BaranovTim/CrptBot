@@ -1556,3 +1556,107 @@ class Momentum {
       .map((e) => MomentumPick.fromJson((e as Map).cast<String, dynamic>()))
       .toList();
 }
+
+/// The live record of the 4h calls (`GET /api/record`, api/ledger.py): every
+/// resting order the server placed since the model went live, per
+/// sensitivity level, and how the filled ones ended -- next to what the
+/// walk-forward expected and what independent studies measured elsewhere.
+class LiveRecord {
+  LiveRecord.fromJson(Map<String, dynamic> j)
+      : since = DateTime.tryParse(j['since'] as String? ?? '')?.toUtc(),
+        costPct = _d(j['cost_pct']) ?? 0.10,
+        levels = {
+          for (final e in ((j['levels'] as Map?) ?? const {}).entries)
+            e.key as String:
+                RecordLevel.fromJson((e.value as Map).cast<String, dynamic>())
+        },
+        recent = {
+          for (final e in ((j['recent'] as Map?) ?? const {}).entries)
+            e.key as String: ((e.value as List?) ?? const [])
+                .map((x) =>
+                    RecordTrade.fromJson((x as Map).cast<String, dynamic>()))
+                .toList()
+        },
+        expected = {
+          for (final e
+              in ((((j['expected'] as Map?) ?? const {})['levels'] as Map?) ??
+                      const {})
+                  .entries)
+            e.key as String: RecordExpected.fromJson(
+                (e.value as Map).cast<String, dynamic>())
+        },
+        expectedNote =
+            ((j['expected'] as Map?) ?? const {})['note'] as String? ?? '',
+        benchmarks = ((j['benchmarks'] as List?) ?? const [])
+            .map((x) => Benchmark.fromJson((x as Map).cast<String, dynamic>()))
+            .toList();
+
+  final DateTime? since;
+  final double costPct;
+  final Map<String, RecordLevel> levels;
+  final Map<String, List<RecordTrade>> recent;
+  final Map<String, RecordExpected> expected;
+  final String expectedNote;
+  final List<Benchmark> benchmarks;
+}
+
+class RecordLevel {
+  RecordLevel.fromJson(Map<String, dynamic> j)
+      : orders = (j['orders'] as num?)?.toInt() ?? 0,
+        filled = (j['filled'] as num?)?.toInt() ?? 0,
+        expired = (j['expired'] as num?)?.toInt() ?? 0,
+        openOrders = (j['open_orders'] as num?)?.toInt() ?? 0,
+        inTrade = (j['in_trade'] as num?)?.toInt() ?? 0,
+        closed = (j['closed'] as num?)?.toInt() ?? 0,
+        targets = (j['targets'] as num?)?.toInt() ?? 0,
+        stops = (j['stops'] as num?)?.toInt() ?? 0,
+        timeouts = (j['timeouts'] as num?)?.toInt() ?? 0,
+        wins = (j['wins'] as num?)?.toInt() ?? 0,
+        winRate = _d(j['win_rate']),
+        avgNetPct = _d(j['avg_net_pct']),
+        sumNetPct = _d(j['sum_net_pct']) ?? 0.0;
+
+  final int orders, filled, expired, openOrders, inTrade, closed;
+  final int targets, stops, timeouts, wins;
+  final double? winRate, avgNetPct;
+  final double sumNetPct;
+}
+
+class RecordTrade {
+  RecordTrade.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] as String? ?? '',
+        side = j['side'] as String? ?? '',
+        state = j['state'] as String? ?? '',
+        fill = _d(j['fill']),
+        exit = _d(j['exit']),
+        netPct = _d(j['net_pct']),
+        closedAt = DateTime.tryParse(j['closed_at'] as String? ?? '')?.toUtc();
+
+  final String symbol, side, state;
+  final double? fill, exit, netPct;
+  final DateTime? closedAt;
+
+  String get short => symbol.replaceAll('USDT', '');
+}
+
+class RecordExpected {
+  RecordExpected.fromJson(Map<String, dynamic> j)
+      : winRate = _d(j['win_rate']),
+        avgNetPct = _d(j['avg_net_pct']),
+        holdWinRate = _d(j['hold_win_rate']),
+        holdAvgNetPct = _d(j['hold_avg_net_pct']),
+        tradesPerMonth = (j['trades_per_month'] as num?)?.toInt();
+
+  final double? winRate, avgNetPct, holdWinRate, holdAvgNetPct;
+  final int? tradesPerMonth;
+}
+
+/// What an independent study measured for other bots or signal sellers.
+class Benchmark {
+  Benchmark.fromJson(Map<String, dynamic> j)
+      : what = j['what'] as String? ?? '',
+        figure = j['figure'] as String? ?? '',
+        source = j['source'] as String? ?? '';
+
+  final String what, figure, source;
+}
