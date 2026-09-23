@@ -417,3 +417,63 @@ def test_net_entries_counts_the_last_day_by_side():
     assert t.net_entries("BTCUSDT", hours=24, now=NOW + _td(hours=6))["net"] == 1
     assert t.net_entries("SOLUSDT", hours=24, now=at)["net"] == 0
     return True
+
+
+# ------------------------------------------------ the selection, out of process
+def test_the_selection_runs_in_a_child_and_a_failure_keeps_yesterdays_list():
+    """As a thread in the API, the daily selection grew the process past a
+    gigabyte and the kernel killed the API four times in one evening. It is
+    a child process now: its answer is read from a file, and any failure
+    leaves the followed set as it was."""
+    import json
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from smartmoney import tracker as T
+    from smartmoney.select import TraderStats
+
+    with tempfile.TemporaryDirectory() as d:
+        tr = T.Tracker(state_path=Path(d) / "state.json", cache_dir=Path(d),
+                       state_fn=lambda a: None)
+        tr.traders = [TraderStats(address="0xold", account_value=1, pnl_30d=1, roi_30d=0,
+                                  volume_30d=1, pnl_all=1)]
+        real = subprocess.run
+        calls = []
+
+        def ok(cmd, **kw):
+            calls.append(cmd)
+            Path(cmd[3]).write_text(json.dumps([TraderStats(
+                address="0xnew", account_value=2, pnl_30d=2, roi_30d=0, volume_30d=2,
+                pnl_all=2, score=1.0).to_json()]))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        def dies(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, -9, "", "Killed")
+        try:
+            subprocess.run = dies
+            assert tr.reselect() == 1 and tr.traders[0].address == "0xold"
+            subprocess.run = ok
+            assert tr.reselect() == 1 and tr.traders[0].address == "0xnew"
+            assert calls[-1][1:3] == ["-m", "smartmoney.run_select"]
+        finally:
+            subprocess.run = real
+    return True
+
+
+def test_the_fills_the_selection_reads_are_slimmed_to_what_it_uses():
+    from marketdata import hyperliquid as H
+    from smartmoney.select import FILL_FIELDS
+
+    page = [{"coin": "BTC", "px": "1", "sz": "2", "side": "B", "time": 1, "startPosition": "0",
+             "closedPnl": "0", "fee": "0", "crossed": True, "tid": 7,
+             "hash": "0x" + "a" * 64, "oid": 123, "dir": "Open Long", "feeToken": "USDC"}]
+    real = H.info
+    try:
+        H.info = lambda body: page
+        got = H.user_fills_since("0xabc", fields=FILL_FIELDS, pause=0)
+    finally:
+        H.info = real
+    assert got == [{k: page[0][k] for k in FILL_FIELDS if k in page[0]}]
+    assert "hash" not in got[0] and "oid" not in got[0]
+    return True

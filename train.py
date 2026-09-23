@@ -232,6 +232,16 @@ def train_one(symbol: str, interval: str, slot: int, hold: int, k: float,
     return out
 
 
+def _pooled_verdict(symbol: str, interval: str) -> bool:
+    """Does this coin's slot hold a pooled model? Read from its verdict."""
+    import json
+    from core import eval_path
+    try:
+        return json.loads(eval_path(symbol, interval).read_text()).get("source") == "pooled"
+    except (OSError, ValueError):
+        return False
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Fit the judge per timeframe.")
     p.add_argument("--symbol", default=project_config.SYMBOL)
@@ -241,6 +251,8 @@ def main(argv=None) -> int:
                    help="do not download history; use the live store as-is")
     p.add_argument("--allow-per-coin-daily", action="store_true",
                    help="fit 1d per coin anyway, overwriting the pooled model")
+    p.add_argument("--allow-per-coin-4h", action="store_true",
+                   help="fit 4h per coin anyway, overwriting the pooled model")
     p.add_argument("--dry-run", action="store_true",
                    help="fit and report, but write no model files")
     p.add_argument("--no-tape", action="store_true",
@@ -288,6 +300,19 @@ def main(argv=None) -> int:
             # run is still allowed: it evaluates and writes nothing.
             why = ("1d is trained pooled: run train_daily_pooled.py "
                    "(or pass --allow-per-coin-daily to override)")
+            print(f"  SKIPPED - {why}", flush=True)
+            for h in (1, 2):
+                results.append(Outcome(a.symbol, interval, h, ok=False, note=why))
+            continue
+        if (interval == "4h" and not a.dry_run and not a.allow_per_coin_4h
+                and _pooled_verdict(a.symbol, interval)):
+            # This coin's 4h slots hold the POOLED model (train_pooled_4h.py).
+            # The walk-forward that chose it (research/wf4h.py) had a model
+            # per coin -- what this would write -- positive in 2 half-years
+            # of 6 and -132% overall; the pooled one in all 6. A routine
+            # retrain must not quietly put the loser back.
+            why = ("4h is trained pooled for this coin: run train_pooled_4h.py "
+                   "(or pass --allow-per-coin-4h to override)")
             print(f"  SKIPPED - {why}", flush=True)
             for h in (1, 2):
                 results.append(Outcome(a.symbol, interval, h, ok=False, note=why))

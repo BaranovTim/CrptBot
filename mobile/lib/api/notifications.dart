@@ -292,6 +292,11 @@ class Notifications {
         'When a followed top trader opens, closes or flips a position',
     importance: Importance.high,
   );
+  static const _channelMomentum = AndroidNotificationChannel(
+    'momentum', 'Momentum rotation',
+    description: "This week's momentum picks, once every Monday",
+    importance: Importance.defaultImportance,
+  );
 
   /// Taps, as they happen. The shell listens and navigates. A broadcast
   /// stream because the shell can be rebuilt (sign-out, sign-in) and each
@@ -372,6 +377,7 @@ class Notifications {
       if (android != null) {
         for (final c in [
           _channelSignals, _channelMarket, _channelCalendar, _channelSmart,
+          _channelMomentum,
         ]) {
           await android.createNotificationChannel(c);
         }
@@ -408,6 +414,7 @@ class Notifications {
       'signal' => _channelSignals,
       'calendar' => _channelCalendar,
       'smart' => _channelSmart,
+      'momentum' => _channelMomentum,
       _ => _channelMarket,
     };
     return NotificationDetails(

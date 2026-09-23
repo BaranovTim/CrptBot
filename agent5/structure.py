@@ -169,6 +169,33 @@ def barrier_prices(bars: pd.DataFrame, cfg: Agent5Config,
     return res, sup, both
 
 
+def stop_beyond(bars: pd.DataFrame, cfg: Agent5Config,
+                levels: Dict[str, np.ndarray] = None,
+                atr: np.ndarray = None) -> Dict[str, np.ndarray]:
+    """The levels with this side's STOP moved `cfg.stop_buffer_atr` past its
+    level; the target never moves. A long's stop is the support below, so
+    it moves down; a short's is the resistance above, so it moves up.
+
+    Only a stop that came from a level moves. Where there is no level the
+    barrier is the one-ATR fallback, which is a distance, not a place
+    anyone else's stop is sitting -- and the research that chose the buffer
+    (research/wf4h.py) left the fallback alone, so this does too.
+    """
+    b = float(getattr(cfg, "stop_buffer_atr", 0.0) or 0.0)
+    if atr is None:
+        atr = _atr(bars, cfg.atr_period).to_numpy(float)
+    if levels is None:
+        levels = structural_levels(bars, atr)
+    if b <= 0:
+        return levels
+    out = dict(levels)
+    if cfg.side == "long":
+        out["sup"] = levels["sup"] - b * atr
+    else:
+        out["res"] = levels["res"] + b * atr
+    return out
+
+
 def structure_barrier(bars: pd.DataFrame, cfg: Agent5Config,
                       levels: Dict[str, np.ndarray] = None) -> LabelResult:
     """The triple barrier with per-bar levels, for `cfg.side`.
@@ -184,8 +211,9 @@ def structure_barrier(bars: pd.DataFrame, cfg: Agent5Config,
     high = bars["high"].to_numpy(float)
     low = bars["low"].to_numpy(float)
     atr = _atr(bars, cfg.atr_period).to_numpy(float)
-    upper, lower, _ = barrier_prices(bars, cfg, levels, atr)
     long = cfg.side == "long"
+    levels = stop_beyond(bars, cfg, levels, atr)
+    upper, lower, _ = barrier_prices(bars, cfg, levels, atr)
 
     y = np.full(n, np.nan); t1 = np.full(n, np.nan)
     touch = np.full(n, None, dtype=object)

@@ -146,9 +146,16 @@ class LevelsPanel extends StatelessWidget {
     this.side = '',
     this.outcome = '',
     this.fixed = false,
+    this.entryLimit,
+    this.entryUntil,
   });
 
   final double? price, takeProfit, stopLoss, pUp;
+
+  /// The resting order the call enters with, and until when it is good.
+  /// When set, the target and stop are measured from here, not the price.
+  final double? entryLimit;
+  final DateTime? entryUntil;
   final int? windowBars;
   final String interval;
 
@@ -194,6 +201,19 @@ class LevelsPanel extends StatelessWidget {
           children: [
             _row('Current Price', money(price), Obsidian.onSurface),
             _divider(),
+            if (entryLimit != null && !_flat) ...[
+              _row(
+                _short ? 'Entry (sell limit)' : 'Entry (buy limit)',
+                money(entryLimit),
+                Obsidian.primary,
+                sub: 'Place a limit order here instead of '
+                    '${_short ? 'selling' : 'buying'} at the market'
+                    '${entryUntil == null ? '' : ', good until ${_hhmm(entryUntil!)}'}. '
+                    'If it never fills, there is no trade. The target and stop '
+                    'below are measured from this price.',
+              ),
+              _divider(),
+            ],
             _row(
               _flat
                   ? 'Upper barrier'
@@ -261,6 +281,13 @@ class LevelsPanel extends StatelessWidget {
           ],
         ),
       );
+
+  static String _hhmm(DateTime t) {
+    const d = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final u = t.toUtc();
+    return '${d[u.weekday - 1]} ${u.hour.toString().padLeft(2, '0')}:'
+        '${u.minute.toString().padLeft(2, '0')} UTC';
+  }
 
   static Widget _divider() =>
       Divider(height: 1, color: Colors.white.withValues(alpha: 0.06));

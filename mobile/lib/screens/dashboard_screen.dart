@@ -724,6 +724,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ? null
                 : d.liveTakeProfit(_livePrice),
             suggestedSl: d.liveStopLoss(_livePrice),
+            // a call that enters with a resting order: log it at the order
+            suggestedEntry: d.entryLimit,
             onLogged: _loadPositions,
           ),
         ],
@@ -1347,6 +1349,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Widget _orderChip(String main, String? sub, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: c.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          children: [
+            Text(main,
+                style: Obsidian.dataTable(size: 14, color: c, w: FontWeight.w700)),
+            if (sub != null) ...[
+              const SizedBox(height: 3),
+              Text(sub, style: Obsidian.labelSm(color: Obsidian.outline, size: 10)),
+            ],
+          ],
+        ),
+      );
+
+  static String _utc(DateTime t) {
+    const d = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final u = t.toUtc();
+    return '${d[u.weekday - 1]} ${u.hour.toString().padLeft(2, '0')}:'
+        '${u.minute.toString().padLeft(2, '0')} UTC';
+  }
+
   Widget _recommendation(Dashboard d) {
     final r = d.recommendation;
 
@@ -1378,10 +1406,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final detail = settled
         ? (r.outcome.isNotEmpty ? r.detail : _settledDetail(d, outcome))
         : gated
-            ? 'A ${r.strength} signal is available here. Your setting is '
-                '"$_sensitivity", so it is not shown as a call — change '
-                'it in Profile to act on weaker ones.'
+            ? (r.inTrade
+                // a trade a weaker call's order opened: nothing a person on
+                // this setting was ever told to enter
+                ? 'No call at your "$_sensitivity" setting right now.'
+                : 'A ${r.strength} signal is available here. Your setting is '
+                    '"$_sensitivity", so it is not shown as a call — change '
+                    'it in Profile to act on weaker ones.')
             : r.detail;
+    final order = r.order;
     final glowing = tone == 'up' || tone == 'down';
     return GlassPanel(
       active: true,
@@ -1410,7 +1443,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 10),
             _outcomeChip(d, outcome),
           ],
-          if (!settled && !gated && r.strength.isNotEmpty) ...[
+          // THE ORDER. A pooled 4h call enters with a resting limit order,
+          // not at the market; the card leads with where and until when.
+          if (!settled && !gated && order != null && order.isOpen &&
+              order.limit != null) ...[
+            const SizedBox(height: 12),
+            _orderChip(
+                '${r.action == 'SELL' ? 'SELL' : 'BUY'} LIMIT ${LevelsPanel.money(order.limit)}',
+                order.validUntil == null ? null : 'good until ${_utc(order.validUntil!)}',
+                c),
+          ],
+          if (!settled && !gated && r.inTrade && order?.fill != null) ...[
+            const SizedBox(height: 12),
+            _orderChip('IN THE TRADE · FILLED ${LevelsPanel.money(order!.fill)}',
+                order.holdUntil == null ? null : 'closes by ${_utc(order.holdUntil!)}',
+                Obsidian.primary),
+          ],
+          if (!settled && !gated && r.strength.isNotEmpty && !r.inTrade) ...[
             const SizedBox(height: 8),
             Text('${r.strength.toUpperCase()} SIGNAL',
                 style: Obsidian.labelSm(color: c, size: 10)),
@@ -1432,7 +1481,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
           if (!settled && !gated && r.sizePct != null && r.sizePct! > 0) ...[
             const SizedBox(height: 10),
-            Text('quarter-Kelly size ${r.sizePct!.toStringAsFixed(2)}% of equity',
+            // 4h calls come from the pooled model and are sized EQUALLY:
+            // quarter-Kelly grows with reward:risk, which put the largest
+            // positions on the tight-stop trades that lost (research/wf4h.py).
+            // Daily still sizes by quarter-Kelly.
+            Text(
+                widget.interval == '1d'
+                    ? 'quarter-Kelly size ${r.sizePct!.toStringAsFixed(2)}% of equity'
+                    : 'suggested size ${r.sizePct!.toStringAsFixed(r.sizePct! % 1 == 0 ? 0 : 2)}% '
+                        'of equity — the same for every call',
                 style: Obsidian.labelSm(color: c, size: 10.5)),
           ],
           // THE DAILY RULE, on the card. Buys are taken only above the
@@ -1513,6 +1570,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       side: d.side,
       outcome: d.outcome(_livePrice),
       fixed: d.levelsAreFixed,
+      entryLimit: d.entryLimit,
+      entryUntil: d.recommendation.order?.validUntil,
     );
   }
 

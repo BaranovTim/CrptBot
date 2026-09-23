@@ -92,6 +92,37 @@ class Agent5Config:
     # paper and a loss in the market.
     allow_short: bool = False
 
+    # --- the pooled 4h structure model (research/wf4h.py, 2026-09-22) -------
+    # WHERE THE STOP SITS. 0 puts it ON the structural level, which is where
+    # every other trader's stop sits too, and tight structural stops were
+    # the losing trades from every angle measured: reward:risk >= 1 lost,
+    # sizing each trade to equal risk (biggest positions on the tightest
+    # stops) turned Sharpe 0.65/1.63 into 0.03/0.48. Moving the stop 0.5 ATR
+    # past its level was positive in all six half-year windows. Only a stop
+    # that came from a level moves; the one-ATR fallback does not.
+    stop_buffer_atr: float = 0.0
+    # RANKED AS A POOL. Non-empty means one fit serves every coin and its
+    # score means the same thing on each, so a reading is ranked against
+    # every coin's recent readings (monitor.SCOREBOOK) rather than only its
+    # own coin's. The value names the fit, so two versions never share a
+    # ranking.
+    rank_pool: str = ""
+    # THE SAME SIZE FOR EVERY POOLED CALL, % of equity. Quarter-Kelly grows
+    # with reward:risk, so it put the largest positions on the tight-stop
+    # trades that lose and floored the near-target, wide-stop ones -- where
+    # the edge is -- at 1.25%. Equal size beat it on every rule measured.
+    # The level itself is a risk preference, not a measurement.
+    equal_size_pct: float = 5.0
+    # THE ENTRY: a resting order `entry_offset_atr` ATRs better than the
+    # call's close, good for `entry_valid_bars` bars, instead of buying at
+    # the close. The stop moves with it (same distance from the entry); the
+    # target stays on its level. 0 = the old market entry. research/
+    # improve_4h.py + monitor.resting_orders: Sharpe 1.59/1.14 -> 2.22/2.22
+    # on the walk-forward, profit per trade doubled -- the resting-order
+    # habit that separated the profitable big traders from the rest.
+    entry_offset_atr: float = 0.0
+    entry_valid_bars: int = 0
+
     # --- regime block -------------------------------------------------------
     vol_window: int = 24            # realized-vol lookback (bars)
     vol_pctile_window: int = 720    # percentile baseline (~30 days on 1h)
@@ -120,6 +151,16 @@ class Agent5Config:
             raise ValueError("geometry must be atr or structure")
         if self.side not in ("long", "short"):
             raise ValueError("side must be long or short")
+        if self.stop_buffer_atr < 0:
+            raise ValueError("stop_buffer_atr cannot be negative")
+        # positive only: the monitor caps it at max_position_pct, the same
+        # hard cap every other size answers to
+        if self.equal_size_pct <= 0:
+            raise ValueError("equal_size_pct must be positive")
+        if self.entry_offset_atr < 0 or self.entry_valid_bars < 0:
+            raise ValueError("the resting entry cannot be negative")
+        if self.entry_offset_atr > 0 and self.entry_valid_bars < 1:
+            raise ValueError("a resting entry needs at least one bar to fill in")
 
 
 DEFAULT_CONFIG = Agent5Config()

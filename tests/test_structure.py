@@ -503,3 +503,194 @@ def test_two_coins_with_the_same_history_length_keep_their_own_levels():
     third.loc[third.index[-1], "close"] = float(third["close"].iloc[-1]) * 1.001
     assert _structure_labels(judge, third) is not a
     return True
+
+
+# ------------------------------------------------ the pooled 4h model (wf4h)
+def test_the_stop_moves_past_its_level_and_the_target_does_not():
+    """research/wf4h.py: a stop ON a swing sits where everyone's does and is
+    swept; 0.5 ATR past it was positive in all six half-years. Only a stop
+    that came from a level moves -- the one-ATR fallback is a distance."""
+    bars = _bars()
+    atr = _atr(bars, 14).to_numpy(float)
+    close = bars["close"].to_numpy(float)
+    lv = structural_levels(bars, atr)
+    for side, key in (("long", "has_sup"), ("short", "has_res")):
+        base = structure_barrier(bars, Agent5Config(max_hold_bars=16, geometry="structure", side=side))
+        moved = structure_barrier(bars, Agent5Config(max_hold_bars=16, geometry="structure", side=side,
+                                                     stop_buffer_atr=0.5))
+        tp0, tp1 = base.tp_pct.to_numpy(), moved.tp_pct.to_numpy()
+        sl0, sl1 = base.sl_pct.to_numpy(), moved.sl_pct.to_numpy()
+        ok = np.isfinite(sl0) & np.isfinite(sl1)
+        assert np.allclose(tp0[ok], tp1[ok]), f"{side}: the target moved"
+        lvl = ok & lv[key]
+        want = 0.5 * atr[lvl] / close[lvl] * 100.0
+        assert np.allclose(sl1[lvl] - sl0[lvl], want), f"{side}: the stop did not move by 0.5 ATR"
+        fb = ok & ~lv[key]
+        assert np.allclose(sl1[fb], sl0[fb]), f"{side}: the fallback stop moved"
+        # a wider stop is reached less often, so more targets come first
+        assert np.nanmean(moved.y) >= np.nanmean(base.y)
+    return True
+
+
+def test_a_config_pickled_before_these_fields_reads_as_the_old_model():
+    """Every shipped model carries a config pickled before `stop_buffer_atr`,
+    `rank_pool` and `equal_size_pct` existed. Such an instance has no entry
+    for them and must read the class defaults: no buffer, no pool."""
+    cfg = Agent5Config(max_hold_bars=16, geometry="structure", side="long")
+    for f in ("stop_buffer_atr", "rank_pool", "equal_size_pct"):
+        cfg.__dict__.pop(f)
+    assert cfg.stop_buffer_atr == 0.0 and cfg.rank_pool == "" and cfg.equal_size_pct == 5.0
+    try:
+        Agent5Config(stop_buffer_atr=-0.1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a negative buffer was accepted")
+    return True
+
+
+def _book(tmp=None):
+    from monitor import ScoreBook
+    return ScoreBook(tmp)
+
+
+def _fill(book, pool, coins, at, n=540, lo=0.40, hi=0.60, seed=1):
+    rng = np.random.default_rng(seed)
+    t = pd.date_range(end=at - HOUR, periods=n, freq="4h", tz="UTC")
+    for c in coins:
+        book.record(pool, c, t, rng.uniform(lo, hi, n))
+
+
+def test_the_score_book_ranks_a_reading_against_every_coin():
+    at = pd.Timestamp("2026-09-22 16:00", tz="UTC")
+    book = _book()
+    _fill(book, "P", [f"C{i}" for i in range(10)], at)
+    r, n, coins = book.rank("P", at, 0.599, 540 * HOUR)
+    assert coins == 10 and n == 5400, (n, coins)
+    assert 0.98 < r <= 1.0, r
+    r_mid, _, _ = book.rank("P", at, 0.50, 540 * HOUR)
+    assert 0.45 < r_mid < 0.55, r_mid
+    # nothing at or after the bar being read counts, and nothing older than the span
+    book.record("P", "C0", [at], [0.99])
+    assert book.rank("P", at, 0.599, 540 * HOUR)[1] == 5400
+    assert book.rank("P", at, 0.599, 10 * HOUR)[1] == 10 * 10
+    return True
+
+
+def test_a_pool_that_has_not_filled_does_not_rank():
+    """A pooled rank is not a pooled rank until most of the pool is in it:
+    the first coin built after an install would otherwise rank against
+    itself and call from its own top 3%."""
+    from monitor import POOL_MIN_COINS
+
+    at = pd.Timestamp("2026-09-22 16:00", tz="UTC")
+    book = _book()
+    _fill(book, "P", [f"C{i}" for i in range(POOL_MIN_COINS - 1)], at)
+    r, _, coins = book.rank("P", at, 0.59, 540 * HOUR)
+    assert coins == POOL_MIN_COINS - 1 and not np.isfinite(r)
+    _fill(book, "P", ["LAST"], at)
+    assert np.isfinite(book.rank("P", at, 0.59, 540 * HOUR)[0])
+    return True
+
+
+def test_two_fits_never_share_a_pool_and_the_book_survives_a_restart():
+    at = pd.Timestamp("2026-09-22 16:00", tz="UTC")
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "book.json"
+        book = _book(path)
+        _fill(book, "old-fit", [f"C{i}" for i in range(10)], at, lo=0.0, hi=0.1)
+        _fill(book, "new-fit", [f"C{i}" for i in range(10)], at, lo=0.4, hi=0.6)
+        # 0.2 is above everything the old fit scored and below the new one's
+        assert book.rank("new-fit", at, 0.2, 540 * HOUR)[0] < 0.01
+        again = _book(path)
+        r, n, coins = again.rank("new-fit", at, 0.599, 540 * HOUR)
+        assert coins == 10 and n == 5400 and r > 0.98
+        # re-recording the same bars replaces them rather than doubling them
+        _fill(again, "new-fit", ["C0"], at, seed=9)
+        assert again.rank("new-fit", at, 0.599, 540 * HOUR)[1] == 5400
+    return True
+
+
+def test_a_pooled_model_is_ranked_against_the_pool_and_sized_equally():
+    import monitor
+    from monitor import POOLED_RANKS
+
+    bars = _bars()
+    X = _X(bars)
+    last = bars.index[-1]
+    cfg = Agent5Config(max_hold_bars=16, k_up=1.0, k_dn=1.0, geometry="structure",
+                       side="long", stop_buffer_atr=0.5, rank_pool="P")
+    real = monitor.SCOREBOOK
+    monitor.SCOREBOOK = _book()
+    try:
+        # nine other coins scoring 0.40-0.60, and this coin's own history
+        # sitting above them all at 0.70-0.80. 0.795 is ~0.95 against its own
+        # coin alone; against the pool -- which holds its own history too --
+        # it is above 5,300 of 5,400 readings
+        _fill(monitor.SCOREBOOK, "P|long", [f"C{i}" for i in range(9)], last + HOUR)
+        own = np.random.default_rng(3).uniform(0.70, 0.80, len(bars)); own[-1] = 0.795
+        a = evaluate(RankedJudge("long", own, cfg=cfg), bars, X, "ANALYSIS A",
+                     last, last + 16 * HOUR, 16, symbol="MINE")
+        assert a.rank > POOLED_RANKS[0][1] and a.strength == "strong", a.rank
+        assert a.size_pct == cfg.equal_size_pct, a.size_pct
+        assert "across 10 coins" in a.reason and "just below the last swing" in a.reason
+        assert "pooled rank" in a.diagnostic
+        # and the reading was recorded for the other coins to rank against
+        assert monitor.SCOREBOOK.coins("P|long") == 10
+        # a provisional read (no symbol) ranks but never records
+        monitor.SCOREBOOK = _book()
+        _fill(monitor.SCOREBOOK, "P|long", [f"C{i}" for i in range(9)], last + HOUR)
+        evaluate(RankedJudge("long", own, cfg=cfg), bars, X, "ANALYSIS A",
+                 last, last + 16 * HOUR, 16)
+        assert monitor.SCOREBOOK.coins("P|long") == 9
+        # a middling reading against the pool waits, and says what it is ranked against
+        mid = np.random.default_rng(3).uniform(0.40, 0.60, len(bars)); mid[-1] = 0.50
+        b = evaluate(RankedJudge("long", mid, cfg=cfg), bars, X, "ANALYSIS A",
+                     last, last + 16 * HOUR, 16, symbol="MINE")
+        assert b.action == "WAIT" and "across 10 coins" in b.reason
+    finally:
+        monitor.SCOREBOOK = real
+    return True
+
+
+def test_the_long_and_the_short_model_of_one_fit_keep_separate_books():
+    """They share the fit's `rank_pool` name. Ranked together, a long reading
+    would be judged against short scores; recorded together, each side's
+    window overwrote the other's for the same coin and bars."""
+    import monitor
+
+    bars = _bars()
+    X = _X(bars)
+    last = bars.index[-1]
+    real = monitor.SCOREBOOK
+    monitor.SCOREBOOK = _book()
+    try:
+        for side in ("long", "short"):
+            cfg = Agent5Config(max_hold_bars=16, geometry="structure", side=side, rank_pool="P")
+            _fill(monitor.SCOREBOOK, f"P|{side}", [f"C{i}" for i in range(9)], last + HOUR,
+                  lo=(0.40 if side == "long" else 0.00), hi=(0.60 if side == "long" else 0.10))
+            sc = np.full(len(bars), 0.30); sc[-1] = 0.30
+            a = evaluate(RankedJudge(side, sc, cfg=cfg), bars, X, "A", last, last + 16 * HOUR, 16,
+                         symbol="MINE")
+            # 0.30 is below every long reading and above every short one
+            if side == "long":
+                assert a.rank < 0.2, a.rank
+            else:
+                assert a.rank > 0.8, a.rank
+        assert monitor.SCOREBOOK.coins("P|long") == 10 and monitor.SCOREBOOK.coins("P|short") == 10
+    finally:
+        monitor.SCOREBOOK = real
+    return True
+
+
+def test_a_pooled_call_reports_no_ev():
+    """Its EV is built on a probability that does not know how near the
+    target is, and read "BUY, strong, EV -1.3%" on the calls that paid. An
+    app that shows EV hides the chip when it is absent."""
+    from api.service import _recommendation
+
+    a = _call("LONG", "strong"); a.pooled = True; a.ev_long = -1.3
+    assert _recommendation(a, a, stale=False)["ev"] is None
+    b = _call("LONG", "strong"); b.ev_long = 0.4
+    assert abs(_recommendation(b, b, stale=False)["ev"] - 0.4) < 1e-9
+    return True

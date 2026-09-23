@@ -406,6 +406,7 @@ _TAGS = {
     "news": "newspaper",
     "whale": "whale",
     "smart": "whale",
+    "momentum": "arrows_counterclockwise",
 }
 
 

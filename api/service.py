@@ -827,11 +827,15 @@ class TradingService:
         # 120/240-bar question, and drawing a two-minute window over a
         # four-hour prediction is the kind of mismatch nothing raises about.
         n1, n2 = mon.hold1, mon.hold2
+        # `symbol`: these are closed-bar reads, so a pooled model records
+        # them in the shared score book the other coins rank against
         a = evaluate(mon.h1, bars, X, "ANALYSIS A",
                      opened_at=last_close - mon.delta,
-                     ends_at=last_close + n1 * mon.delta, bars_left=n1)
+                     ends_at=last_close + n1 * mon.delta, bars_left=n1,
+                     symbol=symbol)
         b = evaluate(mon.h2, bars, X, "ANALYSIS B", opened_at=last_close,
-                     ends_at=last_close + n2 * mon.delta, bars_left=n2)
+                     ends_at=last_close + n2 * mon.delta, bars_left=n2,
+                     symbol=symbol)
 
         # SMART-MONEY CONFLUENCE, on the calls only. See `_smart_overlay`.
         smart = self._smart_net(symbol, interval)
@@ -1024,6 +1028,42 @@ class TradingService:
         return value
 
     # ------------------------------------------------------------ chart
+    def momentum(self, ttl: float = 600.0) -> Dict[str, Any]:
+        """This week's momentum rotation (api/momentum.py), cached.
+
+        Its own cache, not `_dash`: other code walks the dashboard keys as
+        pairs to rebuild and to alert on, and this is not a pair. Daily
+        closes from the bar stores; live prices for the week so far.
+        """
+        from .momentum import rotation
+
+        hit = getattr(self, "_momentum_cache", None)
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+        syms = [s for s in self.record_symbols() if s.endswith("USDT")]
+        closes = {}
+        for sym in syms:
+            try:
+                bars = self._bars(sym, "1d")
+            except Exception as e:           # a coin without daily bars sits out
+                log.info("momentum: %s 1d unavailable: %s", sym, e)
+                continue
+            if not bars.empty:
+                closes[sym] = bars["close"]
+        prices = {}
+        try:
+            self.prime_tickers(syms)
+            for sym in syms:
+                px = self.ticker(sym).get("price")
+                if px is not None and np.isfinite(px):
+                    prices[sym] = float(px)
+        except Exception as e:
+            log.info("momentum: live prices unavailable: %s", e)
+        out = rotation(closes, utc_now(), prices)
+        out["generated_at"] = utc_now().isoformat()
+        self._momentum_cache = (time.time(), out)
+        return out
+
     def live_signals(self) -> Dict[str, Any]:
         """Every warm pair whose call is not FLAT, newest reading each.
 
@@ -1081,6 +1121,9 @@ class TradingService:
                     "take_profit": _num(levels.get("take_profit")),
                     "stop_loss": _num(levels.get("stop_loss")),
                     "side": levels.get("side") or "",
+                    # the resting order a 4h call enters with, when it has one
+                    "entry_limit": _num(levels.get("entry_limit")),
+                    "order": rec.get("order"),
                     "at": d.get("generated_at"),
                 })
         order = {"strong": 0, "medium": 1, "small": 2, "": 3}
@@ -1830,6 +1873,10 @@ def _levels(a, price) -> Dict[str, Any]:
         # distances whenever a websocket price is available, which on
         # crypto is essentially always.
         "side": a.side,
+        # a resting order's entry price, when the call enters with one: the
+        # target and stop are measured from HERE, not from the close
+        "entry_limit": (_num((getattr(a, "order_info", None) or {}).get("limit"))
+                        if (getattr(a, "order_info", None) or {}).get("state") == "open" else None),
         # the barriers as distances rather than prices. the app
         # re-anchors them to the websocket price so TP/SL track the
         # market between bars — the DISTANCE is what the model fixed
@@ -1965,6 +2012,11 @@ def _choose(primary, secondary):
     "BUY" next to "51.7%" on screen, which reads as incoherent because the two
     numbers were answering different questions.
     """
+    # A TRADE A RESTING ORDER OPENED speaks first: one position per coin,
+    # as the research that chose the orders was scored
+    for x in (primary, secondary):
+        if (getattr(x, "order_info", None) or {}).get("state") == "filled":
+            return x
     p_in, s_in = primary.action.startswith("ENTER"), secondary.action.startswith("ENTER")
     if p_in and s_in:
         # both sides of a structure timeframe firing at once is rare and
@@ -2127,6 +2179,9 @@ def _settle_call(rec: Dict[str, Any], a, live: Optional[Dict[str, Any]]
     were. Returns the (possibly replaced) recommendation and the outcome:
     "target", "stop" or "".
     """
+    order = getattr(a, "order", None)
+    if order is not None and (getattr(a, "order_info", None) or {}).get("state") in ("open", "filled"):
+        return _settle_order(rec, a, live)
     if rec.get("action") not in ("BUY", "SELL") or not live:
         return rec, ""
     if getattr(a, "geometry", "atr") != "structure" or a.side not in ("LONG", "SHORT"):
@@ -2177,6 +2232,63 @@ def _settle_call(rec: Dict[str, Any], a, live: Optional[Dict[str, Any]]
         # not a call any more: no grade, no size, no confluence line
         "strength": "", "size_pct": None, "smart_note": "",
     })
+    return out, outcome
+
+
+def _settle_order(rec: Dict[str, Any], a, live: Optional[Dict[str, Any]]
+                  ) -> Tuple[Dict[str, Any], str]:
+    """A resting order, stepped through the FORMING bar.
+
+    The bar can fill the order, or take a filled trade to its target or
+    stop, before it closes. It cannot expire the order or time the trade
+    out: those happen at closes, and the next build sees them. A target
+    touched while the order is still unfilled changes nothing -- the order
+    stays good for its window, as it was measured.
+    """
+    import copy
+
+    if not live:
+        return rec, ""
+    highs = [v for v in (live.get("high"), live.get("price")) if v is not None]
+    lows = [v for v in (live.get("low"), live.get("price")) if v is not None]
+    if not highs or not lows:
+        return rec, ""
+    info = a.order_info
+    od = copy.copy(a.order)
+    before = od.state
+    # the forming bar opens at the last close; an order resting away from it
+    # fills at its own price, which is what the research assumed
+    open_px = float(info.get("last_close") or od.limit)
+    od.step(int(info["next"]), open_px, max(highs), min(lows),
+            float(live.get("price") or od.limit), closed=False)
+    if od.state == before:
+        return rec, ""
+    from .alerts import _price_text
+    word = "buy" if od.long else "sell"
+    placed = pd.Timestamp(info["placed_at"]) if info.get("placed_at") is not None else None
+    at = f" from the {placed:%a %H:%M} UTC close" if placed is not None else ""
+    if before == "open" and od.state == "filled":
+        detail = (f"In the trade: the {word} order{at} filled at {_price_text(od.fill)} during "
+                  f"the current bar. It runs to the target {_price_text(od.target)} or the stop "
+                  f"{_price_text(od.stop)}.")
+        # not a level REACHED -- `levels.reached` means the trade is over,
+        # and a fill is the trade starting. The order's state says it.
+        outcome = ""
+    elif before == "open" and od.state == "stop":
+        detail = (f"The {word} order{at} filled at {_price_text(od.fill)} and the stop "
+                  f"{_price_text(od.stop)} was hit in the same bar.")
+        outcome = "stop"
+    elif od.state == "target":
+        detail = f"The trade{at} reached its target {_price_text(od.target)} during the current bar."
+        outcome = "target"
+    else:
+        detail = f"The trade{at} was stopped at {_price_text(od.stop)} during the current bar."
+        outcome = "stop"
+    out = dict(rec)
+    order = dict(out.get("order") or {})
+    order.update({"state": od.state, "fill": _num(od.fill)})
+    out.update({"action": "WAIT", "tone": "flat", "detail": detail, "order": order,
+                "size_pct": None, "smart_note": ""})
     return out, outcome
 
 
@@ -2252,6 +2364,23 @@ def _expire_if_old(payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _order_json(a) -> Optional[Dict[str, Any]]:
+    """The resting order the card speaks for, as the app and alerts read it."""
+    info = getattr(a, "order_info", None) or {}
+    if not info:
+        return None
+
+    def t(v):
+        return pd.Timestamp(v).isoformat() if v is not None else None
+
+    return {"state": info.get("state"), "limit": _num(info.get("limit")),
+            "stop": _num(info.get("stop")), "target": _num(info.get("target")),
+            "fill": _num(info.get("fill")), "placed_at": t(info.get("placed_at")),
+            "valid_until": t(info.get("valid_until")), "hold_until": t(info.get("hold_until")),
+            "filled_at": t(info.get("filled_at")), "level": info.get("level"),
+            "offset_atr": _num(info.get("offset_atr"))}
+
+
 def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
     """The big card. Whatever the backend actually decided - never a default BUY."""
     if stale:
@@ -2265,13 +2394,28 @@ def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
     # which model slot this reading came from, for the per-slot gate:
     # ANALYSIS A is h1, ANALYSIS B is h2
     slot = "h1" if str(a.name).endswith("A") else "h2"
+    order = _order_json(a)
+    if order and order.get("state") == "filled":
+        # IN A TRADE a resting order opened. Not a call to act on, and not an
+        # exit either: WAIT, which the alert engine does not announce.
+        return {"action": "WAIT", "tone": "flat", "detail": a.reason,
+                "diagnostic": getattr(a, "diagnostic", "") or "",
+                "strength": getattr(a, "strength", "") or "", "slot": slot,
+                "rank": _num(getattr(a, "rank", float("nan"))),
+                "geometry": getattr(a, "geometry", "atr"), "order": order,
+                "size_pct": _num(a.size_pct), "window_bars": a.bars_left,
+                "p_up": _num(a.p_up), "window_ends": a.ends_at.isoformat()}
     if a.action.startswith("ENTER"):
         tone = "up" if a.side == "LONG" else "down"
         word = "BUY" if a.side == "LONG" else "SELL"
         return {"action": word, "tone": tone, "detail": a.reason,
                 "diagnostic": getattr(a, "diagnostic", "") or "",
                 "size_pct": _num(a.size_pct),
-                "ev": _num(np.nanmax([a.ev_long, a.ev_short])),
+                # None for a pooled call: its EV is not a decision input and
+                # misreads near targets (monitor._evaluate_structure). An app
+                # that shows EV hides the chip when it is absent.
+                "ev": (None if getattr(a, "pooled", False)
+                       else _num(np.nanmax([a.ev_long, a.ev_short]))),
                 "window_bars": a.bars_left,
                 "p_up": _num(a.p_up),
                 "slot": slot,
@@ -2284,19 +2428,23 @@ def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:
                 # filtering there means one calculation serves every setting.
                 "strength": getattr(a, "strength", "") or "",
                 "p_needed": _num(getattr(a, "p_needed", float("nan"))),
-                "window_ends": a.ends_at.isoformat()}
+                "window_ends": a.ends_at.isoformat(),
+                **({"order": order} if order else {})}
     return {"action": "FLAT", "tone": "flat",
             "detail": a.reason or "No entry right now.",
             "diagnostic": getattr(a, "diagnostic", "") or "",
             "strength": "",
             "p_needed": _num(getattr(a, "p_needed", float("nan"))),
-            "ev": _num(np.nanmax([a.ev_long, a.ev_short])),
+            "ev": (None if getattr(a, "pooled", False)
+                   else _num(np.nanmax([a.ev_long, a.ev_short]))),
             "window_bars": a.bars_left,
             "p_up": _num(a.p_up),
             "slot": slot,
             "rank": _num(getattr(a, "rank", float("nan"))),
             "geometry": getattr(a, "geometry", "atr"),
-            "window_ends": a.ends_at.isoformat()}
+            "window_ends": a.ends_at.isoformat(),
+            # an order that expired or a trade that closed at this close
+            **({"order": order} if order else {})}
 
 
 _SERVICE: Optional[TradingService] = None

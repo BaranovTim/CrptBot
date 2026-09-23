@@ -11,6 +11,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../api/format.dart';
 import '../api/models.dart';
 import '../theme/liquid_obsidian.dart';
 import 'glass.dart';
@@ -48,6 +49,25 @@ class SignalsPanel extends StatelessWidget {
 
   bool _inTrade(LiveSignal s) =>
       held.contains(heldKey(s.symbol, s.interval)) || held.contains(s.symbol);
+
+  /// "TP +1.18% · SL −7.05%" from the call's own levels, signed from the
+  /// price (a short's target is below it), or null when a level is missing.
+  ///
+  /// A call that enters with a RESTING ORDER leads with its price, and the
+  /// distances are from there: that is where the trade the levels describe
+  /// begins, not the price on the screen.
+  static String? _payoff(LiveSignal s) {
+    final limit = s.entryLimit;
+    final px = limit ?? s.price, tp = s.takeProfit, sl = s.stopLoss;
+    if (px == null || px <= 0 || tp == null || sl == null) return null;
+    String pct(double v) {
+      final d = (v / px - 1) * 100;
+      return '${d >= 0 ? '+' : '−'}${d.abs().toStringAsFixed(2)}%';
+    }
+
+    final head = limit == null ? '' : 'Limit ${priceText(limit)} · ';
+    return '${head}TP ${pct(tp)} · SL ${pct(sl)}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -197,7 +217,21 @@ class SignalsPanel extends StatelessWidget {
                       child: Text(s.strengthLabel,
                           style: Obsidian.labelSm(color: grade, size: 9)),
                     ),
-                    if (s.ev != null) ...[
+                    // THE PAYOFF, NOT AN EV. A 4h call's EV was built on a
+                    // probability that does not know how near its target
+                    // is, and printed a red "EV -1.3%" beside the calls that
+                    // paid; the server no longer sends one for them. The
+                    // distances to target and stop are facts.
+                    if (_payoff(s) != null) ...[
+                      const SizedBox(width: 7),
+                      Flexible(
+                        child: Text(_payoff(s)!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Obsidian.dataTable(
+                                size: 10.5, color: Obsidian.outline)),
+                      ),
+                    ] else if (s.ev != null) ...[
                       const SizedBox(width: 7),
                       Flexible(
                         child: Text('EV ${s.ev! >= 0 ? '+' : ''}'

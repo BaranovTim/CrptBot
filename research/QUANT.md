@@ -288,3 +288,409 @@ switched off for cost) or they are information-only screens.
 * CUSUM event sampling and overlapping labels: [Hudson & Thames notes](https://hudsonthames.org/machine-learning-trading-essentials-part-2-fractionally-differentiated-features-filtering-and-labelling/)
 * Carver — *Systematic Trading* (forecast combination, capping, vol targeting): [CXO summary](https://www.cxoadvisory.com/big-ideas/a-few-notes-on-systematic-trading/)
 * Funding rates on perpetuals: [Coinbase](https://www.coinbase.com/learn/perpetual-futures/understanding-funding-rates-in-perpetual-futures)
+
+## Looking for what was never asked (2026-09-22)
+
+Everything above tests a change to the *features* or to the *geometry*. This
+round asked a different question — what has the project never tried at all —
+and two of the answers are larger than anything in the table above.
+Reproduce with `research/pooled_4h.py` and `research/rule_probes.py`.
+
+### The one that matters: pool the 4h models across coins
+
+Pooling is what turned the daily model from "0 of 15 beat their shuffled
+control" into the shipped swing strategy. **On 4h it was simply never tried.**
+Same features, same structure barriers, same 16-bar hold, same purged CV,
+same shuffled control, same rank rule — the only change is that fifteen
+coins are fitted together on one shared 4h-bar axis.
+
+| 4h, 15 coins × 2 sides | fit < 2024-09-20, scored 2024-25 | fit < 2025-09-20, scored 2025-26 |
+|---|---|---|
+| CV AUC / shuffled control | 0.589 / — | 0.594–0.599 / **0.500** |
+| out-of-time AUC | 0.597 / 0.603 | 0.604 / 0.590 |
+| served rank rule, net per trade | **+0.255% ± 0.043** | **+0.095% ± 0.037** |
+| pooled score ≥ 0.60, net per trade | **+0.476% ± 0.074** | **+0.550% ± 0.075** |
+| pooled score ≥ 0.65 | +0.881% ± 0.153 | +0.707% ± 0.155 |
+| best 1 of the 30 rows per bar | +0.238% ± 0.082 | +0.441% ± 0.083 |
+| coins positive (score ≥ 0.60) | 9/15 | 9/15 |
+| months positive | 6/13 | 7/13 |
+
+The shipped per-coin models on the same 2025-26 year: AUC 0.584, rank rule
+**−0.046% ± 0.051**. Pooling moves that to +0.095% over fifteen coins
+(+0.008% restricted to the same five, so most of the gain is the ten coins
+that were never measured — and the short side carries it: +0.169% ± 0.059
+pooled against a losing per-coin book).
+
+**Two independent years, both positive on every rule, control at 0.500.**
+That is a stronger replication than anything else in this file. Three
+cautions before it becomes a claim: the σ figures share this project's
+overlapping-label optimism (16-bar holds, consecutive bars selected — the
+effective sample is far smaller than `n`); only about half the months are
+positive, so the mean is carried by a minority of them; and the fifteen
+coins are today's universe, which is survivorship of a kind.
+
+**Why an absolute threshold suddenly works.** Per-coin, a fixed cut selected
+nothing on half the rows as the score distribution drifted — which is why
+the served rule ranks each coin against its own trailing window. A pooled
+model has ONE score distribution, so `p ≥ 0.60` means the same thing on
+every coin, and the coins become comparable to each other. That is what
+makes "which of the thirty is the best trade right now" expressible at all:
+`best 1 per bar` is positive in both years, and it is one position at a
+time rather than a threshold that can fire on nine coins at once.
+
+### The served rule is blind to the payoff it is being offered
+
+The structure label asks "does the target come before the stop". How far
+each sits varies five-fold bar to bar — reward:risk runs 0.46 at the 10th
+percentile to 2.16 at the 90th, break-even hit rates of 68% and 32% — and
+the decision rule never looks at either. Measured on the shipped models'
+held-out year:
+
+* **R:R alone ranks the label at AUC 0.667**, against the model's own 0.584.
+  The single most predictive thing about the label is not a feature, and
+  part of what the AUC gate has been crediting to the model is it
+  re-deriving the geometry from correlated columns. Within a fixed R:R
+  tercile the score still separates (AUC 0.536–0.565), so there is real
+  skill underneath — less than the headline.
+* Filtering for *good* R:R makes the book worse (−0.145% at R:R ≥ 1.0). The
+  only positive cell is the opposite: a **near target with a structurally
+  distant stop** (R:R < 0.4) hits 81% and nets +0.114%, and combined with
+  cross-sectional selection it is positive in both halves of the year
+  (+0.113% / +0.672%, whole +0.361% ± 0.145). Counter-intuitive, fragile,
+  and worth a proper test rather than a shipping decision.
+* It also explains a live oddity: DOGE on 2026-09-21 printed "BUY, STRONG"
+  with a diagnostic EV of **−2.97%** — a +1.2% target against a −6.7% stop.
+  The rank said yes; nothing in the rule looks at the payoff.
+
+### Measured and closed
+
+* **Fitted models do not go off within a year.** First four months of the
+  held-out year AUC 0.600, last four 0.610. The month-to-month P&L swings
+  (−0.58% to +0.82%) are regime, not decay. Retraining monthly is housekeeping,
+  not a fix — this had been assumed to be a process gap and it is not.
+* **The two side models never contradict each other**: 0 bars of 10,148
+  where both call. They are near-complements; there is no free filter there.
+* The shipped rule's whole-year "break-even" hides −0.257% in the first half
+  and +0.198% in the second.
+
+### Still untested, ranked by what the evidence above suggests
+
+1. **Barrier geometry as a feature** (`tp_pct`, `sl_pct`, their ratio, the
+   level's kind and age). The model is asked whether it reaches a target
+   without being told how far away it is. Evaluate on money, not AUC: the
+   obvious failure mode is learning "near targets get hit".
+2. **A label made of money.** Train on the realised R multiple, or weight
+   samples by |outcome|. §5's own diagnosis was "right about small moves,
+   blind to large ones", and sample weighting is the direct answer to it;
+   nothing here has ever optimised anything but a coin flip.
+3. **Meta-labelling**, dismissed above because a filter on a +0.01% gross
+   edge keeps +0.01%. Against a pooled book of +0.5%/trade that arithmetic
+   no longer holds.
+4. **The missing placement cell.** "Target at the level" was tested with
+   "stop at the level", and "target in front" with "stop beyond". *Target at
+   the level, stop beyond it* — the liquidity-sweep story, where the stop
+   sits exactly where every other stop is — was never run.
+5. **Entry placement.** Everything here enters at the bar close, at taker
+   cost. `trader_patterns` measured resting fills at +1.4%/1h, and maker
+   fees are half of taker — the cost floor is what killed 1h and 15m.
+6. **The tape is empty.** 22 of Agent 4's columns exist, 4 are populated,
+   and every shipped fit is `--no-tape`. Order-flow imbalance and CVD are
+   among the few microstructure effects with a real literature; they have
+   never met the structure label.
+7. **Cross-sectional features inside the pooled model** — a coin's strength
+   relative to the pooled universe, which is the one crypto factor §1 rates
+   as strong and which a single-asset pipeline cannot express. BTC context
+   was null *per coin*; this is a different object.
+8. **Bet sizing across simultaneous calls** (Carver / LdP). When nine coins
+   call at once that is one market-wide move, and the app sizes each at full
+   quarter-Kelly independently.
+9. **Deflated Sharpe.** This file now contains a great many trials, today's
+   included. The 7.3σ above is a *pre-deflation* number on a rule chosen
+   after seeing the year; the second-year replication is what it rests on.
+
+## The walk-forward laboratory: what to build next (2026-09-22)
+
+`research/wf4h.py`. Everything before this section fits once and scores one
+held-out year. That found pooling; it is not enough to decide what to build.
+The lab refits every six months on its own past only and scores the next
+six — six disjoint out-of-time half-years, Sep 2023 → Sep 2026 — with the
+rank computed exactly as the server computes it (against the same model's
+trailing 540 scores, in-sample ones included). Variants were **chosen on the
+first four windows and only confirmed on the last two**. And results are
+reported as an **account**: at most three positions, never two on one coin,
+enter at the close, exit when the label resolves, 0.10% fees and — for the
+first time here — the funding a perpetual pays or receives while held.
+
+About thirty variants went through it. The protocol earned its keep once:
+the stop placement that won development (1 ATR beyond the level, Sharpe
+1.91) lost on the holdout (−0.10).
+
+### First, a flaw in how this ledger has been scoring itself
+
+**Every per-trade P&L above this line is uniqueness-weighted.** The weight
+belongs in *training* — it stops overlapping labels counting as independent
+samples — but a label's uniqueness depends on how fast it resolved, which
+depends on how it resolved, so as a P&L weight it leans toward winners. On
+pooled 4h calls: weighted mean +0.564%, **plain mean +0.273%**. Every trade
+costs the same fee whatever its weight. The lab reports plain means; older
+numbers in this file should be read as roughly doubled.
+
+A second, smaller gap: a selected *bar* is not a *trade*. Consecutive
+selected bars are one position; a signal that fires once and disappears
+loses −0.56% while the fifth consecutive top-ranked close nets +0.61%. The
+portfolio simulation is the number to trust.
+
+### The account, half-year by half-year
+
+Full exposure (three positions, each a third of the account, 1×), fees and
+funding paid, non-compounded:
+
+| system | Sep 23 | Mar 24 | Sep 24 | Mar 25 | Sep 25 | Mar 26 | total | positive |
+|---|---|---|---|---|---|---|---|---|
+| **shipped**: a model per coin, per-coin rank | −2.8% | −63.8% | +3.6% | −70.5% | +16.9% | −15.8% | **−132.5%** | 2/6 |
+| pooled model, same rank rule | +16.9% | +45.5% | +35.9% | −41.2% | +18.3% | +14.8% | +90.2% | 5/6 |
+| pooled, **pooled rank ≥ 0.97** | +35.5% | +28.1% | +29.3% | −29.3% | +25.8% | +48.1% | +137.6% | 5/6 |
+| … + positioning block | +65.0% | +18.3% | +77.4% | −33.4% | +28.8% | +30.1% | +186.1% | 5/6 |
+| … + **stop 0.5 ATR beyond the level** | +18.6% | +31.5% | +73.9% | +0.8% | +21.8% | +24.6% | +171.2% | **6/6** |
+| … + both | +66.5% | +20.4% | +62.4% | −4.8% | +26.7% | +28.0% | **+199.2%** | 5/6 |
+
+The last two columns chose nothing. At a third of that exposure the best
+rows are roughly +20% a year with a ~12% drawdown; the holdout drawdown at
+full exposure for the combined system was 15%.
+
+What a user sees as accuracy moves with it: calls on the shipped system hit
+their target 55–57% of the time; the pooled system with the stop beyond
+the level hits **69–73%**. AUC: 0.554 / 0.571 → 0.607 / 0.611.
+
+### Why each piece, from the lab
+
+* **Pooling** beats a model per coin in *every one* of the six windows
+  (AUC 0.578–0.624 against 0.526–0.603). The learning curves say why: the
+  model is data-hungry. Training on the last 12 months gives 0.568, the
+  last 24 gives 0.580, all history 0.599 — old data is not stale. Coins
+  saturate faster: scored on the same five, training on 5 → 0.585, 10 →
+  0.602, 15 → 0.604. Past ten, more coins buy *choice*, not accuracy.
+* **The pooled rank.** A pooled score means the same thing on every coin,
+  so each close can be ranked against every coin's recent scores instead
+  of its own. At 0.97 (top 3%) it beats the per-coin rank on the same
+  scores: Sharpe 0.65 / 1.63 against 0.50 / 0.57.
+* **The stop beyond the level.** Every angle on the data says tight
+  structural stops get swept. Reward:risk ≥ 1 trades lose; sizing every
+  trade to the same risk (which gives tight stops the biggest positions)
+  turns Sharpe 0.65 / 1.63 into 0.03 / 0.48; and moving the stop 0.25–0.5
+  ATR past the swing is positive in both halves with lower drawdowns. At
+  1 ATR it overfits.
+* **Positioning** — top traders' and all accounts' long/short ratios and the
+  taker ratio, from the metrics archive this project has downloaded for
+  years and discarded all but open interest from. It does not raise AUC,
+  but the fitted model gives it **9–10% of its total gain on day one**
+  (`pos_crowd`, the retail long/short ratio, is a top-10 feature), and it
+  improved the account in 8 of 10 rule comparisons. Mild, consistent, free.
+
+### Closed, with the reason
+
+| tried | result | why |
+|---|---|---|
+| the trade's geometry as features | AUC 0.600 → **0.673**, money **worse** | the model learns "near targets get hit" — they hit often and pay little |
+| EV = p·target − (1−p)·stop, with a geometry-aware p | Sharpe −1.09 (dev) | EV hunts the largest payoffs, where calibration is worst |
+| regress the realised return instead of classifying | dev +0.56%/trade, holdout **−0.53%** | money targets are heavy-tailed and regime-bound; the binary label denoises |
+| label weighted by the money at stake | dev strong, holdout collapses | same |
+| one model for both sides | no change | |
+| cross-sectional features (return / vol ranks, breadth) | no change | redundant with pooling itself |
+| bigger trees; fixed 300 / 800 trees | no gain | early stopping at 76–107 trees is right |
+| training on recent data only | worse | see the learning curve |
+| sizing to equal risk per trade | much worse | it sizes up the losing tight-stop trades |
+| funding | ~0.01% per trade | real, and negligible at these holds |
+
+**The app's own sizing is inverted.** `monitor._evaluate_structure` sizes a
+call with quarter-Kelly from p and the payoff. Kelly grows with
+reward:risk, so the largest size goes to the tight-stop trades and the
+near-target, wide-stop ones — where the edge is — sit at the 1.25% floor.
+Equal size per call is better on every row above.
+
+### What the model is
+
+A location-in-structure model: `position_in_range` alone is ~20% of the
+gain, then distance to the 200-EMA and to yesterday's high and low.
+Chart structure and indicators are 81–86% of everything. **26 features are
+never used** — every tape column (the shipped fits are `--no-tape`, so they
+are empty), `funding_z`, the candle counts, the head-and-shoulders
+direction.
+
+### Caveats that stay attached to the numbers
+
+The fifteen coins are today's universe (survivorship). Shorts need a
+futures account. Stops are assumed to fill at the level; a gap through one
+fills worse. Two holdout half-years give an annualised Sharpe an error of
+about ±1, so the ranking *among* the pooled rows is soft; what is not soft
+is the gap between every pooled row and the shipped system, in every window.
+
+### Shipped (2026-09-22)
+
+Items 1, 2, 3 and 5 of the plan above; positioning (item 4) is not in yet —
+it needs a live feed from Binance's futures REST endpoints.
+
+* `train_pooled_4h.py` — one fit per side over the fifteen coins, stop
+  `STOP_BUFFER_ATR = 0.5` past its level, installed under every coin's 4h
+  slots with a `source: "pooled"` verdict. First fit: AUC 0.609 / 0.610
+  against shuffled controls at 0.497, 150,560 samples.
+* `Agent5Config.stop_buffer_atr / rank_pool / equal_size_pct`, read by
+  `agent5.structure.stop_beyond` and `monitor._evaluate_structure`. A model
+  pickled before these fields reads as the old model (no buffer, no pool).
+* `monitor.SCOREBOOK` (`data_cache/scorebook.v1.json`) — every closed-bar
+  read of a pooled model records its coin's trailing 540 scores, per side;
+  every read ranks against all coins' (`POOLED_RANKS`: strong 0.97,
+  medium 0.95, small 0.90; no rank until 8 coins have reported).
+  `train_pooled_4h.py` fills it, so the first ranking after an install is
+  against a full pool.
+* Pooled calls are sized equally and carry no EV (it misread near targets).
+* `train.py` now refuses to overwrite a pooled 4h slot (`--allow-per-coin-4h`
+  to override). **Retrain with `train_pooled_4h.py`**, every six months.
+
+## Round three: exits, entries, the big traders, new families (2026-09-22)
+
+`research/improve_4h.py` (exits and entries, replayed bar by bar on the live
+configuration's walk-forward calls — it first reproduces the label P&L on
+99.97% of 6,002 calls), `research/positioning.py`, `research/new_strategies.py`.
+Same protocol: six half-years, chosen on the first four, confirmed on the
+last two, scored as the lab's account (three positions, fees, funding).
+
+### What the big traders do that the system did not
+
+From a year of Hyperliquid fills (`results/trader_patterns.md`): profitable
+and losing traders have the same win rate (57–59%) and the same average
+loss (~5.7%); the profitable ones' winners are twice the size and held twice
+as long, and they enter with resting orders far more (36% vs 21%) — entries
+that were +1.36% an hour later where their market orders were +0.03%.
+So the two untested places were the exit and the entry.
+
+**The entry is the improvement.** A resting order 0.5 ATR better than the
+signal's close, good for 4 bars (16h); once filled, the stop keeps its
+distance from the entry and the target stays on its level:
+
+| 4h entry | win | per trade | Sharpe dev / hold | max DD dev / hold |
+|---|---|---|---|---|
+| market at the close (live) | 71% | +0.24% | 1.59 / 1.14 | 40% / 19% |
+| **resting 0.5 ATR / 4 bars, stop moves with it** | 63% | **+0.66%** | **2.87 / 2.99** | 30% / 20% |
+| … price must trade 0.05 ATR through the order | 62% | +0.52% | 2.22 / 2.34 | 32% / 22% |
+| resting, same stop and target | 55% | +0.53% | 2.70 / 2.88 | 23% / 15% |
+| resting, stop and target both move | 73% | +0.37% | 2.17 / 1.93 | 25% / 31% |
+
+It beats the market entry in all six half-years (+316% against +171% in
+total at full exposure; +263% under the strict fill). 30–40% of calls never
+fill — the price ran without dipping — and are not traded. The same-stop
+version was the first found and **collapsed under a strict fill** (1.54
+dev): its edge was catching the exact low. The pick does not depend on that.
+
+**Exits: only one thing helped, and not in combination.** Moving the stop to
+entry halfway to the target (Sharpe 1.96 / 2.24 alone) is worse on top of
+the resting entry (1.88 / 2.27): a better entry reaches halfway sooner and
+scratches trades that would have won. Trailing past the target, half-out
+and trail, trailing only, and the second level as target all **lost on the
+development windows** even where the holdout looked spectacular (+155%/yr
+for trail-past-target) — the protocol rejects them, as it rejected the
+1-ATR stop. No time exit and an 8-bar exit were worse.
+
+### Binance's top traders
+
+* **As an overlay on the calls:** calls with top traders net on the same
+  side netted more per trade in both periods (+0.55% vs +0.33–0.37%), but
+  as a filter or a strength shift it lowers the account Sharpe (fewer
+  trades). Context to show, not a rule.
+* **As a signal across coins it loses.** Long where top traders are most
+  long, short where least: Sharpe −1.19, positive in 1 of 11 half-years.
+* **The crowd is contrarian.** All accounts' long/short z-score orders
+  3-day relative returns the wrong way in 9 of 11 half-years; long the three
+  coins it leans most short against, short the three it leans most long:
+  +31.6%/yr market-neutral, Sharpe 1.12, 7 of 11 half-years.
+* The **Hyperliquid 24h overlay still holds** on the pooled calls: agree
+  +0.74% (80% hit), silent +0.16%, disagree −0.34% (57%) — small samples,
+  same order as when it shipped. Kept.
+
+### New strategy families
+
+| strategy | %/yr | Sharpe | since Sep 2023 | positive half-years |
+|---|---|---|---|---|
+| **30-day momentum rotation**, 3 long / 3 short, weekly | +47.4% | **1.24** | 1.54 | **11/12** |
+| … on the 10 coins established by 2021 (survivorship check) | +32.9% | 0.99 | 1.05 | 10/12 |
+| … long-only best 3 of those ten, over holding all ten | +29.8% | 0.72 | 1.04 | 9/12 |
+| crowd contrarian, market-neutral, every 3 days | +31.6% | 1.12 | 1.54 | 7/11 |
+| 7-day momentum | −2.6% | −0.04 | | 9/12 |
+| funding extremes (cross-section, or fading \|z\|>2) | ~0 | 0.00 | | 3/8 |
+
+30-day momentum is the strongest new result, and its mirror (30-day
+reversal) loses 58%/yr, which is the shape a real effect has. Some of the
+15-coin figure is survivorship — the list is today's — which is why the
+2021 subset is shown. **As an overlay on the 4h calls it orders per-trade
+returns monotonically in both periods** (with +0.66/+0.68%, middle
++0.43/+0.25%, against +0.39/+0.23%) but moves the account by nothing
+measurable; it is a strategy of its own, weekly, not a tweak to 4h.
+
+### Closed
+
+Bar-close hour and weekday (flip between periods); Bitcoin's 200-day trend as
+a 4h gate (dev Sharpe 2.70 → 1.99; the holdout liked it, the protocol does
+not); following Binance's top traders; funding rates.
+
+#### Correction: the resting-entry figures above are optimistic (2026-09-23)
+
+The table above scores every call's order independently, and the account
+simulation then picks trades in SIGNAL order among the ones that eventually
+filled. A real account cannot do that: when an older order fills later than
+a newer one, the newer one is already the position. Replayed with a policy a
+person can actually follow — `monitor.resting_orders`: one order resting at
+the newest call's price, one position at a time, the same code the server
+runs — the gain is real but smaller:
+
+| 4h entry | Sharpe dev / hold | per trade | total, six half-years | beats live |
+|---|---|---|---|---|
+| market at the close (live) | 1.59 / 1.14 | +0.24% | +171% | — |
+| **one resting order, newest price** | **2.22 / 2.22** | **+0.53%** | **+246%** | 5 of 6 |
+| … price must trade 0.03 ATR through | 1.65 / 2.01 | +0.40% | +197% | 4 of 6 |
+| a ladder (every call's order open, first fill wins) | 2.12 / 2.20 | +0.50% | | |
+| only the first order of each run of calls | 2.57 / 1.44 (lab scoring) | | | |
+
+The ladder is no better than one order at the newest price, so the simpler
+instruction ships. Re-quoting matters: acting only on a call's first order
+gives up most of the holdout gain, which is why the app notifies when the
+order price moves.
+
+#### Correction: momentum's figure depended on the rebalance day (2026-09-23)
+
+The rotation above rebalanced every 42 bars from the start of the data — one
+arbitrary phase of the week. Rerun at all 42 phases (every 4h slot of the
+week), the effect is real but smaller than quoted:
+
+| weekly rotation, 3 long / 3 short | Sharpe across 42 phases |
+|---|---|
+| 30-day momentum, 15 coins | **median 1.00**, 0.62 – 1.31, positive at every phase |
+| 30-day, the 10 coins established by 2021 | median 0.70, 0.41 – 1.10, positive at every phase |
+| 30-day, long-only best 3 of those ten, over holding all ten | median 0.42, 0.10 – 1.04 |
+| 15-day momentum | median 0.83, 0.33 – 1.59 |
+| 60-day momentum | median 0.24, −0.15 – 0.75 |
+| 30-day, held two weeks | median 0.71, −0.19 – 1.31 |
+
+The quoted 1.24 was a lucky phase. Monday 00:00 UTC, which the app uses
+because it is the natural time for a person, was historically the weakest
+(0.62); nothing about a weekday should matter to a 30-day signal, so the
+median is the expectation.
+
+### Shipped (2026-09-23): the resting entry and the momentum rotation
+
+* **Resting entry on pooled 4h calls** — `Agent5Config.entry_offset_atr = 0.5`,
+  `entry_valid_bars = 4`, written into the installed models by
+  `train_pooled_4h.py --update-rules` (no refit; the pool and its score book
+  stay). `monitor._resting_decision` replays each side's recent calls through
+  `monitor.resting_orders` once per sensitivity level, so the card, the
+  payload's `order` block and the calls list speak for the order a person on
+  that level actually holds: open (BUY/SELL with the limit and expiry),
+  filled (WAIT, in the trade), or ended at this close (a note). The forming
+  bar can fill an order or close its trade between closes
+  (`service._settle_order`). Notifications: the entry names the order; a
+  persisting call that moves the order notifies; an unfilled expiry says so.
+* **Momentum rotation** — `api/momentum.py`, `GET /api/momentum`, a Market
+  panel, a Monday alert (`kind: momentum`, mutable in Profile).
+* **The OOM loop behind yesterday's evening restarts** — the daily trader
+  selection ran as a thread in the API and peaked above a gigabyte; it now
+  runs as a child process (`smartmoney.run_select`) that asks the kernel to
+  kill it first, reading fills slimmed to the eleven fields the stats use.

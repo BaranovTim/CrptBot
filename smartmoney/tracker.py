@@ -130,10 +130,38 @@ class Tracker:
 
     # ----------------------------------------------------------- selection
     def _default_select(self) -> List[TraderStats]:
-        path = refresh_leaderboard(self._cache_dir)
-        if path is None:
+        """The selection, run in a CHILD PROCESS (see smartmoney.select.main).
+
+        An empty answer -- the child failed, ran out of memory, or timed out
+        -- keeps yesterday's list (`_apply_selection`), which is the whole
+        point: the selection can fail without taking the API with it.
+        """
+        import json
+        import subprocess
+        import sys
+
+        out = self._cache_dir / "selection.next.json"
+        root = Path(__file__).resolve().parents[1]
+        try:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            out.unlink(missing_ok=True)
+            r = subprocess.run([sys.executable, "-m", "smartmoney.run_select", str(out),
+                                str(self._cache_dir)], cwd=str(root),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                               text=True, timeout=6 * 3600)
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("smartmoney: selection process failed to run: %s", e)
             return []
-        return select_traders(path, pause=lambda: time.sleep(0.25))
+        if r.returncode != 0 or not out.exists():
+            log.warning("smartmoney: selection process exited %s: %s", r.returncode,
+                        (r.stderr or "")[-400:].strip())
+            return []
+        try:
+            rows = json.loads(out.read_text())
+            return [TraderStats(**row) for row in rows]
+        except (OSError, ValueError, TypeError) as e:
+            log.warning("smartmoney: selection output unreadable: %s", e)
+            return []
 
     def reselect(self) -> int:
         """Rebuild the followed set. Keeps the books of anyone who stays,

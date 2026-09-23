@@ -106,7 +106,8 @@ def user_fills(address: str) -> List[Dict[str, Any]]:
 
 
 def user_fills_since(address: str, days: int = 180, pause: float = 0.3,
-                     max_pages: int = 20) -> List[Dict[str, Any]]:
+                     max_pages: int = 20,
+                     fields: Optional[tuple] = None) -> List[Dict[str, Any]]:
     """Every fill in the last `days`, paged through `userFillsByTime`.
 
     `userFills` stops at the newest 2,000, which for a busy account is a
@@ -122,7 +123,12 @@ def user_fills_since(address: str, days: int = 180, pause: float = 0.3,
                      "startTime": cur, "endTime": end, "aggregateByTime": True})
         if not isinstance(page, list) or not page:
             break
-        out.extend(page)
+        # KEEP ONLY WHAT IS READ. A fill arrives with ~15 fields, hashes and
+        # order ids among them; forty thousand of those per busy account,
+        # across four hundred accounts, is how the daily selection grew the
+        # API past a gigabyte and into the OOM killer.
+        out.extend(page if fields is None else
+                   [{k: x[k] for k in fields if k in x} for x in page])
         last = max(int(x.get("time", 0)) for x in page)
         if len(page) < 2000 or last <= cur:
             break

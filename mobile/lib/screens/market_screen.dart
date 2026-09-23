@@ -23,6 +23,7 @@ import 'add_coin_sheet.dart';
 import '../theme/liquid_obsidian.dart';
 import '../widgets/glass.dart';
 import '../widgets/patient_loader.dart';
+import '../widgets/momentum_panel.dart';
 import '../widgets/signals_panel.dart';
 import '../widgets/status_dot.dart';
 
@@ -65,6 +66,12 @@ class _MarketScreenState extends State<MarketScreen> {
 
   LiveSignals? _signals;
 
+  /// This week's momentum rotation; null until it loads, and left null on
+  /// a plan that does not include it (the panel then says it is loading
+  /// only until the first failure hides it -- see `_momentumFailed`).
+  Momentum? _momentum;
+  bool _momentumFailed = false;
+
   /// Open trades as `SYMBOL:interval` keys (see `SignalsPanel.held`), so
   /// the calls list tags the row you are actually in, not every row of the
   /// coin.
@@ -84,7 +91,19 @@ class _MarketScreenState extends State<MarketScreen> {
   Map<String, double> _live = const {};
   StreamSubscription<Map<String, double>>? _liveSub;
 
+  Future<void> _loadMomentum() async {
+    try {
+      final m = await widget.client.momentum();
+      if (mounted) setState(() => _momentum = m);
+    } catch (_) {
+      // Not on this plan, or the server is older than the rotation: the
+      // panel goes away rather than spinning for ever.
+      if (mounted) setState(() => _momentumFailed = true);
+    }
+  }
+
   Future<void> _loadSignals() async {
+    unawaited(_loadMomentum());
     try {
       final s = await widget.client.signals();
       if (mounted) setState(() => _signals = s);
@@ -261,6 +280,17 @@ class _MarketScreenState extends State<MarketScreen> {
               held: _held,
               onOpen: (sig) => widget.onOpenSignal?.call(sig),
             ),
+            // The weekly rotation: a basket, not a call, so it sits under
+            // the calls rather than among them. A pick opens on the daily
+            // chart -- a 30-day return is a daily question.
+            if (!_momentumFailed) ...[
+              const SizedBox(height: 26),
+              MomentumPanel(
+                data: _momentum,
+                onOpen: (sym) => widget.onOpenSignal?.call(LiveSignal.fromJson(
+                    {'symbol': sym, 'interval': '1d', 'action': 'FLAT'})),
+              ),
+            ],
           ],
         ),
         children: [

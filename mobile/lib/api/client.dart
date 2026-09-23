@@ -461,6 +461,11 @@ class ApiClient {
   Future<LiveSignals> signals() async =>
       LiveSignals.fromJson(await _get('/api/signals'));
 
+  /// This week's momentum rotation: the three best and three worst 30-day
+  /// returns, held Monday to Monday. See `api/momentum.py`.
+  Future<Momentum> momentum() async =>
+      Momentum.fromJson(await _get('/api/momentum'));
+
   Future<Consensus> consensus({String? symbol}) async =>
       Consensus.fromJson(await _get('/api/consensus${_q(symbol, null)}'));
 

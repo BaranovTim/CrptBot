@@ -10,6 +10,7 @@ import 'package:tradingbot_app/theme/liquid_obsidian.dart';
 import 'package:tradingbot_app/widgets/positions_panel.dart';
 import 'package:tradingbot_app/widgets/acknowledgement.dart';
 import 'package:tradingbot_app/widgets/signals_panel.dart';
+import 'package:tradingbot_app/widgets/momentum_panel.dart';
 import 'package:tradingbot_app/widgets/analysis_panels.dart';
 import 'package:tradingbot_app/widgets/smart_money_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -2212,6 +2213,51 @@ void main() {
     });
   });
 
+  group('the calls list states the payoff, not an EV', () {
+    Future<void> row(WidgetTester t, Map<String, dynamic> sig) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: SignalsPanel(
+                      data: LiveSignals.fromJson({
+                        'signals': [sig],
+                        'watched_symbols': 1,
+                        'intervals': ['4h'],
+                      }),
+                      onOpen: (_) {})))));
+      await t.pumpAndSettle();
+    }
+
+    testWidgets('a pooled 4h call shows its target and stop distances',
+        (t) async {
+      await row(t, {
+        'symbol': 'BTCUSDT', 'interval': '4h', 'action': 'BUY',
+        'strength': 'strong', 'detail': '', 'side': 'LONG', 'ev': null,
+        'price': 100.0, 'take_profit': 101.18, 'stop_loss': 92.95,
+      });
+      expect(find.text('TP +1.18% · SL −7.05%'), findsOneWidget);
+      expect(find.textContaining('EV'), findsNothing);
+    });
+
+    testWidgets('a short reads its target below the price', (t) async {
+      await row(t, {
+        'symbol': 'ETHUSDT', 'interval': '4h', 'action': 'SELL',
+        'strength': 'strong', 'detail': '', 'side': 'SHORT',
+        'price': 200.0, 'take_profit': 196.0, 'stop_loss': 210.0,
+      });
+      expect(find.text('TP −2.00% · SL +5.00%'), findsOneWidget);
+    });
+
+    testWidgets('an older server without levels still shows its EV',
+        (t) async {
+      await row(t, {
+        'symbol': 'BTCUSDT', 'interval': '4h', 'action': 'BUY',
+        'strength': 'strong', 'detail': '', 'side': 'LONG', 'ev': 0.5,
+      });
+      expect(find.text('EV +0.50%'), findsOneWidget);
+    });
+  });
+
   group('IN TRADE is per timeframe', () {
     LiveSignals two() => LiveSignals.fromJson({
           'signals': [
@@ -2374,6 +2420,129 @@ void main() {
 
     test('the instructions explain confluence', () {
       expect(howToSteps.map((h) => h.title).join(' | '), contains('confirms, it does not decide'));
+    });
+  });
+
+  group('4h calls enter with a resting order', () {
+    Map<String, dynamic> payload({String state = 'open', String action = 'BUY'}) => {
+          'symbol': 'BTCUSDT', 'pair': 'BTC / USDT', 'interval': '4h', 'htf': '1d',
+          'timeframes': [], 'generated_at': '2026-09-23T00:00:00+00:00',
+          'last_closed_bar': '2026-09-23T00:00:00+00:00', 'stale': false,
+          'status': {'active': true, 'label': 'WATCHING', 'detail': '', 'trades': false},
+          'price': 86367.4, 'close_price': 86367.4, 'live': null, 'indicators': [],
+          'analyses': [],
+          'recommendation': {
+            'action': action, 'tone': action == 'BUY' ? 'up' : 'flat', 'detail': 'd',
+            'strength': 'strong', 'geometry': 'structure', 'size_pct': 5.0,
+            'order': {'state': state, 'limit': 85900.0, 'stop': 79800.0,
+                      'target': 87385.1, 'fill': state == 'filled' ? 85900.0 : null,
+                      'placed_at': '2026-09-23T00:00:00+00:00',
+                      'valid_until': '2026-09-23T16:00:00+00:00',
+                      'hold_until': '2026-09-25T16:00:00+00:00', 'level': 'strong'},
+          },
+          'levels': {'current': 86367.4, 'window_bars': 16, 'p_up': 0.7,
+                     'take_profit': 87385.1, 'stop_loss': 79800.0, 'side': 'LONG',
+                     'anchor': 85900.0, 'geometry': 'structure',
+                     'entry_limit': state == 'open' ? 85900.0 : null},
+          'calibration_note': 'n',
+        };
+
+    test('the order parses, and a filled one is a trade', () {
+      final d = Dashboard.fromJson(payload());
+      expect(d.entryLimit, 85900.0);
+      expect(d.recommendation.order!.isOpen, isTrue);
+      expect(d.recommendation.order!.validUntil, DateTime.utc(2026, 9, 23, 16));
+      expect(d.recommendation.inTrade, isFalse);
+      final t = Dashboard.fromJson(payload(state: 'filled', action: 'WAIT'));
+      expect(t.recommendation.inTrade, isTrue);
+      expect(t.entryLimit, isNull);
+    });
+
+    test('an unfilled order is not over when the price runs past its target', () {
+      final d = Dashboard.fromJson(payload());
+      expect(d.outcome(88000.0), '', reason: 'the order stays good for its window');
+      expect(d.outcome(79000.0), 'stop', reason: 'the stop sits beyond the order');
+    });
+
+    testWidgets('the levels panel leads with the order', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: LevelsPanel(
+                      price: 86367.4, takeProfit: 87385.1, stopLoss: 79800.0,
+                      side: 'LONG', fixed: true, entryLimit: 85900.0,
+                      entryUntil: DateTime.utc(2026, 9, 23, 16))))));
+      expect(find.text('Entry (buy limit)'), findsOneWidget);
+      expect(find.textContaining('good until Wed 16:00 UTC'), findsOneWidget);
+    });
+
+    testWidgets('the calls list leads with the order and measures from it', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: SignalsPanel(
+                      data: LiveSignals.fromJson({
+                        'signals': [
+                          {'symbol': 'BTCUSDT', 'interval': '4h', 'action': 'BUY',
+                           'strength': 'strong', 'detail': '', 'side': 'LONG',
+                           'price': 101.0, 'entry_limit': 100.0,
+                           'take_profit': 102.0, 'stop_loss': 95.0},
+                        ],
+                        'watched_symbols': 1, 'intervals': ['4h'],
+                      }),
+                      onOpen: (_) {})))));
+      await t.pumpAndSettle();
+      expect(find.text(r'Limit $100.00 · TP +2.00% · SL −5.00%'), findsOneWidget);
+    });
+
+    test('the instructions explain the order and the rotation', () {
+      final titles = howToSteps.map((h) => h.title).join(' | ');
+      expect(titles, contains('limit order'));
+      expect(titles, contains('momentum rotation'));
+    });
+  });
+
+  group('the momentum rotation', () {
+    Map<String, dynamic> payload({bool available = true}) => {
+          'available': available, 'week_start': '2026-09-21T00:00:00+00:00',
+          'next_rebalance': '2026-09-28T00:00:00+00:00', 'universe': 15,
+          'lookback_days': 30, 'week_pct': 1.25, 'measured': 'Sharpe 0.62-1.31',
+          'longs': [
+            {'symbol': 'ZECUSDT', 'ret_30d': 41.2, 'week_pct': 3.1, 'rank': 1},
+            {'symbol': 'HYPEUSDT', 'ret_30d': 18.4, 'week_pct': -0.5, 'rank': 2},
+            {'symbol': 'SOLUSDT', 'ret_30d': 9.9, 'week_pct': 1.0, 'rank': 3},
+          ],
+          'shorts': [
+            {'symbol': 'ARBUSDT', 'ret_30d': -21.5, 'week_pct': -2.0, 'rank': 15},
+            {'symbol': 'UNIUSDT', 'ret_30d': -12.0, 'week_pct': 0.4, 'rank': 14},
+            {'symbol': 'NEARUSDT', 'ret_30d': -8.3, 'week_pct': 0.1, 'rank': 13},
+          ],
+          'ranking': [], 'live_ranking': [],
+        };
+
+    testWidgets('the picks, the week and when it turns over', (t) async {
+      String? opened;
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: MomentumPanel(
+                      data: Momentum.fromJson(payload()),
+                      onOpen: (s) => opened = s)))));
+      expect(find.text('ZEC +41%'), findsOneWidget);
+      expect(find.text('ARB −22%'), findsOneWidget);
+      expect(find.textContaining('Week of 21 Sep'), findsOneWidget);
+      expect(find.textContaining('rebalances 28 Sep 00:00 UTC'), findsOneWidget);
+      expect(find.text('+1.25% so far'), findsOneWidget);
+      await t.tap(find.text('ZEC +41%'));
+      expect(opened, 'ZECUSDT');
+    });
+
+    testWidgets('too few coins says so instead of ranking', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: MomentumPanel(data: Momentum.fromJson(payload(available: false)))))));
+      expect(find.textContaining('needs at least eight'), findsOneWidget);
     });
   });
 

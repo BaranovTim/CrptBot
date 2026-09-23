@@ -111,7 +111,17 @@ class Recommendation {
         called = j['called'] as String? ?? '',
         outcome = j['outcome'] as String? ?? '',
         pNeeded = _d(j['p_needed']),
-        sizePct = _d(j['size_pct']);
+        sizePct = _d(j['size_pct']),
+        order = j['order'] is Map
+            ? EntryOrder.fromJson((j['order'] as Map).cast<String, dynamic>())
+            : null;
+
+  /// The resting order a pooled 4h call enters with (see [EntryOrder]).
+  /// Null on timeframes that enter at the close.
+  final EntryOrder? order;
+
+  /// A trade a resting order opened, running: WAIT that is not a missed call.
+  bool get inTrade => action == 'WAIT' && order?.state == 'filled';
 
   /// BUY, SELL, FLAT, STALE -- or WAIT: a call the forming bar has already
   /// settled. Its target was reached or its stop was hit before the bar
@@ -146,6 +156,35 @@ class Recommendation {
     return (rank[strength] ?? 0) >= (rank[setting] ?? 3) &&
         (rank[strength] ?? 0) > 0;
   }
+}
+
+/// A call's resting entry: a limit order some way better than the close
+/// that produced the call, good for a few bars, instead of buying at the
+/// close. The stop keeps its distance from this price; the target stays on
+/// its level. research/improve_4h.py -- and the resting-order habit that
+/// separated the profitable big traders from the losing ones.
+class EntryOrder {
+  EntryOrder.fromJson(Map<String, dynamic> j)
+      : state = j['state'] as String? ?? '',
+        limit = _d(j['limit']),
+        stop = _d(j['stop']),
+        target = _d(j['target']),
+        fill = _d(j['fill']),
+        level = j['level'] as String? ?? '',
+        placedAt = _t(j['placed_at']),
+        validUntil = _t(j['valid_until']),
+        holdUntil = _t(j['hold_until']),
+        filledAt = _t(j['filled_at']);
+
+  /// open | filled | target | stop | timeout | expired
+  final String state, level;
+  final double? limit, stop, target, fill;
+  final DateTime? placedAt, validUntil, holdUntil, filledAt;
+
+  bool get isOpen => state == 'open';
+
+  static DateTime? _t(Object? v) =>
+      v is String && v.isNotEmpty ? DateTime.tryParse(v)?.toUtc() : null;
 }
 
 class Analysis {
@@ -227,6 +266,7 @@ class Dashboard {
         slOffsetPct = _d((j['levels'] as Map)['sl_offset_pct']),
         side = (j['levels'] as Map)['side'] as String? ?? '',
         levelsReached = (j['levels'] as Map)['reached'] as String? ?? '',
+        entryLimit = _d((j['levels'] as Map)['entry_limit']),
         levelGeometry = (j['levels'] as Map)['geometry'] as String? ??
             (j['recommendation'] as Map?)?['geometry'] as String? ??
             'atr',
@@ -235,6 +275,10 @@ class Dashboard {
         calibrationNote = j['calibration_note'] as String? ?? '';
 
   final String symbol, pair, interval, htf, calibrationNote;
+
+  /// The resting order's price when the call enters with one: the levels
+  /// are measured from here, and a logged entry defaults to it.
+  final double? entryLimit;
 
   /// The 200-day trend, on the timeframes that gate on it (daily). Null
   /// elsewhere, or with too little history to say.
@@ -311,12 +355,18 @@ class Dashboard {
       return '';
     }
     final tp = takeProfit, sl = stopLoss;
+    // A RESTING ORDER THAT HAS NOT FILLED is not over when the price runs
+    // past its target: the order stays good for its window, as it was
+    // measured, and may still fill on a pullback. Past the stop is
+    // different -- the stop sits beyond the order, so reaching it means the
+    // order filled on the way.
+    final unfilled = recommendation.order?.isOpen ?? false;
     if (isShort) {
       if (sl != null && live >= sl) return 'stop';
-      if (tp != null && live <= tp) return 'target';
+      if (!unfilled && tp != null && live <= tp) return 'target';
     } else {
       if (sl != null && live <= sl) return 'stop';
-      if (tp != null && live >= tp) return 'target';
+      if (!unfilled && tp != null && live >= tp) return 'target';
     }
     return '';
   }
@@ -1258,10 +1308,18 @@ class LiveSignal {
         changePct = _d(j['change_pct']),
         pUp = _d(j['p_up']),
         takeProfit = _d(j['take_profit']),
-        stopLoss = _d(j['stop_loss']);
+        stopLoss = _d(j['stop_loss']),
+        entryLimit = _d(j['entry_limit']),
+        order = j['order'] is Map
+            ? EntryOrder.fromJson((j['order'] as Map).cast<String, dynamic>())
+            : null;
 
   final String symbol, interval, action, strength, detail, side;
   final double? ev, price, changePct, pUp, takeProfit, stopLoss;
+
+  /// The resting order's price, when the call enters with one.
+  final double? entryLimit;
+  final EntryOrder? order;
 
   bool get isSell => action == 'SELL';
 
@@ -1444,4 +1502,57 @@ class SmartTrader {
   final List<String> open;
 
   String get who => name.isNotEmpty ? name : short;
+}
+
+
+/// One coin in the weekly momentum rotation.
+class MomentumPick {
+  MomentumPick.fromJson(Map<String, dynamic> j)
+      : symbol = j['symbol'] as String,
+        ret30d = _d(j['ret_30d']) ?? 0,
+        weekPct = _d(j['week_pct']),
+        rank = (j['rank'] as num?)?.toInt() ?? 0;
+
+  final String symbol;
+  final double ret30d;
+
+  /// The coin's own move since this week's Monday close, in % (not signed
+  /// by the side it is held on). Null when there is no price yet.
+  final double? weekPct;
+  final int rank;
+
+  String get short => symbol.endsWith('USDT')
+      ? symbol.substring(0, symbol.length - 4)
+      : symbol;
+}
+
+/// The weekly 30-day momentum rotation (api/momentum.py): long the three
+/// best 30-day returns, short the three worst, held Monday to Monday.
+class Momentum {
+  Momentum.fromJson(Map<String, dynamic> j)
+      : available = j['available'] as bool? ?? false,
+        weekStart = DateTime.tryParse(j['week_start'] as String? ?? '')?.toUtc(),
+        nextRebalance =
+            DateTime.tryParse(j['next_rebalance'] as String? ?? '')?.toUtc(),
+        universe = (j['universe'] as num?)?.toInt() ?? 0,
+        lookbackDays = (j['lookback_days'] as num?)?.toInt() ?? 30,
+        weekPct = _d(j['week_pct']),
+        measured = j['measured'] as String? ?? '',
+        longs = _picks(j['longs']),
+        shorts = _picks(j['shorts']),
+        liveRanking = _picks(j['live_ranking']);
+
+  final bool available;
+  final DateTime? weekStart, nextRebalance;
+  final int universe, lookbackDays;
+
+  /// This week so far for the pair as measured: half the capital long the
+  /// three, half short the other three.
+  final double? weekPct;
+  final String measured;
+  final List<MomentumPick> longs, shorts, liveRanking;
+
+  static List<MomentumPick> _picks(Object? v) => (v is List ? v : const [])
+      .map((e) => MomentumPick.fromJson((e as Map).cast<String, dynamic>()))
+      .toList();
 }

@@ -178,8 +178,17 @@ def score_of(t: TraderStats) -> float:
     return round(size * t.win_rate * min(t.payoff, 3.0) * consistency, 4)
 
 
+# every field `episodes.reconstruct` reads from a fill, and nothing else
+FILL_FIELDS = ("coin", "px", "sz", "side", "time", "startPosition", "closedPnl",
+               "fee", "crossed", "liquidation", "tid")
+
+
+def _slim_fills(address: str) -> List[dict]:
+    return user_fills_since(address, fields=FILL_FIELDS)
+
+
 def select_traders(leaderboard: Path,
-                   fills_fn: Callable[[str], List[dict]] = user_fills_since,
+                   fills_fn: Callable[[str], List[dict]] = _slim_fills,
                    n: int = TRACK, now: Optional[datetime] = None,
                    pause: Callable[[], None] = lambda: None) -> List[TraderStats]:
     """The followed set: candidates with their record, filtered on the bar,
@@ -203,3 +212,49 @@ def select_traders(leaderboard: Path,
 
 def refresh_leaderboard(cache_dir: Path, max_age_s: float = 6 * 3600) -> Optional[Path]:
     return fetch_leaderboard(cache_dir, max_age_s=max_age_s)
+
+
+def main(argv=None) -> int:
+    """The selection as its own PROCESS: `python -m smartmoney.run_select OUT [CACHE_DIR]`.
+
+    It used to run as a thread inside the API. Reading four hundred
+    accounts' fills peaked above a gigabyte, the kernel killed the API --
+    the biggest process -- and the restarted API began the selection again,
+    because none had finished: killed at 14:50, 15:31, 16:09 and 18:27 on
+    2026-09-22. As a child process its memory goes back to the system when
+    it exits, and it asks the kernel to kill IT first under pressure
+    (oom_score_adj 1000), so the worst case is yesterday's list, not a dead
+    server.
+    """
+    import json
+    import os
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        print("usage: python -m smartmoney.run_select OUT_JSON [CACHE_DIR]", file=sys.stderr)
+        return 2
+    try:                                  # first in line for the OOM killer
+        with open("/proc/self/oom_score_adj", "w") as fh:
+            fh.write("1000")
+    except OSError:
+        pass
+    try:
+        os.nice(10)                       # and behind the API for the CPU
+    except (OSError, AttributeError):
+        pass
+    out = Path(argv[0])
+    cache = Path(argv[1]) if len(argv) > 1 else Path("data_cache/hyperliquid")
+    path = refresh_leaderboard(cache)
+    if path is None:
+        print("no leaderboard", file=sys.stderr)
+        return 1
+    chosen = select_traders(path, pause=lambda: __import__("time").sleep(0.25))
+    tmp = out.with_suffix(".part")
+    tmp.write_text(json.dumps([t.to_json() for t in chosen]))
+    tmp.replace(out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

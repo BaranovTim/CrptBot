@@ -352,6 +352,14 @@ class Analysis:
     # `_evaluate_structure` for why a fixed threshold does not survive.
     rank: float = float("nan")
     geometry: str = "atr"
+    # ranked against every coin's readings (a pooled model); its EV is not
+    # reported -- see `_evaluate_structure`
+    pooled: bool = False
+    # the resting order this side's card speaks for (a pooled model with
+    # `entry_offset_atr`): the RestingOrder, its times, and where the
+    # forming bar picks up (`order_info["next"]`). None otherwise.
+    order: object = None
+    order_info: dict = field(default_factory=dict)
     # what the followed traders did, and what it did to the call
     # (api/service._smart_overlay). "" when nothing applied.
     smart_note: str = ""
@@ -431,7 +439,309 @@ TRAIL_BARS = 540
 # the top 5%. "small" is the loosest cut still measured positive.
 STRUCTURE_RANKS = (("strong", 0.95), ("medium", 0.90), ("small", 0.85))
 
+# The cuts for a POOLED model, ranked against every coin's readings rather
+# than its own. research/wf4h.py (six half-year windows, Sep 2023 -> Sep
+# 2026, chosen on four and confirmed on two): the top 3% of the pooled rank
+# is the rule that made money in both halves, so it is "strong" -- the app's
+# default. The top 10% was positive too, weaker.
+POOLED_RANKS = (("strong", 0.97), ("medium", 0.95), ("small", 0.90))
+# A pooled rank is not a pooled rank until most of the pool is in it. Until
+# this many coins have recorded, a reading is not ranked at all.
+POOL_MIN_COINS = 8
+
 _LEVELS_CACHE: dict = {}
+
+
+class ScoreBook:
+    """Recent raw scores of pooled models, across every coin they serve.
+
+    WHY IT EXISTS
+        A pooled model's score means the same thing on every coin, and the
+        rule the walk-forward validated ranks each reading against the last
+        TRAIL_BARS bars of readings from ALL the coins (research/wf4h.py,
+        `rank_pool`). A dashboard build computes only its own coin's
+        features, so the other coins' readings have to come from somewhere:
+        every closed-bar evaluation of a pooled model records its coin's
+        trailing window here, and every one ranks against what all of them
+        recorded.
+
+    KEYED BY THE FIT (`cfg.rank_pool`), so a retrained model starts a fresh
+    pool instead of ranking itself against its predecessor's scale.
+
+    PERSISTED, so a restart ranks against a full pool from its first build
+    rather than a pool of one -- the warm-up builds coins one at a time.
+
+    ONLY CLOSED BARS GO IN. The monitor also evaluates a provisional read
+    with the forming bar appended; that passes no symbol and never records,
+    or every coin's rank would be taken against a half-built bar.
+    """
+
+    KEEP = TRAIL_BARS + 60       # per coin; a little slack for a stale coin
+    MAX_POOLS = 2                # the current fit and the one before it
+
+    def __init__(self, path=None):
+        import threading
+
+        self.path = Path(path) if path else None
+        self._lock = threading.Lock()
+        self._pools: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] = {}
+        self._touched: Dict[str, float] = {}
+        self._loaded = False
+
+    # ------------------------------------------------------------ storage
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        if self.path is None or not self.path.exists():
+            return
+        import json
+        try:
+            raw = json.loads(self.path.read_text())
+            for pool, syms in (raw.get("pools") or {}).items():
+                self._pools[pool] = {
+                    s: (np.asarray(v["t"], dtype=np.int64), np.asarray(v["s"], dtype=float))
+                    for s, v in syms.items()}
+                self._touched[pool] = float((raw.get("touched") or {}).get(pool, 0.0))
+        except (OSError, ValueError, KeyError, TypeError):
+            # a cache: a broken file is recomputed by the next builds
+            self._pools, self._touched = {}, {}
+
+    def _save(self) -> None:
+        if self.path is None:
+            return
+        import json
+        data = {"pools": {pool: {s: {"t": t.tolist(), "s": [round(float(x), 7) for x in v]}
+                                 for s, (t, v) in syms.items()}
+                          for pool, syms in self._pools.items()},
+                "touched": self._touched}
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".part")
+            tmp.write_text(json.dumps(data))
+            tmp.replace(self.path)
+        except OSError:
+            pass
+
+    # ---------------------------------------------------------------- use
+    def record(self, pool: str, symbol: str, times, scores) -> None:
+        """This coin's closed-bar readings, newest last. Replaces what the
+        same bars held before; keeps the newest KEEP bars per coin."""
+        t = pd.DatetimeIndex(times)
+        t = t.tz_localize("UTC") if t.tz is None else t.tz_convert("UTC")
+        ns = t.asi8.astype(np.int64)
+        v = np.asarray(scores, dtype=float)
+        ok = np.isfinite(v)
+        ns, v = ns[ok], v[ok]
+        with self._lock:
+            self._load()
+            book = self._pools.setdefault(pool, {})
+            if symbol in book:
+                old_t, old_v = book[symbol]
+                keep = ~np.isin(old_t, ns)
+                ns = np.concatenate([old_t[keep], ns]); v = np.concatenate([old_v[keep], v])
+                o = np.argsort(ns, kind="stable"); ns, v = ns[o], v[o]
+            book[symbol] = (ns[-self.KEEP:], v[-self.KEEP:])
+            self._touched[pool] = time.time()
+            for stale in sorted(self._pools, key=lambda k: self._touched.get(k, 0.0))[:-self.MAX_POOLS]:
+                self._pools.pop(stale, None); self._touched.pop(stale, None)
+            self._save()
+
+    def rank(self, pool: str, at, score: float, span: pd.Timedelta
+             ) -> Tuple[float, int, int]:
+        """(rank, readings compared against, coins among them) for `score`
+        read at the bar closing `at`, against every coin's readings in the
+        `span` before it. Ties count half. NaN rank until the pool holds
+        POOL_MIN_COINS coins and 50 readings."""
+        at = pd.Timestamp(at)
+        at = at.tz_localize("UTC") if at.tzinfo is None else at.tz_convert("UTC")
+        hi = at.value; lo = (at - span).value
+        with self._lock:
+            self._load()
+            book = dict(self._pools.get(pool, {}))
+        ref, coins = [], 0
+        for _, (t, v) in book.items():
+            m = (t >= lo) & (t < hi)
+            if m.any():
+                ref.append(v[m]); coins += 1
+        if not ref:
+            return float("nan"), 0, 0
+        ref = np.concatenate(ref)
+        if coins < POOL_MIN_COINS or len(ref) < 50 or not np.isfinite(score):
+            return float("nan"), int(len(ref)), coins
+        r = float((ref < score).mean() + 0.5 * (ref == score).mean())
+        return r, int(len(ref)), coins
+
+    def coins(self, pool: str) -> int:
+        with self._lock:
+            self._load()
+            return len(self._pools.get(pool, {}))
+
+
+SCOREBOOK = ScoreBook(Path(__file__).resolve().parent / "data_cache" / "scorebook.v1.json")
+
+
+@dataclass
+class RestingOrder:
+    """One call's resting entry and what has happened to it since.
+
+    `i` indexes are positions in the bar arrays the policy was run on.
+    state: open | filled | target | stop | timeout | expired
+    """
+    placed: int                 # the call's bar (its close set the order)
+    long: bool
+    limit: float
+    stop: float                 # moved with the entry: same distance from it
+    target: float               # the call's level, unmoved
+    valid_to: int               # last bar the order may fill in
+    hold_to: int                # the call's window: a filled trade is out at this close
+    level: int                  # 3 strong, 2 medium, 1 small
+    need: float = float("nan")  # the price that must trade to count as filled
+                                # (the limit itself unless a study demands more)
+    state: str = "open"
+    fill: float = float("nan")
+    filled_at: int = -1
+    exit: float = float("nan")
+    closed_at: int = -1
+
+    @property
+    def active(self) -> bool:
+        return self.state in ("open", "filled")
+
+    def ret_pct(self) -> float:
+        """% from the fill to the exit, from the trade's side."""
+        s = 1.0 if self.long else -1.0
+        return s * (self.exit / self.fill - 1.0) * 100.0
+
+    def step(self, j: int, o: float, h: float, lo: float, c: float,
+             closed: bool = True) -> None:
+        """Advance through bar j. `closed=False` is the FORMING bar: it can
+        fill the order or touch a level, but it cannot time anything out,
+        because its close has not happened.
+
+        Same conventions as the research that chose the rule
+        (research/improve_4h.with_resting_entry): a fill is at the order's
+        price, or at the open if the bar gapped through it; in the fill bar
+        the stop counts and the target does not (OHLC cannot say whether the
+        high came before the dip); after that, a bar touching both is a stop.
+        """
+        long = self.long
+        if self.state == "open":
+            if j > self.valid_to:
+                self.state = "expired"; self.closed_at = j - 1
+                return
+            need = self.limit if not np.isfinite(self.need) else self.need
+            if (lo <= need) if long else (h >= need):
+                self.fill = min(self.limit, o) if long else max(self.limit, o)
+                self.filled_at = j
+                self.state = "filled"
+                if (lo <= self.stop) if long else (h >= self.stop):
+                    self.state, self.exit, self.closed_at = "stop", self.stop, j
+                return
+            if closed and j >= self.valid_to:
+                self.state = "expired"; self.closed_at = j
+            return
+        if self.state == "filled":
+            if (lo <= self.stop) if long else (h >= self.stop):
+                self.state, self.exit, self.closed_at = "stop", self.stop, j
+            elif (h >= self.target) if long else (lo <= self.target):
+                self.state, self.exit, self.closed_at = "target", self.target, j
+            elif closed and j >= self.hold_to:
+                self.state, self.exit, self.closed_at = "timeout", c, j
+
+
+def resting_orders(o, h, lo, c, atr, tp_pct, sl_pct, level, long: bool,
+                   offset_atr: float, valid_bars: int, hold_bars: int,
+                   min_level: int = 1, policy: str = "replace",
+                   through_atr: float = 0.0) -> List[RestingOrder]:
+    """One side of one coin, replayed as resting orders, one position at a time.
+
+    THE POLICY, which is what the app tells a person to do:
+      * a call (level >= `min_level`) places an order `offset_atr` ATRs better
+        than its close, good for `valid_bars` bars; the stop keeps the
+        distance it had from the close, the target stays on its level
+      * a newer call REPLACES an order that has not filled -- keep one order
+        resting, at the newest call's price
+      * once an order fills, that is the position: later calls are ignored
+        until it closes (target, stop, or the call's window running out)
+
+    Arrays are per bar; `level` is 0 where there is no call. Returns every
+    order placed, in order, with its outcome. The last one tells a dashboard
+    what is live now.
+    """
+    if policy == "ladder":
+        return _ladder(o, h, lo, c, atr, tp_pct, sl_pct, level, long,
+                       offset_atr, valid_bars, hold_bars, min_level)
+    n = len(c)
+    s = 1.0 if long else -1.0
+    out: List[RestingOrder] = []
+    cur: Optional[RestingOrder] = None
+    for j in range(n):
+        if cur is not None and cur.active and j > cur.placed:
+            cur.step(j, o[j], h[j], lo[j], c[j])
+        if level[j] >= min_level and np.isfinite(tp_pct[j]) and np.isfinite(sl_pct[j]) \
+                and np.isfinite(atr[j]) and atr[j] > 0:
+            if cur is not None and cur.state == "filled":
+                continue
+            if cur is not None and cur.state == "open":
+                cur.state = "replaced"; cur.closed_at = j
+            shift = s * offset_atr * atr[j]
+            entry = c[j]
+            cur = RestingOrder(
+                placed=j, long=long, limit=entry - shift,
+                stop=entry * (1 - s * sl_pct[j] / 100.0) - shift,
+                target=entry * (1 + s * tp_pct[j] / 100.0),
+                valid_to=j + valid_bars, hold_to=j + hold_bars, level=int(level[j]),
+                need=(entry - shift - s * through_atr * atr[j]) if through_atr else float("nan"))
+            out.append(cur)
+    return out
+
+
+def _new_order(j, long, offset_atr, c, atr, tp_pct, sl_pct, level, valid_bars, hold_bars):
+    s = 1.0 if long else -1.0
+    shift = s * offset_atr * atr[j]
+    return RestingOrder(placed=j, long=long, limit=c[j] - shift,
+                        stop=c[j] * (1 - s * sl_pct[j] / 100.0) - shift,
+                        target=c[j] * (1 + s * tp_pct[j] / 100.0),
+                        valid_to=j + valid_bars, hold_to=j + hold_bars, level=int(level[j]))
+
+
+def _ladder(o, h, lo, c, atr, tp_pct, sl_pct, level, long, offset_atr,
+            valid_bars, hold_bars, min_level) -> List[RestingOrder]:
+    """Every call's order stays open for its `valid_bars`; the FIRST to fill
+    is the position and the rest are cancelled. When several fill in one
+    bar, the one nearest the market filled first (a falling bar reaches the
+    highest buy first)."""
+    out: List[RestingOrder] = []
+    open_: List[RestingOrder] = []
+    live: Optional[RestingOrder] = None
+    for j in range(len(c)):
+        if live is not None:
+            live.step(j, o[j], h[j], lo[j], c[j])
+            if not live.active:
+                live = None
+        else:
+            filled = []
+            for od in open_:
+                if j > od.placed:
+                    od.step(j, o[j], h[j], lo[j], c[j])
+                    if od.state in ("filled", "stop"):
+                        filled.append(od)
+            if filled:
+                first = max(filled, key=lambda x: x.limit) if long else min(filled, key=lambda x: x.limit)
+                for od in open_:
+                    if od is not first and od.state in ("open", "filled", "stop"):
+                        od.state = "replaced"; od.closed_at = j
+                        od.fill = float("nan"); od.exit = float("nan")
+                live = first if first.state == "filled" else None
+                open_ = []
+            else:
+                open_ = [od for od in open_ if od.state == "open"]
+        if level[j] >= min_level and live is None and np.isfinite(tp_pct[j]) \
+                and np.isfinite(sl_pct[j]) and np.isfinite(atr[j]) and atr[j] > 0:
+            od = _new_order(j, long, offset_atr, c, atr, tp_pct, sl_pct, level, valid_bars, hold_bars)
+            open_.append(od); out.append(od)
+    return out
 
 
 def _structure_labels(judge, bars: pd.DataFrame):
@@ -455,7 +765,8 @@ def _structure_labels(judge, bars: pd.DataFrame):
     key = (len(bars), bars.index[-1],
            float(last["close"]), float(last["high"]), float(last["low"]),
            float(last.get("volume", 0.0)),
-           judge.cfg.side, judge.cfg.max_hold_bars)
+           judge.cfg.side, judge.cfg.max_hold_bars,
+           float(getattr(judge.cfg, "stop_buffer_atr", 0.0) or 0.0))
     hit = _LEVELS_CACHE.get(key)
     if hit is None:
         if len(_LEVELS_CACHE) > 16:
@@ -465,7 +776,7 @@ def _structure_labels(judge, bars: pd.DataFrame):
 
 
 def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
-                        a: "Analysis") -> "Analysis":
+                        a: "Analysis", symbol: Optional[str] = None) -> "Analysis":
     """One side's structure model over the newest row.
 
     WHY RANK AND NOT EXPECTED VALUE
@@ -503,8 +814,30 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
     cur = float(raw[-1])
     past = raw[:-1]
     past = past[np.isfinite(past)]
-    a.rank = (float((past < cur).mean() + 0.5 * (past == cur).mean())
-              if len(past) >= 50 else float("nan"))
+    pool = str(getattr(cfg, "rank_pool", "") or "")
+    pool_coins = 0
+    if pool:
+        # ONE BOOK PER SIDE. The long and the short model of a fit share its
+        # name, but they answer different questions on different scales, and
+        # the walk-forward ranked long against long and short against short.
+        # Sharing a key would also let one side's record overwrite the
+        # other's: same coin, same bars.
+        pool = f"{pool}|{cfg.side}"
+        # A POOLED MODEL IS RANKED AGAINST EVERY COIN'S READINGS. Record this
+        # coin's closed-bar window first (a provisional read passes no
+        # symbol and records nothing), then rank against the whole pool.
+        if symbol:
+            SCOREBOOK.record(pool, symbol, tail.index, raw)
+        step = (pd.Series(tail.index).diff().median()
+                if len(tail) > 1 else pd.Timedelta(hours=4))
+        a.rank, n_ref, pool_coins = SCOREBOOK.rank(pool, tail.index[-1], cur, TRAIL_BARS * step)
+        ranks = POOLED_RANKS
+        a.pooled = True
+    else:
+        a.rank = (float((past < cur).mean() + 0.5 * (past == cur).mean())
+                  if len(past) >= 50 else float("nan"))
+        n_ref = len(past)
+        ranks = STRUCTURE_RANKS
 
     a.entry = entry
     a.p_up = p if long else 1.0 - p          # p is P(this side's target first)
@@ -519,46 +852,217 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
         a.ev_short = ev
 
     a.strength = ""
-    for label, cut in STRUCTURE_RANKS:
+    for label, cut in ranks:
         if np.isfinite(a.rank) and a.rank >= cut:
             a.strength = label
             break
+    if pool and float(getattr(cfg, "entry_offset_atr", 0.0) or 0.0) > 0 \
+            and int(getattr(cfg, "entry_valid_bars", 0) or 0) > 0:
+        done = _resting_decision(a, cfg, bars, tail, raw, lab, pool, step, long, side,
+                                 p, pool_coins)
+        if done:
+            return a
     lvl = "the next swing" if long else "the last swing"
-    stop = "the last swing" if long else "the next swing"
+    buffered = float(getattr(cfg, "stop_buffer_atr", 0.0) or 0.0) > 0
+    if buffered:
+        stop = "just below the last swing" if long else "just above the next swing"
+    else:
+        stop = "at the last swing" if long else "at the next swing"
+    over = (f"the last 90 days' readings across {pool_coins} coins" if pool
+            else "the last 90 days'")
+    where = (f"pooled rank {a.rank:.3f} over {n_ref} readings from {pool_coins} coins"
+             if pool else f"rank {a.rank:.3f} over {n_ref} bars")
     if a.strength:
-        f = float(kelly_full(p, tp_pct, sl_pct))
-        a.size_pct = min(cfg.kelly_fraction * max(f, 0.05) * 100.0, cfg.max_position_pct)
+        if pool:
+            # the same size for every call: see Agent5Config.equal_size_pct
+            a.size_pct = min(float(cfg.equal_size_pct), cfg.max_position_pct)
+        else:
+            f = float(kelly_full(p, tp_pct, sl_pct))
+            a.size_pct = min(cfg.kelly_fraction * max(f, 0.05) * 100.0, cfg.max_position_pct)
         a.action = f"ENTER {side} NOW"
         a.side = side
         a.reason = (f"A {a.strength} signal — this reading is stronger than "
-                    f"{100 * a.rank:.0f}% of the last 90 days'. Target at {lvl} "
-                    f"({'+' if long else '-'}{tp_pct:.2f}%), stop at {stop}.")
-        a.diagnostic = (f"p(target first) {p:.3f}; rank {a.rank:.3f} over "
-                        f"{len(past)} bars; EV {ev:+.3f}% after costs; barriers on structure")
+                    f"{100 * a.rank:.0f}% of {over}. Target at {lvl} "
+                    f"({'+' if long else '-'}{tp_pct:.2f}%), stop {stop}.")
+        # NO EV FOR A POOLED CALL. p is calibrated on every bar together and
+        # does not know how near its target is (reward:risk alone ranks the
+        # outcome better than the model does), so p x payoff understates
+        # near targets and printed "BUY, strong, EV -1.3%" on exactly the
+        # calls the walk-forward found paid. The payoff is stated instead.
+        money = (f"target {tp_pct:+.2f}% / stop -{sl_pct:.2f}%" if pool
+                 else f"EV {ev:+.3f}% after costs")
+        a.diagnostic = (f"p(target first) {p:.3f}; {where}; {money}; "
+                        f"barriers on structure" + (f", stop {cfg.stop_buffer_atr:g} ATR past its level"
+                                                    if buffered else ""))
         return a
     a.action = "WAIT"
     if np.isfinite(a.rank):
         a.reason = (f"No {side.lower()} entry: this reading is weaker than "
-                    f"{100 * (1 - a.rank):.0f}% of the last 90 days'; it calls only "
-                    f"from the strongest {100 * (1 - STRUCTURE_RANKS[-1][1]):.0f}%.")
-        a.diagnostic = (f"p(target first) {p:.3f}; rank {a.rank:.3f} over "
-                        f"{len(past)} bars; EV {ev:+.3f}%; barriers on structure")
+                    f"{100 * (1 - a.rank):.0f}% of {over}; it calls only "
+                    f"from the strongest {100 * (1 - ranks[-1][1]):.0f}%.")
+        a.diagnostic = (f"p(target first) {p:.3f}; {where}; "
+                        + (f"target {tp_pct:+.2f}% / stop -{sl_pct:.2f}%" if pool else f"EV {ev:+.3f}%")
+                        + "; barriers on structure")
+    elif pool:
+        a.reason = (f"No {side.lower()} entry yet: this reading is ranked against every "
+                    f"coin's, and only {pool_coins} of them have reported since the model "
+                    f"was installed.")
+        a.diagnostic = (f"p(target first) {p:.3f}; pool has {pool_coins} coins, "
+                        f"needs {POOL_MIN_COINS}")
     else:
         a.reason = f"No {side.lower()} entry: not enough recent history to rank this reading."
         a.diagnostic = f"p(target first) {p:.3f}; fewer than 50 trailing scores"
+    if a.order_info.get("note"):
+        # an order or a trade ended at this close: say so first
+        a.reason = a.order_info["note"] + " " + a.reason
     return a
 
 
+LEVEL_NAMES = {3: "strong", 2: "medium", 1: "small"}
+
+
+def _px(v: float) -> str:
+    """A price with the digits that matter (the alerts' rule, see api/alerts)."""
+    try:
+        from api.alerts import _price_text
+        return _price_text(v)
+    except Exception:                           # the terminal monitor has no api package
+        return f"{v:,.6g}"
+
+
+def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame,
+                      raw, lab, pool: str, step, long: bool, side: str, p: float,
+                      pool_coins: int) -> bool:
+    """The card for a model that enters with a RESTING ORDER.
+
+    The recent calls of this side are replayed as the app tells a person to
+    trade them (`resting_orders`, the same code the research measured): one
+    order resting at the newest call's price, one position at a time. That
+    is done once per sensitivity -- strong calls only, medium and above,
+    small and above -- because a person on "strong" never saw the smaller
+    calls and must not be told they are in a trade one of them opened. The
+    card speaks for the strongest level with a live order or trade.
+
+    Returns False when nothing is live, and the ordinary per-bar card
+    (WAIT with its rank) applies -- with a line about an order that expired
+    or a trade that closed at the latest close, if one did.
+    """
+    k = float(cfg.entry_offset_atr); V = int(cfg.entry_valid_bars); H = int(cfg.max_hold_bars)
+    # twice the life of an order plus its trade, so a trade opened before
+    # the window cannot quietly block the calls inside it
+    m = min(2 * (H + V) + 2, len(tail))
+    times = tail.index[-m:]
+    bi = bars.index.get_indexer(times)
+    if (bi < 0).any() or m < 2:
+        return False
+    rr = np.asarray(raw, dtype=float)[-m:]
+    lev = np.zeros(m, int); ranks = np.full(m, np.nan)
+    for q in range(m):
+        r = a.rank if q == m - 1 else SCOREBOOK.rank(pool, times[q], float(rr[q]), TRAIL_BARS * step)[0]
+        ranks[q] = r
+        for n, (_, cut) in enumerate(POOLED_RANKS):
+            if np.isfinite(r) and r >= cut:
+                lev[q] = 3 - n
+                break
+    o = bars["open"].to_numpy(float)[bi]; h = bars["high"].to_numpy(float)[bi]
+    lo = bars["low"].to_numpy(float)[bi]; c = bars["close"].to_numpy(float)[bi]
+    from agent5.labels import _atr
+    atr = _atr(bars, cfg.atr_period).to_numpy(float)[bi]
+    tp = lab.tp_pct.to_numpy(float)[bi]; sl = lab.sl_pct.to_numpy(float)[bi]
+
+    gov = None; last = None
+    for ml in (3, 2, 1):
+        orders = resting_orders(o, h, lo, c, atr, tp, sl, lev, long, k, V, H, min_level=ml)
+        if orders and orders[-1].active:
+            gov = (ml, orders[-1]); break
+        if ml == 1 and orders:
+            last = orders[-1]
+
+    def when(j):
+        """A bar's close as the boundary it ends at: 23:59:59.999 reads as the
+        00:00 close, which is what a person looking at a chart calls it."""
+        if not 0 <= j < m:
+            return None
+        return (pd.Timestamp(times[j]) + pd.Timedelta(milliseconds=1)).floor("min")
+
+    word = "Buy" if long else "Sell"
+    if gov is None:
+        # nothing live. Say what just ended, if it ended at this close.
+        if last is not None and last.closed_at == m - 1 and last.state in (
+                "expired", "target", "stop", "timeout"):
+            placed = when(last.placed)
+            note = {
+                "expired": (f"The {word.lower()} order from the {placed:%a %H:%M} UTC close expired "
+                            f"without filling — cancel the limit at {_px(last.limit)} if it is "
+                            f"still resting."),
+                "target": f"The trade from the {placed:%a %H:%M} UTC order reached its target.",
+                "stop": f"The trade from the {placed:%a %H:%M} UTC order was stopped out.",
+                "timeout": f"The trade from the {placed:%a %H:%M} UTC order ran out of time and closes here.",
+            }[last.state]
+            a.order = last
+            a.order_info = {"state": last.state, "limit": last.limit, "stop": last.stop,
+                            "target": last.target, "placed_at": placed,
+                            "level": LEVEL_NAMES[last.level], "next": m, "note": note}
+        return False
+
+    ml, od = gov
+    placed = when(od.placed)
+    valid_until = placed + V * step
+    hold_until = placed + H * step
+    filled = od.state == "filled"
+    entry = od.fill if filled else od.limit
+    s = 1.0 if long else -1.0
+    tp_from = s * (od.target / entry - 1.0) * 100.0
+    sl_from = s * (od.stop / entry - 1.0) * 100.0
+    a.order = od
+    a.order_info = {"state": od.state, "limit": od.limit, "stop": od.stop, "target": od.target,
+                    "placed_at": placed, "valid_until": valid_until, "hold_until": hold_until,
+                    "fill": od.fill if filled else None,
+                    "filled_at": when(od.filled_at) if filled else None,
+                    "level": LEVEL_NAMES[ml], "rank": float(ranks[od.placed]), "next": m,
+                    "offset_atr": k, "last_close": float(c[-1])}
+    a.rank = float(ranks[od.placed])
+    a.strength = LEVEL_NAMES[ml]
+    a.side = side
+    a.entry = entry
+    a.tp_price, a.sl_price = od.target, od.stop
+    a.upper, a.lower = (od.target, od.stop) if long else (od.stop, od.target)
+    a.size_pct = min(float(cfg.equal_size_pct), cfg.max_position_pct)
+    a.ends_at = hold_until if filled else valid_until
+    over = f"the last 90 days' readings across {pool_coins} coins"
+    if filled:
+        a.action = "WAIT"
+        a.reason = (f"In the trade: the {word.lower()} order from the {placed:%a %H:%M} UTC close "
+                    f"filled at {_px(od.fill)}. It runs to the target {_px(od.target)} "
+                    f"({tp_from:+.2f}%) or the stop {_px(od.stop)} ({sl_from:+.2f}%), or closes "
+                    f"at {hold_until:%a %H:%M} UTC. No new entry on this coin until it does.")
+    else:
+        a.action = f"ENTER {side} NOW"
+        a.reason = (f"A {a.strength} signal — the {placed:%a %H:%M} UTC reading was stronger than "
+                    f"{100 * a.rank:.0f}% of {over}. {word} with a limit order at "
+                    f"{_px(od.limit)} ({k:g} ATR {'under' if long else 'over'} that close), good "
+                    f"until {valid_until:%a %H:%M} UTC. Target {_px(od.target)} ({tp_from:+.2f}%), "
+                    f"stop {_px(od.stop)} ({sl_from:+.2f}%), both from the limit.")
+    a.diagnostic = (f"p(target first) {p:.3f}; pooled rank {a.rank:.3f} at the "
+                    f"{placed:%a %H:%M} close; order {od.state}; resting {k:g} ATR, "
+                    f"{V} bars; stop moved with the entry")
+    return True
+
+
 def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
-             name: str, opened_at, ends_at, bars_left: int) -> Analysis:
-    """Run one frozen model over the newest row and fill in an Analysis."""
+             name: str, opened_at, ends_at, bars_left: int,
+             symbol: Optional[str] = None) -> Analysis:
+    """Run one frozen model over the newest row and fill in an Analysis.
+
+    `symbol` is passed only for CLOSED-bar reads: a pooled structure model
+    records them in `SCOREBOOK`, and a provisional read must not."""
     from agent5.decision import expected_value_pct, kelly_full
     from agent5.labels import triple_barrier
 
     a = Analysis(name=name, opened_at=opened_at, ends_at=ends_at,
                  bars_left=bars_left)
     if getattr(judge.cfg, "geometry", "atr") == "structure":
-        return _evaluate_structure(judge, bars, X, a)
+        return _evaluate_structure(judge, bars, X, a, symbol=symbol)
 
     p_up = float(judge.predict_proba(X.iloc[[-1]])[0])
     lab = triple_barrier(bars, judge.cfg)
@@ -974,11 +1478,13 @@ class Monitor:
             analyses.append(evaluate(
                 self.h1, bars, X, "ANALYSIS A",
                 opened_at=last_close - self.delta,
-                ends_at=last_close + n1 * self.delta, bars_left=n1))
+                ends_at=last_close + n1 * self.delta, bars_left=n1,
+                symbol=self.symbol))
         analyses.append(evaluate(
             self.h2, bars, X, "ANALYSIS B" if not restarted else "ANALYSIS A (new)",
             opened_at=last_close,
-            ends_at=last_close + n2 * self.delta, bars_left=n2))
+            ends_at=last_close + n2 * self.delta, bars_left=n2,
+            symbol=self.symbol))
 
         for a in analyses:
             L.append("")
@@ -1031,11 +1537,11 @@ class Monitor:
             (evaluate(self.h1, bars, X, "ANALYSIS A",
                       opened_at=last_close - self.delta,
                       ends_at=last_close + self.hold1 * self.delta,
-                      bars_left=self.hold1), self.h1),
+                      bars_left=self.hold1, symbol=self.symbol), self.h1),
             (evaluate(self.h2, bars, X, "ANALYSIS B",
                       opened_at=last_close,
                       ends_at=last_close + self.hold2 * self.delta,
-                      bars_left=self.hold2), self.h2),
+                      bars_left=self.hold2, symbol=self.symbol), self.h2),
         ]
 
         merged = prov_X = None

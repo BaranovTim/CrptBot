@@ -82,6 +82,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import pandas as pd
+
 from core import utc_now
 
 log = logging.getLogger(__name__)
@@ -206,6 +208,18 @@ def _usd(v) -> str:
     return f"${x:,.0f}"
 
 
+def _hhmm(iso) -> str:
+    """'Wed 04:00 UTC' from an ISO time, or '' when there is none."""
+    if not iso:
+        return ""
+    try:
+        t = pd.Timestamp(iso)
+        t = t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+        return f"{t:%a %H:%M} UTC"
+    except (ValueError, TypeError):
+        return ""
+
+
 def _price_text(v) -> str:
     """A price with enough digits to act on. Mirrors `format.dart`'s
     `priceText`, thresholds and trimming included.
@@ -266,6 +280,9 @@ class AlertEngine:
         # iteration order.
         self._last_action: Dict[tuple, Optional[str]] = {}
         self._last_signal_bar: Dict[tuple, Optional[str]] = {}
+        # the open resting order last seen per pair, (placed_at, limit), so a
+        # re-quote -- the same call carrying on at a new price -- is noticed
+        self._last_order: Dict[tuple, Optional[tuple]] = {}
         self._spiked_bar: Dict[tuple, Optional[str]] = {}
         self._primed = False
         self._pairs = pairs
@@ -386,7 +403,7 @@ class AlertEngine:
         """Look once. Returns only what is new."""
         fresh: List[Alert] = []
         for probe in (self._signal, self._whales, self._news, self._calendar,
-                      self._smart):
+                      self._smart, self._momentum):
             try:
                 fresh.extend(probe())
             except Exception as e:                 # one dead feed must not
@@ -468,6 +485,8 @@ class AlertEngine:
                 for k, v in raw.get("last_signal_bar", {}).items()}
             self._spiked_bar = {tuple(k.split("|")): v
                                 for k, v in raw.get("spiked_bar", {}).items()}
+            self._last_order = {tuple(k.split("|")): (tuple(v) if v else None)
+                                for k, v in raw.get("last_order", {}).items()}
             self._log = [_alert_from_json(a) for a in raw.get("log", [])]
             self._primed = bool(raw.get("primed", False))
             self._smart_cursor = int(raw.get("smart_cursor", 0) or 0)
@@ -494,6 +513,8 @@ class AlertEngine:
                                     for k, v in self._last_signal_bar.items()},
                 "spiked_bar": {"|".join(k): v
                                for k, v in self._spiked_bar.items()},
+                "last_order": {"|".join(k): (list(v) if v else None)
+                               for k, v in self._last_order.items()},
                 "log": [a.to_json() for a in self._log[-MAX_LOG:]],
                 "smart_cursor": self._smart_cursor,
             }))
@@ -521,8 +542,21 @@ class AlertEngine:
         action, bar = rec["action"], d["last_closed_bar"]
         prev = self._last_action.get(key)
         self._last_action[key] = action
+        order = rec.get("order") or {}
+        prev_order = self._last_order.get(key)
+        self._last_order[key] = (order.get("placed_at"), order.get("limit")) if order.get("state") == "open" else None
 
         out: List[Alert] = []
+
+        # A RESTING ORDER THAT MOVED. The call persisted into a new close, so
+        # its order is re-quoted at the new close's price. Acting only on a
+        # call's FIRST order gave up most of the gain in the research
+        # (research/QUANT.md, the correction under round three), so the move
+        # is worth a buzz -- to the people the original order reached.
+        if (prev == action and action in ("BUY", "SELL") and order.get("state") == "open"
+                and prev_order is not None and prev_order[0] != order.get("placed_at")):
+            out.append(self._order_alert(d, iv, rec, order, "moved"))
+            return out
 
         # NO SPIKE ALERT. See the module docstring: a 2% move inside a bar is
         # a state of the market, not a change in what to do about it, and it
@@ -548,6 +582,11 @@ class AlertEngine:
         if self._last_signal_bar.get(key) == bar:
             return out                              # one signal per bar, max
         self._last_signal_bar[key] = bar
+
+        if action == "FLAT" and order.get("state") == "expired":
+            # not an exit: nobody is in a trade an unfilled order never opened
+            out.append(self._order_alert(d, iv, rec, order, "expired"))
+            return out
 
         ev = rec.get("ev")
         size = rec.get("size_pct")
@@ -581,6 +620,10 @@ class AlertEngine:
             # "take profit" invited setting one, which the measured rule
             # says not to do (agent5/trail.py).
             trailed = iv == "1d"
+            if order.get("state") == "open" and order.get("limit") is not None:
+                # the entry is an ORDER, not the price: say where and until when
+                lines.append(f"{'Buy' if action == 'BUY' else 'Sell'} limit "
+                             f"{_price_text(order['limit'])}, good until {_hhmm(order.get('valid_until'))}")
             if tp is not None:
                 lines.append((f"Next level {_price_text(tp)}" if trailed
                               else f"Take profit {_price_text(tp)}") + (
@@ -608,6 +651,64 @@ class AlertEngine:
                    "from": str(prev), "to": action,
                    "context": " · ".join(c["text"] for c in ctx)}))
         return out
+
+    def _order_alert(self, d: dict, iv: str, rec: dict, order: dict, what: str) -> "Alert":
+        """An order moved to a new price, or expired without filling."""
+        sym = d["symbol"]
+        word = "Buy" if rec.get("action") == "BUY" or (order.get("target") or 0) > (order.get("stop") or 0) else "Sell"
+        if what == "moved":
+            title = f"{sym}: {iv}; {word.lower()} order moved"
+            lines = [str(rec.get("strength") or "").upper(),
+                     f"Move the {word.lower()} limit to {_price_text(order.get('limit'))}, "
+                     f"good until {_hhmm(order.get('valid_until'))}",
+                     f"Take profit {_price_text(order.get('target'))}",
+                     f"Stop loss {_price_text(order.get('stop'))}"]
+            severity = "medium"
+        else:
+            title = f"{sym}: {iv}; {word.lower()} order expired"
+            lines = [f"The {word.lower()} limit at {_price_text(order.get('limit'))} did not fill.",
+                     "Cancel it if it is still resting."]
+            severity = "low"
+        return Alert(
+            id=_hash("order", sym, iv, what, str(order.get("placed_at")), str(order.get("limit"))),
+            kind="signal", severity=severity, symbol=sym, interval=iv,
+            strength=str(rec.get("strength") or order.get("level") or ""),
+            title=title, body="\n".join(l for l in lines if l),
+            at=utc_now(), detected_at=utc_now(),
+            extra={"bar": d["last_closed_bar"], "window_ends": str(rec.get("window_ends", "")),
+                   "from": rec.get("action"), "to": rec.get("action"), "order": what})
+
+    def _momentum(self) -> List[Alert]:
+        """This week's momentum picks, once, when the week turns over.
+
+        Deduped by the week (the Alert id), so every refresh after Monday's
+        first one is silent, and a restart mid-week does not re-send it. A
+        brand-new engine's first refresh is swallowed by `refresh` itself.
+        """
+        getter = getattr(self.svc, "momentum", None)
+        if getter is None:
+            return []
+        m = getter()
+        if not m.get("available") or not m.get("longs"):
+            return []
+        week = str(m.get("week_start", ""))[:10]
+
+        def names(rows):
+            return ", ".join(f"{r['symbol'].replace('USDT', '')} {r['ret_30d']:+.0f}%" for r in rows)
+
+        body = "\n".join([
+            f"Long: {names(m['longs'])}",
+            f"Short: {names(m['shorts'])}",
+            "Best and worst 30-day returns of the fifteen; held until next Monday. "
+            "Spot: the longs alone.",
+        ])
+        return [Alert(id=_hash("momentum", week), kind="momentum", severity="medium",
+                      symbol="", interval="1w", strength="",
+                      title=f"Momentum picks, week of {week}", body=body,
+                      at=utc_now(), detected_at=utc_now(),
+                      extra={"week_start": m.get("week_start"),
+                             "longs": [r["symbol"] for r in m["longs"]],
+                             "shorts": [r["symbol"] for r in m["shorts"]]})]
 
     def _recent_context(self) -> List[dict]:
         """Headlines and filings from the last few hours, newest first."""

@@ -195,7 +195,9 @@ def test_dashboard_payload_survives_strict_json():
     json.dumps(d, allow_nan=False)             # the actual guarantee
 
     assert d["status"]["trades"] is False, "the app claimed the bot trades"
-    assert d["recommendation"]["action"] in ("BUY", "SELL", "FLAT", "STALE")
+    # WAIT: a call the forming bar settled, or a trade a resting order
+    # opened (monitor._resting_decision) -- both are real answers
+    assert d["recommendation"]["action"] in ("BUY", "SELL", "FLAT", "STALE", "WAIT")
     assert d["calibration_note"], "the honesty note went missing"
     for a in d["analyses"]:
         assert a["p_up"] is None or 0.0 <= a["p_up"] <= 1.0

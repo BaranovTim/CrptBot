@@ -172,20 +172,68 @@ const List<HowToStep> howToSteps = [
           'matters.',
       _violet,
       'THE SHAPE'),
+  // THE POOLED 4h MODEL. research/wf4h.py: refit every six months over
+  // three years, scored as an account with fees and funding paid.
   HowToStep(
       '10',
-      '4h: levels, not distances',
-      "Take profit and stop on 4h sit on the chart's levels — the next "
-          'confirmed swing ahead and the last one behind — and a call comes '
-          "only when the model's confidence is in the top tenth of its last "
-          'ninety days on that coin. Both were measured on a year the model '
-          'never saw. The levels are prices, so a fast bar can reach one '
-          'before it closes: the card then reads WAIT and says which level '
-          'went. A target already behind the price is not one to chase.',
+      '4h: one model, the best of the whole market',
+      'Every 4h call comes from one model trained on all fifteen coins, and '
+          "each reading is ranked against every coin's readings from the last "
+          'ninety days — a STRONG call is in the top 3% of the market, not of '
+          'one coin. The target sits on the next confirmed swing; the stop '
+          'sits half an ATR past the last one, not on it, because a stop '
+          "exactly on a swing is where everyone's stop is, and those were "
+          'the trades that got swept. Refitted every six months over three '
+          'years, this made money in all six half-years; a model per coin '
+          'did in two. Between closes the card follows the order: IN THE '
+          'TRADE once the price trades through it, and the outcome when the '
+          'trade reaches its target or stop.',
       Obsidian.amber,
       'THE TIMEFRAMES'),
   HowToStep(
       '11',
+      '4h: the same size for every call',
+      'A 4h call suggests the same share of your account every time. Sizing '
+          'by the payoff — which quarter-Kelly does — put the biggest positions '
+          'on the tight-stop trades, and those were the ones that lost; the '
+          'same size for every call beat it in every test. The share itself '
+          'is a default, not a measurement: pick one you can hold through a '
+          'run of stops.',
+      Obsidian.primary,
+      'THE SIZE'),
+  // THE ENTRY. research/improve_4h.py and monitor.resting_orders.
+  HowToStep(
+      '12',
+      '4h: enter with a limit order, not at the market',
+      'A 4h call comes with an order: a limit half an ATR better than the '
+          'close that made the call, good for 16 hours. The stop moves with '
+          'it — it keeps its distance from where you get in — and the target '
+          'stays on its level. If the order never fills there is no trade; '
+          'about a third do not. While a call carries on, each new close '
+          'moves the order to the new price and the app tells you: keep one '
+          'order, at the newest price. Once it fills you are in, and later '
+          'calls on that coin wait until the trade ends. Over three years it '
+          'doubled what a call made per trade, +0.24% to +0.53%, and won 61% '
+          'of the time against 71% at the market: fewer wins, bigger ones. '
+          'It is the habit that separated the profitable big traders from '
+          'the losing ones.',
+      _cyan,
+      'THE ENTRY'),
+  // THE ROTATION. api/momentum.py, research/new_strategies.py.
+  HowToStep(
+      '13',
+      'The momentum rotation is a weekly basket',
+      'Separate from the calls, under them on Market. Every Monday 00:00 '
+          'UTC the fifteen coins are ranked by their 30-day return: long the '
+          'top three, short the bottom three, equal size, held until the '
+          "next Monday. Rebalanced at each of the week's 42 four-hour slots "
+          'from 2021 to 2026, it made money at every one — Sharpe 0.6 to 1.3, '
+          'median 1.0. On spot, the three longs alone beat holding every '
+          'coin, by less. Some weeks lose; it paid over years, not weeks.',
+      _violet,
+      'THE ROTATION'),
+  HowToStep(
+      '14',
       'Smart money confirms, it does not decide',
       'The followed traders\' entries are not an input to the model — tested, '
           'they add nothing there, because they are silent on nine bars in '

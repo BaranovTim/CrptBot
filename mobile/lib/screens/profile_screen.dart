@@ -660,12 +660,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   static const _levels = <String, (String, String)>{
-    'strong': ('Strong only', 'Entries with a real margin over costs. '
-        'Fewest calls, and the ones the model is most confident in.'),
-    'medium': ('Medium and above', 'A thinner margin. More calls, each with '
-        'less room for the model to be wrong.'),
-    'small': ('Anything profitable', 'Every entry whose expected value clears '
-        'fees at all. Most calls, thinnest edge.'),
+    'strong': ('Strong only', 'On 4h, readings in the top 3% across all '
+        'fifteen coins — the rule that made money in every test. Fewest calls.'),
+    'medium': ('Medium and above', 'The top 5% on 4h. More calls, weaker on '
+        'average.'),
+    'small': ('Anything that ranks', 'The top 10% on 4h. Most calls; tested '
+        'positive, but well behind strong.'),
   };
 
   static const _newsNames = <String, String>{
@@ -1777,6 +1777,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
               activeThumbColor: Obsidian.primary,
               onChanged: (_) async {
                 await Muted.instance.toggleKind('smart');
+                unawaited(PushDelivery.instance.sync(widget.client));
+                if (mounted) setState(() {});
+              },
+            ),
+          ),
+          _tile(
+            icon: Icons.autorenew_rounded,
+            title: 'Momentum rotation',
+            subtitle: _mutedLoaded && Muted.instance.isKindMuted('momentum')
+                ? 'Off'
+                : "On — once a week, Monday: the three coins with the best "
+                    '30-day return to hold long and the three worst to hold '
+                    'short until the next Monday.',
+            trailing: Switch(
+              value: !(_mutedLoaded && Muted.instance.isKindMuted('momentum')),
+              activeThumbColor: Obsidian.primary,
+              onChanged: (_) async {
+                await Muted.instance.toggleKind('momentum');
                 unawaited(PushDelivery.instance.sync(widget.client));
                 if (mounted) setState(() {});
               },

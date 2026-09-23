@@ -39,6 +39,7 @@ class LogEntryCard extends StatefulWidget {
     this.suggestedSide,
     this.suggestedTp,
     this.suggestedSl,
+    this.suggestedEntry,
     this.onLogged,
   });
 
@@ -53,6 +54,12 @@ class LogEntryCard extends StatefulWidget {
   /// position for the toggle. It is a default, not a recommendation to act.
   final String? suggestedSide;
   final double? suggestedTp, suggestedSl;
+
+  /// The call's resting order, when it enters with one: the entry price
+  /// starts there rather than at the market, since that is where the trade
+  /// the levels describe begins. MARKET beside the field still fills in the
+  /// live price for someone who bought at the market anyway.
+  final double? suggestedEntry;
   final VoidCallback? onLogged;
 
   @override
@@ -74,7 +81,8 @@ class _LogEntryCardState extends State<LogEntryCard> {
   void initState() {
     super.initState();
     _size = TextEditingController();
-    _entry = TextEditingController(text: priceInput(widget.livePrice));
+    _entry = TextEditingController(
+        text: priceInput(widget.suggestedEntry ?? widget.livePrice));
     _tp = TextEditingController(text: priceInput(widget.suggestedTp));
     _sl = TextEditingController(text: priceInput(widget.suggestedSl));
     _side = widget.suggestedSide == 'SHORT' ? 'SHORT' : 'LONG';
