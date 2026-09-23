@@ -352,3 +352,23 @@ rsync -az data_cache/flow_cache/ bot:/root/tradingbot/data_cache/flow_cache/
 
 Measured on the droplet, warm-up of 33 pairs: **1,056s → 258s**, per-pair
 builds 60–180s → 4–14s, API at rest 0.02% CPU and 182 MB.
+
+## Round four (2026-09-23): bagged 4h models, the live record, the rotation's data
+
+* **The 4h models are five-seed bags** (`train_pooled_4h.py`, `BAG_SEEDS`), 3.7 MB
+  a file instead of 0.7 MB. The server loads each distinct model file once
+  and shares it across coins (`monitor.load_shared_judge`), so ten pairs
+  hold ~19 MB of trees, less than the single-seed models did per coin.
+  A retrain mints a new `rank_pool`: fill its score book on the laptop from
+  CURRENT bars (pull the server's `data_cache/live/*/4h` first) and upload
+  `data_cache/scorebook.v1.json` with the models, or the first hours rank
+  against a stale pool.
+* **The live record** is `data_cache/ledger/orders.v1.json` (a volume, so it
+  survives deploys). It only counts orders placed after the installed
+  pool's timestamp; a retrain starts a new stretch of it, it does not erase
+  the old one.
+* **The momentum rotation fetches its own data**: Binance's public daily
+  bars for the 45 most-traded USDT perpetuals, six at a time, every six
+  hours (`TradingService._momentum_market`). No key. If Binance cannot be
+  reached it falls back to the followed coins' bar stores and says so in
+  `universe_rule`.

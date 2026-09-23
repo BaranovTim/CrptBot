@@ -56,6 +56,13 @@ def data():
         C = panel("close"); V = panel("quote_volume")
         keep = [c for c in C.columns if c not in STABLE]
         C, V = C[keep], V[keep]
+        # Binance's archive is missing a few days (Feb and Apr 2022) for many
+        # coins -- not BTC or ETH. Unfilled, the 60-day history rule dropped
+        # SOL, XRP, NEAR and LUNA from the universe for two months. Interior
+        # gaps up to 5 days are carried; never past a coin's last real close,
+        # so a delisted coin does not linger at a frozen price.
+        alive = C.bfill().notna()
+        C = C.ffill(limit=5).where(alive)
         _P["C"], _P["V"] = C, V
         _P["R"] = np.log(C).diff()
     return _P["C"], _P["V"], _P["R"]
@@ -84,6 +91,31 @@ def signal(t: pd.Timestamp, coins: list, kind: str) -> pd.Series:
         lb = int(kind[3:].split("s")[0]); skip = int(kind.split("s")[1]) if "s" in kind[3:] else 0
         end = prev - pd.Timedelta(days=skip)
         return c.loc[end] / c.loc[end - pd.Timedelta(days=lb)] - 1
+    if kind.startswith("high"):                         # high20, high55: distance to the N-day high
+        n = int(kind[4:])
+        return c.loc[prev] / c.loc[prev - pd.Timedelta(days=n - 1):prev].max() - 1
+    if kind.startswith("flow"):                         # flow7: net taker share, net of past returns
+        n = int(kind[4:])
+        tq = _P.get("TQ")
+        if tq is None:
+            tq = _P["TQ"] = panel("taker_buy_quote_volume")
+        _, V, _ = data()
+        win = slice(prev - pd.Timedelta(days=n - 1), prev)
+        nf = (2 * tq[coins].loc[win].sum() - V[coins].loc[win].sum()) / V[coins].loc[win].sum()
+        r7 = c.loc[prev] / c.loc[prev - pd.Timedelta(days=7)] - 1
+        r30 = c.loc[prev] / c.loc[prev - pd.Timedelta(days=30)] - 1
+        ok = nf.notna() & r7.notna() & r30.notna() & np.isfinite(nf)
+        if ok.sum() < 8:
+            return nf * np.nan
+        A = np.c_[np.ones(ok.sum()), r7[ok], r30[ok]]
+        beta, *_ = np.linalg.lstsq(A, nf[ok].to_numpy(float), rcond=None)
+        out = nf * np.nan
+        out[ok] = nf[ok] - A @ beta                    # the flow the returns do not explain
+        return out
+    if kind.startswith("combo"):                        # combo: mean cross-sectional rank of mom15 and flow7
+        a = signal(t, coins, "mom15").rank(pct=True)
+        b = signal(t, coins, "flow7").rank(pct=True)
+        return (a + b) / 2
     if kind == "radj30":
         r30 = c.loc[prev] / c.loc[prev - pd.Timedelta(days=30)] - 1
         return r30 / R[coins].loc[prev - pd.Timedelta(days=29):prev].std()
@@ -171,7 +203,7 @@ def main() -> int:
     show("top 50, 5/5, 30d", n=50, k=5)
     show("top 50, quintiles, 30d", n=50, k=0.2)
     print("SIGNAL (top 30, 5/5)")
-    for kind in ("mom15", "mom30s2", "mom60", "radj30", "resid30"):
+    for kind in ("mom15", "mom30s2", "mom60", "radj30", "resid30", "high20", "high55"):
         show(kind, n=30, k=5, kind=kind)
     print("WEIGHTS AND EXPOSURE (top 30, 5/5, 30d)")
     show("inverse-vol weights", n=30, k=5, weights="invvol")

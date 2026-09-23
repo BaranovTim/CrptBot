@@ -1,13 +1,15 @@
 /// The weekly momentum rotation, under the calls list on the Market screen.
 ///
 /// A DIFFERENT KIND OF RECOMMENDATION from a 4h call, and it says so: not
-/// one coin now, but a basket held for a week -- long the three coins with
-/// the best 30-day return, short the three with the worst, rebalanced every
-/// Monday 00:00 UTC. Measured (research/new_strategies.py): rebalanced at
-/// every one of the week's 42 four-hour slots from 2021 to 2026 it made
-/// money at all of them, Sharpe 0.62-1.31, median 1.00. The panel carries
-/// that number and its caveats in a sheet, because a list of six coins with
-/// no evidence behind it reads as a tip.
+/// one coin now, but a basket held for a week -- among the thirty
+/// most-traded perpetuals, long the five ranking best on 15-day momentum and
+/// a week of net taker buying together, short the five ranking worst,
+/// rebalanced every Monday 00:00 UTC. Measured honestly (research/
+/// momentum_pit.py, every perpetual as it stood at the time, dead coins
+/// included): Sharpe ~1.0, worst weeks -15% to -18%. The first version's
+/// 1.0 was mostly survivorship (0.3-0.4 honestly). The panel carries the
+/// numbers and caveats, because a list of coins with no evidence behind it
+/// reads as a tip.
 library;
 
 import 'package:flutter/material.dart';
@@ -60,8 +62,8 @@ class MomentumPanel extends StatelessWidget {
         if (d == null)
           _note('Reading this week\'s rotation…')
         else if (!d.available)
-          _note('Not enough coins with thirty days of prices to rank this '
-              'week. The rotation needs at least eight.')
+          _note('Not enough coins with enough history to rank this week. '
+              'The rotation needs at least eight.')
         else
           GlassPanel(
             padding: const EdgeInsets.fromLTRB(15, 14, 15, 12),
@@ -96,9 +98,9 @@ class MomentumPanel extends StatelessWidget {
                 _side('SHORT', d.shorts, Obsidian.red),
                 const SizedBox(height: 10),
                 Text(
-                    'Best and worst ${d.lookbackDays}-day returns of the '
-                    '${d.universe} coins, equal size, held for the week. '
-                    'On spot, the longs alone.',
+                    'Ranked on ${d.signal.isEmpty ? '${d.lookbackDays}-day momentum' : d.signal}, '
+                    'across ${d.universeRule.isEmpty ? 'the ${d.universe} coins' : d.universeRule}. '
+                    'Equal size, held for the week. Big weeks both ways: size it small.',
                     style: Obsidian.body(color: Obsidian.outline, size: 11)),
               ],
             ),
@@ -125,14 +127,18 @@ class MomentumPanel extends StatelessWidget {
               children: [
                 for (final p in picks)
                   GestureDetector(
-                    onTap: onOpen == null ? null : () => onOpen!(p.symbol),
+                    // only coins the app follows have a chart to open
+                    onTap: onOpen == null || !p.followed
+                        ? null
+                        : () => onOpen!(p.symbol),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 9, vertical: 5),
                       decoration: BoxDecoration(
-                        color: tone.withValues(alpha: 0.10),
+                        color: tone.withValues(alpha: p.followed ? 0.10 : 0.05),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: tone.withValues(alpha: 0.28)),
+                        border: Border.all(
+                            color: tone.withValues(alpha: p.followed ? 0.28 : 0.14)),
                       ),
                       child: Text(
                           '${p.short} ${p.ret30d >= 0 ? '+' : '−'}${p.ret30d.abs().toStringAsFixed(0)}%',
@@ -204,16 +210,25 @@ class MomentumPanel extends StatelessWidget {
   }
 
   static const _why = [
-    'Coins that rose most over the last month tend to keep outperforming '
-        'the ones that fell most, for a while. It is the one crypto factor '
-        'the research literature rates strong, and it held here.',
-    'Every Monday 00:00 UTC the fifteen coins are ranked by their 30-day '
-        'return. Long the top three, short the bottom three, equal size, '
-        'held until the next Monday. The short side needs a futures account; '
-        'on spot, the longs alone still beat holding every coin, by less.',
-    'It is a basket, not a single call: some weeks lose. It made money over '
-        'years, not every week.',
-    'The fifteen coins are today\'s list, which flatters any strategy a '
-        'little -- so it was also tested on the ten coins already big in 2021.',
+    'Two things, ranked together. MOMENTUM: coins that rose most over the '
+        'last two weeks tend to keep outperforming the ones that fell most, '
+        'for a while. FLOW: coins whose buyers were the more aggressive side '
+        'all week -- more than their price move explains -- tend to follow '
+        'through. The second is the footprint big buyers leave in public '
+        'data; the two barely overlap, which is why together they are '
+        'steadier than either.',
+    'Every Monday 00:00 UTC the thirty most-traded Binance perpetuals are '
+        'ranked on both, and the two ranks averaged. Long the top five, '
+        'short the bottom five, equal size, held until the next Monday. The '
+        'short side needs a futures account. Coins this app does not follow '
+        'are shown without a chart.',
+    'Tested on every perpetual as it stood at the time, dead coins included, '
+        'Jan 2021 - Aug 2026: Sharpe 0.9 on the years that chose the rule and '
+        '1.1 on the two after; momentum alone 0.45 and 0.6, flow alone 0.6 '
+        "and 0.6. The worst weeks lost 15-18%. The first version -- 30-day "
+        "momentum on today's fifteen coins -- looked like 1.0, but a coin is "
+        "on today's list partly because it went up; honestly it was 0.3-0.4.",
+    'A basket held for years, not a call: it makes money slowly and loses '
+        'in lumps. Size it small.',
   ];
 }

@@ -694,3 +694,164 @@ median is the expectation.
   selection ran as a thread in the API and peaked above a gigabyte; it now
   runs as a child process (`smartmoney.run_select`) that asks the kernel to
   kill it first, reading fills slimmed to the eleven fields the stats use.
+
+## Round four: what big players leave behind, the noise floor, and an honest rotation (2026-09-23)
+
+`research/footprints.py` (feature blocks), `research/decision_4h.py` (order
+handling), `research/universe.py` + `research/momentum_pit.py` (the rotation
+on every perpetual Binance has listed), `improve_4h.served` (any variant's
+calls traded exactly as the server trades them -- `monitor.resting_orders` --
+which reproduces the shipped figures, 2.22/2.22 and +246%, to the digit).
+Same protocol: chosen on the four development half-years, confirmed on the
+two holdout ones. Two outside surveys (other bots' measured accuracy; how
+big players trade) were checked source by source before use -- figures
+marked unverified below were not used in the app.
+
+### First, the noise floor
+
+The shipped 4h model, refit with nothing changed but LightGBM's seed:
+
+| seed | Sharpe dev / hold (served) | six half-years |
+|---|---|---|
+| 7 (shipped) | 2.22 / 2.22 | +246% |
+| 11 | 1.82 / 1.40 | +185% |
+| 13 | 1.81 / 2.64 | +235% |
+| 17 | 2.33 / 1.59 | +232% |
+| 19 | 2.35 / 1.71 | +238% |
+| **mean** | **2.11 / 1.91** | **+227%** |
+
+A single fit's Sharpe moves by ±0.3 (dev) and ±0.5 (holdout) on the seed
+alone -- the top 3% of a rank is exactly where fit noise lands. Every
+single-seed row in this file should be read against that, and several
+earlier "wins" of 0.2-0.4 were inside it. From here on, candidates were
+compared BAGGED against BAGGED.
+
+### What shipped from this round
+
+* **Seed bagging** (`Agent5Config.bag_seeds`, `agent5.model.SeedBag`): the
+  final fit under five seeds, averaged. **2.42 / 1.97, +252%** -- above the
+  average seed on both periods and above every seed on the total. It is
+  variance reduction, not a new edge; its value is that the live system no
+  longer depends on which seed it drew. Five times the trees, so the server
+  now loads each distinct model file once and shares it
+  (`monitor.load_shared_judge`): 10 pairs cost 19 MB instead of 84 MB.
+* **Orders good for 6 bars, not 4.** Re-tuned on the served policy (4 was
+  picked on the optimistic replay). Dev improved for all four models tried
+  (+0.23 to +0.44), holdout for three of four (−0.03 to +0.18), totals +17
+  to +38 points. 8 bars: no better on dev, worse on holdout. The offset
+  stays 0.5 ATR: 0.25, 0.75, 1.0 and a limit AT the level were all worse.
+  Together: **2.65 / 1.94, +269%**, max drawdown 33% / 15%.
+* **The live record** (`api/ledger.py`, `/api/record`, the Market panel):
+  every order the server places, per sensitivity, and how each trade ends,
+  net of fees -- beside the walk-forward's expectation per level. Orders
+  placed before a model's install time are excluded (their ranks rest on
+  the back-filled, in-sample score book).
+* **Fill and trade-end notifications.** A fill turns BUY into WAIT and a
+  trade ending turns WAIT into FLAT; neither is a call's entry or exit, so
+  neither ever notified. Now both do.
+
+What a person taking EVERY strong call should expect (per trade, no cap on
+open positions, net): win 61%, +0.44% overall; **58%, +0.16% on the last
+two half-years**. The account figures above hold at most three positions
+and did better per trade (+0.43% holdout) -- a pattern this round could not
+pin to crowding (returns by number of open trades flip sign between models).
+
+### Closed this round
+
+| tried | result | why it is closed |
+|---|---|---|
+| order flow from the klines (net taker share 1-18 bars, divergence from price, trade count, trade size) | AUC ±0.005; served 1.80 / 1.90 | inside the noise floor; the pooled model already reads location, and whole-bar flow adds nothing to it |
+| sweeps of the trade's own levels (depth, flow on the sweep bar, reclaim) | 2.42 / 1.81 | inside the noise; Agent 1 already flags sweeps |
+| estimated liquidation clusters from open interest | AUC **+0.03-0.04 in every window**, money 0.90 / 1.34 | the geometry leak again: mass "between the close and the target" grows with the target's distance |
+| the same, only mass within ±2 ATR (no geometry) | 1.90 / 2.42 | inside the noise |
+| higher-timeframe levels (last week's/month's high and low, week/month open, round numbers) | single seed 2.39 / 2.45; **bagged 2.04 / 2.02 vs 2.42 / 1.97** | the single-seed win was the seed |
+| Coinbase premium (BTC's, each coin's, relative), bagged | 1.85 / 1.37 | worse; the one outside check of it also found ~55% |
+| recency-weighted training (half-life 2 years) | 2.06 / 1.49 | worse, as the learning curve predicted |
+| the previous refit's model blended in | 2.09 / 2.08 | an average seed |
+| cancel an unfilled order once the target trades | 2.50 / 1.84 | worse |
+| cooldown after a stop (6 or 12 bars) | 2.63 / 1.96, 2.47 / 1.83 | null / worse |
+| cancel an order when its rank drops below 0.5 / 0.8 | 2.57 / 2.00, 2.49 / 1.89 | null |
+| exit a trade on the opposite side's call | bag 2.76 / 2.13; three other models dev −0.08 to +0.02, hold +0.09 to +0.12 | dev flat; not adopted as a rule (the stay/close advice already says it) |
+| round-number-aware targets (pull the target in front of a round number) | win rate **+1 to +3 points**, total +250% / +229% vs +269% | buys hit rate with money -- the clearest example that "more accurate" and "pays more" are different things |
+| "medium" instead of "strong" in the three-position account | total higher on 5/5 models, Sharpe better on 2, worse on 2 | more trades at the same quality, not better calls |
+
+### The rotation, on an honest universe
+
+`research/universe.py` rebuilt every USDT perpetual Binance has listed (844,
+delisted ones included -- LUNA's collapse is in it); each Monday the
+universe is what was trading most over the previous 30 days. Binance's
+archive is missing five days (Feb and Apr 2022) for many coins; unfilled,
+the 60-day history rule dropped SOL, XRP, NEAR and LUNA for two months, so
+interior gaps of up to five days are carried (never past a coin's last
+close). Median Sharpe over the seven weekday phases:
+
+| rule | dev (2021 - Jun 2024) | hold (Jul 2024 - Aug 2026) |
+|---|---|---|
+| **the shipped rule: 15 coins, 3/3, 30-day** | **0.39** | **0.32** |
+| 30 coins, 5/5, 30-day | 0.33 | 0.89 |
+| 50 coins, 5/5, 30-day (before the gap fix) | 0.28 | 1.00 |
+| 30 coins, 5/5, 15-day | 0.45 | 0.61 |
+| **30 coins, 5/5, net taker flow (7 days, net of 7/30-day returns)** | **0.58** | **0.60**, every phase positive in both |
+| **30 coins, 5/5, the two ranks averaged (now served)** | **0.91** | **1.09** |
+| the two as separate half-size baskets | 1.01 | 0.84, every phase positive in both |
+| distance to the 20-day high | 0.82 | 0.12 |
+| risk-adjusted 30-day | 0.31 | 1.16 |
+| residual (net of BTC beta), before the gap fix | 0.27 | 1.00 |
+| inverse-vol weights / vol-managed book, before the gap fix | 0.40 / 0.05 | 0.68 / 1.06 |
+| long-only, over holding the universe, before the gap fix | 0.12-0.30 | 0.35-0.74 |
+
+**Most of the old rotation's 1.00 was survivorship**: on today's fifteen
+coins the rule looked strong because they are on today's list partly for
+having gone up. Grobys et al. (2025) measured the same design on the top 30
+coins by market cap: +1.74%/week before mid-2020, negative and insignificant
+after, with one −255% week from a short-leg coin that rose 1,400%.
+
+**Net taker flow is the big-player footprint that paid.** Per coin inside
+the 4h model it added nothing (above); across coins over a week it is the
+steadiest single signal here, and its weekly returns correlate +0.05 with
+momentum's -- so the averaged rank roughly doubles either. The sign was
+left free and set by the development years (positive: buyers more
+aggressive than the price shows lead), and 7 days was the paper's design,
+not a search (14 days did better on the holdout, which cannot choose).
+Worst weeks of the served rule: −15% to −18%. Served from Binance's public
+daily bars for the 45 most-traded perpetuals; `api.momentum.rotation`
+reproduces the research picks exactly (the 2% of weeks that differed were
+ties in the averaged rank, now broken by the 15-day return).
+
+### What other bots are measured at (checked against the source)
+
+* Peer-reviewed ML forecasts of bitcoin 1-60 minutes ahead: **50.9-56.0%**
+  right; every model negative after 0.30% round-trip costs (Jaquart, Dann &
+  Weinhardt 2021). Top-100 coins beating the cross-sectional median next
+  day: 52.9-54.2% (Jaquart et al. 2022; from the agent's reading, not
+  re-checked).
+* Copy trading, 100,236 follower outcomes on Binance/Bybit/MEXC: 97% of
+  lead traders in profit themselves, **43.6% made money for followers**
+  (YieldFund 2025).
+* Telegram pump-and-dumps, 14,499 channels: +10% to the peak, −15% for
+  whoever bought it (arXiv 2609.01176).
+* 3Commas, Cryptohopper, Pionex, Bitsgap, Coinrule, HaasOnline, Kryll:
+  none publishes a share of users in profit; 80-97% win rates found were
+  all vendor claims. Grid bots' expected return is ~0 by construction;
+  DCA bots' near-100% "success" is losing deals kept open.
+* Not verified and not used: the Kaggle G-Research winning score, Token
+  Metrics' and IntoTheBlock's accuracy claims, the 73% backtest-to-live
+  Sharpe haircut.
+
+Vanth's own numbers sit well above that literature (a 61% win rate on
+filled 4h trades, account Sharpe ~2 out of time) -- which is the strongest
+reason to watch the live record: the literature's backtest-to-live decay
+would put a real Sharpe well below the backtest's.
+
+### Big players: what was tested from the survey, and what is left
+
+Tested and closed above: whole-bar taker flow, sweeps, liquidation maps,
+round numbers, the Coinbase premium, distance to the N-day high. Checked
+sources for the rest: quarter-hour opening order imbalance predicts 4-12h
+returns on Binance perps (arXiv 2607.09426: significant for 4 of 6 coins,
+a few basis points, mostly spanned by price-volume state); distance from
+the 1-week high predicts large coins' returns (Fičura, t = 4.93); order
+flow predicts the weekly cross-section (Anastasopoulos et al., J. Financial
+Markets 2026 -- the exact premium not re-checked). The last one is now in
+the rotation (above). Left, in order: quarter-hour imbalance on 4h (needs
+1m bars or aggTrades), an OI-flush reversal rule, spot-led vs perp-led flow.

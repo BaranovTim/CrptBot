@@ -72,7 +72,9 @@ def symbols() -> list:
 def download_symbol(sym: str) -> int:
     dest = DIR / f"{sym}.pkl"
     if dest.exists():
-        return -1
+        old = pd.read_pickle(dest)
+        if old.empty or "taker_buy_quote_volume" in old:
+            return -1                        # complete, or nothing to fetch
     keys = _list(f"{PREFIX}{sym}/1d/", r"<Key>(" + PREFIX + sym + r"/1d/[^<]+\.zip)</Key>")
     frames = []
     for k in keys:
@@ -94,8 +96,13 @@ def download_symbol(sym: str) -> int:
         return 0
     df = pd.concat(frames)
     df = df[~df.index.duplicated(keep="last")].sort_index()
-    df = df[["open", "high", "low", "close", "volume", "quote_volume"]].apply(pd.to_numeric, errors="coerce")
-    df.to_pickle(dest)
+    # the taker split too: net taker flow across coins is the best-measured
+    # big-player footprint at a weekly horizon (research/QUANT.md, round four)
+    df = df[["open", "high", "low", "close", "volume", "quote_volume",
+             "taker_buy_quote_volume"]].apply(pd.to_numeric, errors="coerce")
+    part = dest.with_suffix(".part")
+    df.to_pickle(part)
+    part.replace(dest)                       # whole or not at all: readers never see half a file
     return len(df)
 
 

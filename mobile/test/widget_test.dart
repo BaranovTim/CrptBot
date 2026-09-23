@@ -11,6 +11,7 @@ import 'package:tradingbot_app/widgets/positions_panel.dart';
 import 'package:tradingbot_app/widgets/acknowledgement.dart';
 import 'package:tradingbot_app/widgets/signals_panel.dart';
 import 'package:tradingbot_app/widgets/momentum_panel.dart';
+import 'package:tradingbot_app/widgets/record_panel.dart';
 import 'package:tradingbot_app/widgets/analysis_panels.dart';
 import 'package:tradingbot_app/widgets/smart_money_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -2543,6 +2544,92 @@ void main() {
               body: SingleChildScrollView(
                   child: MomentumPanel(data: Momentum.fromJson(payload(available: false)))))));
       expect(find.textContaining('needs at least eight'), findsOneWidget);
+    });
+
+    testWidgets('the new rule: ret_pct, the universe in words, and a coin '
+        'the app does not follow opens nothing', (t) async {
+      final j = payload()
+        ..['lookback_days'] = 15
+        ..['universe'] = 30
+        ..['universe_rule'] = 'the 30 most-traded Binance perpetuals'
+        ..['signal'] = '15-day momentum and a week of net taker buying, ranks averaged'
+        ..['longs'] = [
+          {'symbol': 'AKEUSDT', 'ret_pct': 214.6, 'week_pct': -3.0, 'rank': 1, 'followed': false},
+          {'symbol': 'NEARUSDT', 'ret_pct': 90.2, 'week_pct': 1.0, 'rank': 2, 'followed': true},
+        ];
+      String? opened;
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: MomentumPanel(
+                      data: Momentum.fromJson(j), onOpen: (s) => opened = s)))));
+      expect(find.text('AKE +215%'), findsOneWidget);
+      expect(find.textContaining('Ranked on 15-day momentum and a week of net taker buying, '
+          'ranks averaged, across the 30 most-traded Binance perpetuals.'), findsOneWidget);
+      await t.tap(find.text('AKE +215%'));
+      expect(opened, isNull);
+      await t.tap(find.text('NEAR +90%'));
+      expect(opened, 'NEARUSDT');
+    });
+  });
+
+  group('the live record', () {
+    Map<String, dynamic> payload({int closed = 5}) => {
+          'since': '2026-09-23T08:00:00+00:00', 'cost_pct': 0.1,
+          'levels': {
+            'strong': {'orders': 9, 'filled': closed + 1, 'expired': 2, 'open_orders': 1,
+                       'in_trade': 1, 'closed': closed, 'targets': closed == 0 ? 0 : 3,
+                       'stops': closed == 0 ? 0 : 2, 'timeouts': 0, 'wins': closed == 0 ? 0 : 3,
+                       'win_rate': closed == 0 ? null : 0.6,
+                       'avg_net_pct': closed == 0 ? null : 0.42,
+                       'sum_net_pct': closed == 0 ? 0.0 : 2.1},
+          },
+          'recent': {
+            'strong': [
+              {'symbol': 'DOGEUSDT', 'side': 'long', 'state': 'target', 'fill': 0.098,
+               'exit': 0.103, 'net_pct': 5.0, 'closed_at': '2026-09-24T12:00:00+00:00'},
+            ],
+          },
+          'expected': {
+            'levels': {
+              'strong': {'win_rate': 0.608, 'avg_net_pct': 0.44, 'hold_win_rate': 0.58,
+                         'hold_avg_net_pct': 0.16, 'trades_per_month': 66},
+            },
+            'note': 'three at a time did better',
+          },
+          'benchmarks': [
+            {'what': 'ML bitcoin forecasts, 1-60 min', 'figure': '51-56% right',
+             'source': 'Jaquart et al. 2021'},
+          ],
+        };
+
+    testWidgets('the level you follow, its sample, and what was expected', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: RecordPanel(data: LiveRecord.fromJson(payload()), level: 'strong')))));
+      expect(find.textContaining('Since 23 Sep · your setting: strong'), findsOneWidget);
+      expect(find.text('60%'), findsOneWidget);
+      expect(find.text('3 of 5'), findsOneWidget);
+      expect(find.text('+0.42%'), findsOneWidget);
+      expect(find.text('+2.10%'), findsOneWidget);
+      expect(find.textContaining('Too few to judge yet'), findsOneWidget);
+      expect(find.textContaining('Expected from the walk-forward: 58–61% won'), findsOneWidget);
+      expect(find.text('DOGE'), findsOneWidget);
+    });
+
+    testWidgets('nothing closed yet says so, with what is open', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: RecordPanel(data: LiveRecord.fromJson(payload(closed: 0)), level: 'strong')))));
+      expect(find.textContaining('No trade has closed yet.'), findsOneWidget);
+      expect(find.textContaining('1 in a trade, 1 waiting to fill'), findsOneWidget);
+    });
+
+    test('the instructions carry the record', () {
+      final titles = howToSteps.map((h) => h.title).join(' | ');
+      expect(titles, contains('live record'));
     });
   });
 

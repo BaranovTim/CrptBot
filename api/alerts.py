@@ -763,13 +763,16 @@ class AlertEngine:
         week = str(m.get("week_start", ""))[:10]
 
         def names(rows):
-            return ", ".join(f"{r['symbol'].replace('USDT', '')} {r['ret_30d']:+.0f}%" for r in rows)
+            return ", ".join(f"{r['symbol'].replace('USDT', '')} "
+                             f"{r.get('ret_pct', r.get('ret_30d', 0.0)):+.0f}%" for r in rows)
 
+        days = int(m.get("lookback_days") or 15)
         body = "\n".join([
             f"Long: {names(m['longs'])}",
             f"Short: {names(m['shorts'])}",
-            "Best and worst 30-day returns of the fifteen; held until next Monday. "
-            "Spot: the longs alone.",
+            f"{(m.get('signal') or f'{days}-day momentum').capitalize()}, over "
+            f"{m.get('universe_rule') or 'the coins ranked'}; held until next Monday. "
+            "Some weeks lose a lot: size it small.",
         ])
         return [Alert(id=_hash("momentum", week), kind="momentum", severity="medium",
                       symbol="", interval="1w", strength="",

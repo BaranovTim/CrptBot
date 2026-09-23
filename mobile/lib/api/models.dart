@@ -1509,12 +1509,20 @@ class SmartTrader {
 class MomentumPick {
   MomentumPick.fromJson(Map<String, dynamic> j)
       : symbol = j['symbol'] as String,
-        ret30d = _d(j['ret_30d']) ?? 0,
+        // `ret_pct` over `lookback_days`; `ret_30d` is what older servers sent
+        ret30d = _d(j['ret_pct']) ?? _d(j['ret_30d']) ?? 0,
         weekPct = _d(j['week_pct']),
-        rank = (j['rank'] as num?)?.toInt() ?? 0;
+        rank = (j['rank'] as num?)?.toInt() ?? 0,
+        followed = j['followed'] as bool? ?? true;
 
   final String symbol;
+
+  /// The return the pick was ranked on, over the rotation's lookback.
   final double ret30d;
+
+  /// Whether this app follows the coin -- only those have a chart to open.
+  /// The rotation ranks the most-traded perpetuals, most of which it does not.
+  final bool followed;
 
   /// The coin's own move since this week's Monday close, in % (not signed
   /// by the side it is held on). Null when there is no price yet.
@@ -1526,8 +1534,8 @@ class MomentumPick {
       : symbol;
 }
 
-/// The weekly 30-day momentum rotation (api/momentum.py): long the three
-/// best 30-day returns, short the three worst, held Monday to Monday.
+/// The weekly momentum rotation (api/momentum.py): long the best returns
+/// among the most-traded perpetuals, short the worst, Monday to Monday.
 class Momentum {
   Momentum.fromJson(Map<String, dynamic> j)
       : available = j['available'] as bool? ?? false,
@@ -1535,6 +1543,8 @@ class Momentum {
         nextRebalance =
             DateTime.tryParse(j['next_rebalance'] as String? ?? '')?.toUtc(),
         universe = (j['universe'] as num?)?.toInt() ?? 0,
+        universeRule = j['universe_rule'] as String? ?? '',
+        signal = j['signal'] as String? ?? '',
         lookbackDays = (j['lookback_days'] as num?)?.toInt() ?? 30,
         weekPct = _d(j['week_pct']),
         measured = j['measured'] as String? ?? '',
@@ -1545,6 +1555,13 @@ class Momentum {
   final bool available;
   final DateTime? weekStart, nextRebalance;
   final int universe, lookbackDays;
+
+  /// Which coins were ranked, in words ("the 30 most-traded Binance
+  /// perpetuals"); empty from older servers.
+  final String universeRule;
+
+  /// What they were ranked on, in words; empty from older servers.
+  final String signal;
 
   /// This week so far for the pair as measured: half the capital long the
   /// three, half short the other three.

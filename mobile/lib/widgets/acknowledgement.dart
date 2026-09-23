@@ -206,17 +206,18 @@ const List<HowToStep> howToSteps = [
       '12',
       '4h: enter with a limit order, not at the market',
       'A 4h call comes with an order: a limit half an ATR better than the '
-          'close that made the call, good for 16 hours. The stop moves with '
+          'close that made the call, good for a day (six 4h bars). The stop moves with '
           'it — it keeps its distance from where you get in — and the target '
           'stays on its level. If the order never fills there is no trade; '
           'about a third do not. While a call carries on, each new close '
           'moves the order to the new price and the app tells you: keep one '
           'order, at the newest price. Once it fills you are in, and later '
-          'calls on that coin wait until the trade ends. Over three years it '
-          'doubled what a call made per trade, +0.24% to +0.53%, and won 61% '
-          'of the time against 71% at the market: fewer wins, bigger ones. '
-          'It is the habit that separated the profitable big traders from '
-          'the losing ones.',
+          'calls on that coin wait until the trade ends, and the app tells '
+          'you when it fills and when the trade ends. Over three years it '
+          'about doubled what a call made per trade, +0.24% to about +0.5%, '
+          'and won about 61% of the time against 71% at the market: fewer '
+          'wins, bigger ones. It is the habit that separated the profitable '
+          'big traders from the losing ones.',
       _cyan,
       'THE ENTRY'),
   // THE ROTATION. api/momentum.py, research/new_strategies.py.
@@ -224,12 +225,15 @@ const List<HowToStep> howToSteps = [
       '13',
       'The momentum rotation is a weekly basket',
       'Separate from the calls, under them on Market. Every Monday 00:00 '
-          'UTC the fifteen coins are ranked by their 30-day return: long the '
-          'top three, short the bottom three, equal size, held until the '
-          "next Monday. Rebalanced at each of the week's 42 four-hour slots "
-          'from 2021 to 2026, it made money at every one — Sharpe 0.6 to 1.3, '
-          'median 1.0. On spot, the three longs alone beat holding every '
-          'coin, by less. Some weeks lose; it paid over years, not weeks.',
+          'UTC the thirty most-traded Binance perpetuals are ranked on two '
+          'things at once — their 15-day return and a week of net taker '
+          'buying — and long the top five, short the bottom five, equal '
+          'size, held until the next Monday. Tested on every perpetual as it '
+          'stood at the time, dead coins included, it had a Sharpe of about '
+          '1.0, with weeks that lost 15-18%. The first version, 30-day '
+          "momentum on today's fifteen coins, looked as good but was 0.3-0.4 "
+          'honestly: those coins are on the list partly because they went '
+          'up. Size it small.',
       _violet,
       'THE ROTATION'),
   HowToStep(
@@ -249,6 +253,21 @@ const List<HowToStep> howToSteps = [
           'nothing there, so it is noted and the call stands.',
       Obsidian.greenDim,
       'CONFLUENCE'),
+  // THE RECORD. api/ledger.py.
+  HowToStep(
+      '15',
+      'The live record is the only score that counts',
+      'Under the calls on Market: every 4h order the server placed since the '
+          'model went live, which filled, and how each trade ended, after '
+          'fees, for your sensitivity setting. Every number elsewhere in this '
+          'app is from tests on the past; this one is not. Read it with its '
+          'sample size: twenty trades at 60% can show anything from 40% to '
+          "80%. For scale: peer-reviewed machine-learning forecasts of "
+          'bitcoin were right 51-56% of the time an hour or less ahead, and '
+          'no bot or signal seller we could find publishes an audited record '
+          'at all — their 80-97% win rates are their own claims.',
+      Obsidian.primary,
+      'THE RECORD'),
 ];
 
 /// The first-run dialog. Cannot be dismissed by tapping outside: the one

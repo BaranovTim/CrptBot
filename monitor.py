@@ -39,7 +39,9 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
+import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -1202,16 +1204,44 @@ def evaluate(judge, bars: pd.DataFrame, X: pd.DataFrame,
 
 
 # ------------------------------------------------------------ screen
+_SHARED_JUDGES = weakref.WeakValueDictionary()
+_SHARED_LOCK = threading.Lock()
+
+
+def load_shared_judge(path):
+    """A frozen model, loaded ONCE per distinct file content.
+
+    A pooled model is installed as the same file under every coin's name
+    (train_pooled_4h.py, train_daily_pooled.py), and each coin's Monitor
+    used to load its own copy -- fifteen identical sets of trees resident on
+    a 967MB box. A seed-bagged model is five times the trees. Keyed by the
+    file's content hash, so identical files share one object and a retrained
+    file (new content) gets a fresh one; held weakly, so an evicted pair
+    still frees its model when nothing else uses it. Shared read-only: the
+    monitor and the service never write to a judge."""
+    import hashlib
+    from agent5 import JudgeAgent
+
+    raw = Path(path).read_bytes()
+    key = hashlib.md5(raw).hexdigest()
+    with _SHARED_LOCK:
+        hit = _SHARED_JUDGES.get(key)
+        if hit is not None:
+            return hit
+        judge = JudgeAgent.load(path)
+        _SHARED_JUDGES[key] = judge
+        return judge
+
+
 class Monitor:
     def __init__(self, symbol: str, interval: str, h1_path: Path, h2_path: Path,
                  asset: str = "BTC"):
-        from agent5 import JudgeAgent
         from livefeed import interval_delta
 
         self.symbol, self.interval = symbol, interval
         self.delta = interval_delta(interval)
-        self.h1 = JudgeAgent.load(h1_path)
-        self.h2 = JudgeAgent.load(h2_path)
+        self.h1 = load_shared_judge(h1_path)
+        self.h2 = load_shared_judge(h2_path)
         self.asset = asset
         self.news = NewsWatcher(asset=asset)
         # what each frozen model was actually asked. h1 is the shorter

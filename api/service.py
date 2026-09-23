@@ -1042,29 +1042,97 @@ class TradingService:
         hit = getattr(self, "_momentum_cache", None)
         if hit and time.time() - hit[0] < ttl:
             return hit[1]
-        syms = [s for s in self.record_symbols() if s.endswith("USDT")]
-        closes = {}
-        for sym in syms:
-            try:
-                bars = self._bars(sym, "1d")
-            except Exception as e:           # a coin without daily bars sits out
-                log.info("momentum: %s 1d unavailable: %s", sym, e)
-                continue
-            if not bars.empty:
-                closes[sym] = bars["close"]
-        prices = {}
-        try:
-            self.prime_tickers(syms)
+        # THE MOST-TRADED PERPETUALS, not only the coins this app follows:
+        # the rule was measured on the thirty with the most dollar volume
+        # (api/momentum.py). Their daily bars come from Binance's public
+        # REST, a few dozen requests every six hours.
+        closes, volumes, takers, prices = self._momentum_market()
+        if not closes:
+            # Binance unreachable: the followed coins, from the bar stores,
+            # ranked on momentum alone over a smaller universe
+            volumes = takers = None
+            syms = [s for s in self.record_symbols() if s.endswith("USDT")]
             for sym in syms:
-                px = self.ticker(sym).get("price")
-                if px is not None and np.isfinite(px):
-                    prices[sym] = float(px)
-        except Exception as e:
-            log.info("momentum: live prices unavailable: %s", e)
-        out = rotation(closes, utc_now(), prices)
+                try:
+                    bars = self._bars(sym, "1d")
+                except Exception as e:           # a coin without daily bars sits out
+                    log.info("momentum: %s 1d unavailable: %s", sym, e)
+                    continue
+                if not bars.empty:
+                    closes[sym] = bars["close"]
+            try:
+                self.prime_tickers(syms)
+                for sym in syms:
+                    px = self.ticker(sym).get("price")
+                    if px is not None and np.isfinite(px):
+                        prices[sym] = float(px)
+            except Exception as e:
+                log.info("momentum: live prices unavailable: %s", e)
+        out = rotation(closes, utc_now(), prices, volumes, takers)
+        followed = set(self.record_symbols())
+        for key in ("longs", "shorts"):
+            for r in out.get(key) or ():
+                r["followed"] = r["symbol"] in followed
         out["generated_at"] = utc_now().isoformat()
         self._momentum_cache = (time.time(), out)
         return out
+
+    MOMENTUM_CANDIDATES = 45     # by 24h volume; the rule then takes 30 by 30-day volume
+
+    def _momentum_market(self, ttl: float = 21600.0):
+        """(closes, dollar volumes, taker-buy dollar volumes, live prices) for
+        the most-traded USDT perpetuals: daily bars indexed by their close,
+        the forming day dropped. Bars cached for six hours, prices fetched
+        each time (one request). Empty dicts when Binance cannot be reached."""
+        from .momentum import STABLE
+
+        closes: Dict[str, pd.Series] = {}
+        volumes: Dict[str, pd.Series] = {}
+        takers: Dict[str, pd.Series] = {}
+        prices: Dict[str, float] = {}
+        try:
+            req = urllib.request.Request(f"{FAPI}/fapi/v1/ticker/price",
+                                         headers={"User-Agent": "TradingBot/api"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                for t in json.loads(r.read()):
+                    prices[t["symbol"]] = float(t["price"])
+        except Exception as e:
+            log.info("momentum: price sweep failed: %s", e)
+        hit = getattr(self, "_momentum_bars", None)
+        if hit and time.time() - hit[0] < ttl and hit[1]:
+            return hit[1], hit[2], hit[3], prices
+        rows = [r for r in self.symbols(limit=500)
+                if r["symbol"].endswith("USDT") and r["symbol"] not in STABLE]
+        now_ms = time.time() * 1000.0
+
+        def daily(sym):
+            try:
+                req = urllib.request.Request(
+                    f"{FAPI}/fapi/v1/klines?symbol={sym}&interval=1d&limit=80",
+                    headers={"User-Agent": "TradingBot/api"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    return sym, json.loads(resp.read())
+            except Exception as e:
+                log.info("momentum: %s daily bars failed: %s", sym, e)
+                return sym, []
+
+        # six at a time: ~5 s instead of ~30 s, and far under the weight limit
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(6) as ex:
+            got = list(ex.map(daily, [r["symbol"] for r in rows[:self.MOMENTUM_CANDIDATES]]))
+        for sym, k in got:
+            k = [x for x in k if float(x[6]) < now_ms]          # closed days only
+            if not k:
+                continue
+            ix = pd.to_datetime([int(x[6]) for x in k], unit="ms", utc=True)
+            closes[sym] = pd.Series([float(x[4]) for x in k], index=ix)
+            volumes[sym] = pd.Series([float(x[7]) for x in k], index=ix)
+            takers[sym] = pd.Series([float(x[10]) for x in k], index=ix)   # taker-buy quote volume
+        if closes:
+            self._momentum_bars = (time.time(), closes, volumes, takers)
+        elif hit:
+            return hit[1], hit[2], hit[3], prices                # stale beats empty
+        return closes, volumes, takers, prices
 
     def live_signals(self) -> Dict[str, Any]:
         """Every warm pair whose call is not FLAT, newest reading each.
@@ -2202,7 +2270,25 @@ RECORD_EXPECTED = {
 
 # What independent studies measured for other bots and signal sellers, so the
 # record has something to be compared with (research/QUANT.md, round four).
-RECORD_BENCHMARKS: list = []
+# Only figures checked against their source (the rest of round four's survey
+# is in research/QUANT.md with its verification status).
+RECORD_BENCHMARKS: list = [
+    {"what": "Machine-learning forecasts of bitcoin, 1 to 60 minutes ahead",
+     "figure": "right 50.9-56.0% of the time; every model lost after 0.30% round-trip costs",
+     "source": "Jaquart, Dann & Weinhardt, J. Finance & Data Science 2021"},
+    {"what": "Copy trading on Binance, Bybit and MEXC, 90 days, 100,236 follower outcomes",
+     "figure": "97% of lead traders were in profit themselves; 43.6% made money for their followers",
+     "source": "YieldFund multi-exchange study, 2025"},
+    {"what": "Weekly 30-day momentum over the top 30 coins (the rotation's design)",
+     "figure": "+1.74% a week before mid-2020, negative and insignificant after; one week lost 255%",
+     "source": "Grobys et al., Financial Markets and Portfolio Management 2025"},
+    {"what": "Telegram pump-and-dump groups, 14,499 channels, 2021-22",
+     "figure": "+10% to the peak, then -15% for whoever bought it",
+     "source": "arXiv 2609.01176"},
+    {"what": "Commercial bots (3Commas, Cryptohopper, Pionex, Bitsgap and others)",
+     "figure": "none publishes the share of users who made money; 80-97% win rates are their own claims",
+     "source": "vendor sites, checked Sep 2026"},
+]
 
 TREND_GATED = ("1d",)
 

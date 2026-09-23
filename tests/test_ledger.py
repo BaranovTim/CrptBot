@@ -202,3 +202,36 @@ def test_an_old_config_has_no_bag():
     except ValueError:
         return True
     raise AssertionError("duplicate seeds were accepted")
+
+
+def test_identical_model_files_are_loaded_once():
+    """A pooled model sits under every coin's name; each Monitor used to hold
+    its own copy. One object per distinct content, and a changed file is a
+    new object."""
+    import shutil
+    from monitor import load_shared_judge
+    from agent5 import Agent5Config, JudgeAgent
+    from agent5.calibration import fit_calibrator
+    from agent5.model import fit_final
+    from agent5.dataset import Dataset
+
+    rng = np.random.default_rng(1)
+    n = 800
+    X = pd.DataFrame(rng.normal(size=(n, 3)), columns=list("abc"))
+    y = pd.Series((X["a"] > 0).astype(float))
+    ds = Dataset(X=X, y=y, weight=pd.Series(np.ones(n)), t1=np.arange(n) + 2.0,
+                 positions=np.arange(n), blocks={}, index=pd.date_range("2024", periods=n, freq="4h"))
+    d = Path(tempfile.mkdtemp())
+    j = JudgeAgent(Agent5Config()); j.model, j.columns = fit_final(ds, j.cfg, list("abc")); j._fitted = True
+    j.calibrator = fit_calibrator(j.model.predict_proba(X)[:, 1], y.to_numpy(), np.ones(n))
+    j.save(d / "judge_AAAUSDT_4h_h1.joblib")
+    shutil.copyfile(d / "judge_AAAUSDT_4h_h1.joblib", d / "judge_BBBUSDT_4h_h1.joblib")
+    a = load_shared_judge(d / "judge_AAAUSDT_4h_h1.joblib")
+    b = load_shared_judge(d / "judge_BBBUSDT_4h_h1.joblib")
+    assert a is b
+    j2 = JudgeAgent(Agent5Config(bag_seeds=(3, 5))); j2.model, j2.columns = fit_final(ds, j2.cfg, list("abc"))
+    j2._fitted = True; j2.calibrator = j.calibrator
+    j2.save(d / "judge_BBBUSDT_4h_h1.joblib")                   # retrained: new content
+    c = load_shared_judge(d / "judge_BBBUSDT_4h_h1.joblib")
+    assert c is not a and c.cfg.bag_seeds == (3, 5)
+    return True
