@@ -213,11 +213,15 @@ const List<HowToStep> howToSteps = [
           'moves the order to the new price and the app tells you: keep one '
           'order, at the newest price. Once it fills you are in, and later '
           'calls on that coin wait until the trade ends, and the app tells '
-          'you when it fills and when the trade ends. Over three years it '
-          'about doubled what a call made per trade, +0.24% to about +0.5%, '
-          'and won about 61% of the time against 71% at the market: fewer '
-          'wins, bigger ones. It is the habit that separated the profitable '
-          'big traders from the losing ones.',
+          'you when it fills and when the trade ends. HALFWAY to the target, '
+          'take a third of the position off and move your stop to your entry: '
+          'from then on the trade cannot lose. The card shows the halfway '
+          'price and the app tells you when it is reached. Tested over three '
+          'years, that wins about 73% of trades (71% in the latest year) '
+          'instead of 61%, for about a third less total return — the limit '
+          'entry is the habit that separated the profitable big traders from '
+          'the losing ones, and the scale-out is what makes most trades end '
+          'green.',
       _cyan,
       'THE ENTRY'),
   // THE ROTATION. api/momentum.py, research/new_strategies.py.

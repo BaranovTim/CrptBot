@@ -66,7 +66,11 @@ class SignalsPanel extends StatelessWidget {
     }
 
     final head = limit == null ? '' : 'Limit ${priceText(limit)} · ';
-    return '${head}TP ${pct(tp)} · SL ${pct(sl)}';
+    final o = s.order;
+    final scale = o == null || o.scalePrice == null || o.taken
+        ? ''
+        : ' · ${o.partShort} at ${pct(o.scalePrice!)}';
+    return '${head}TP ${pct(tp)}$scale · SL ${pct(sl)}';
   }
 
   @override

@@ -372,3 +372,12 @@ builds 60–180s → 4–14s, API at rest 0.02% CPU and 182 MB.
   hours (`TradingService._momentum_market`). No key. If Binance cannot be
   reached it falls back to the followed coins' bar stores and says so in
   `universe_rule`.
+* **The OOM loop after 2026-09-22** (API killed at ~780 MB four times in
+  three hours on 09-23) was the app's "high and low since my entry" check:
+  `/api/range` on 1m bars parsed each coin's whole 1m history (five monthly
+  files) through the shared bar cache, which holds barely one such frame,
+  so every poll re-parsed all of them, concurrently. `price_range` now reads
+  only the months since the entry, four columns, one read at a time. Six
+  concurrent requests: memory flat at 228 MB (was +130 MB and 40 s each).
+  After any deploy, re-check `journalctl -k | grep "Out of memory"` HOURS
+  later, not minutes.

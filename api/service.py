@@ -1225,7 +1225,7 @@ class TradingService:
         lasted ninety seconds is invisible on a 1h candle.
         """
         sym, iv = self._pair(symbol, interval)
-        bars = self._bars(sym, iv)
+        bars = self._range_bars(sym, iv, since) if since else self._bars(sym, iv)
         if bars.empty:
             return {"symbol": sym, "interval": iv, "bars": 0,
                     "high": None, "low": None, "last": None}
@@ -1258,6 +1258,51 @@ class TradingService:
             "low": _num(window["low"].min()),
             "last": _num(window["close"].iloc[-1]),
         }
+
+    _RANGE_LOCK = threading.Lock()
+
+    def _range_bars(self, sym: str, iv: str, since: str) -> pd.DataFrame:
+        """High, low and close since `since`, read from ONLY the monthly files
+        that cover it, and never put in the shared bar cache.
+
+        THIS WAS THE OOM LOOP of 2026-09-23 (four kills in three hours at
+        ~780MB, after the smart-money fix). The app asks for the range since
+        each open trade's entry, on 1m bars, for every open trade at once.
+        Through `_bars` that parsed the coin's WHOLE 1m history -- five months,
+        ~200k rows, 36MB parsed and several times that while parsing -- and the
+        60MB cache holds one such frame, so every poll re-parsed all of them,
+        concurrently. Now: the months since the entry, four columns, one read
+        at a time (a queue of small reads is seconds; a pile of big ones was
+        the kernel's OOM killer)."""
+        from livefeed import BarStore
+
+        store = BarStore(sym, iv)
+        try:
+            cut = pd.Timestamp(since)
+            cut = cut.tz_localize("UTC") if cut.tzinfo is None else cut.tz_convert("UTC")
+        except (ValueError, TypeError):
+            return self._bars(sym, iv)
+        files = sorted(store.dir.glob("*.csv"))
+        month = f"{cut:%Y-%m}"
+        # monthly files are named YYYY-MM; anything else, read it all
+        if not files or not all(len(f.stem) == 7 and f.stem[4] == "-" for f in files):
+            return self._bars(sym, iv)
+        keep = [f for f in files if f.stem >= month]
+        frames = []
+        with self._RANGE_LOCK:
+            for f in keep:
+                try:
+                    df = pd.read_csv(f, usecols=["close_time", "high", "low", "close"])
+                except (OSError, ValueError, pd.errors.ParserError) as e:
+                    log.warning("range %s %s %s: %s", sym, iv, f.name, e)
+                    continue
+                df["close_time"] = pd.to_datetime(df["close_time"], utc=True)
+                frames.append(df.drop_duplicates("close_time", keep="last").set_index("close_time"))
+        if not frames:
+            return pd.DataFrame(columns=["high", "low", "close"],
+                                index=pd.DatetimeIndex([], tz="UTC", name="close_time"))
+        out = pd.concat(frames).sort_index()
+        return out[~out.index.duplicated(keep="last")]
 
     def chart(self, symbol: Optional[str] = None,
               interval: Optional[str] = None, n: int = 96) -> Dict[str, Any]:
@@ -1978,6 +2023,11 @@ def _levels(a, price) -> Dict[str, Any]:
         # target and stop are measured from HERE, not from the close
         "entry_limit": (_num((getattr(a, "order_info", None) or {}).get("limit"))
                         if (getattr(a, "order_info", None) or {}).get("state") == "open" else None),
+        # where a part of the position comes off (the scale-out), while the
+        # order rests or the trade runs and it has not happened yet
+        "scale_out": (_num((getattr(a, "order_info", None) or {}).get("scale_price"))
+                      if (getattr(a, "order_info", None) or {}).get("state") in ("open", "filled")
+                      and not (getattr(a, "order_info", None) or {}).get("taken") else None),
         # the barriers as distances rather than prices. the app
         # re-anchors them to the websocket price so TP/SL track the
         # market between bars — the DISTANCE is what the model fixed
@@ -2252,20 +2302,24 @@ def _smart_overlay(an, smart: Dict[str, Any], lower: bool = True) -> None:
 # choice was made on.
 RECORD_EXPECTED = {
     "source": "walk-forward, Sep 2023 - Sep 2026, out of time",
+    # the served rule since 2026-09-23: a third off halfway to the target,
+    # stop to the entry on the rest (research/win_rate.py), measured through
+    # monitor.resting_orders itself
     "levels": {
-        "strong": {"win_rate": 0.608, "avg_net_pct": 0.44, "hold_win_rate": 0.580,
-                   "hold_avg_net_pct": 0.16, "trades_per_month": 66,
-                   "targets": 0.57, "stops": 0.30, "timeouts": 0.14},
-        "medium": {"win_rate": 0.595, "avg_net_pct": 0.37, "hold_win_rate": 0.565,
-                   "hold_avg_net_pct": 0.11, "trades_per_month": 95,
-                   "targets": 0.56, "stops": 0.32, "timeouts": 0.13},
-        "small": {"win_rate": 0.568, "avg_net_pct": 0.17, "hold_win_rate": 0.551,
-                  "hold_avg_net_pct": 0.04, "trades_per_month": 155,
-                  "targets": 0.53, "stops": 0.34, "timeouts": 0.13},
+        "strong": {"win_rate": 0.734, "avg_net_pct": 0.24, "hold_win_rate": 0.71,
+                   "hold_avg_net_pct": 0.00, "trades_per_month": 67,
+                   "targets": 0.42, "stops": 0.52, "timeouts": 0.07},
+        "medium": {"win_rate": 0.718, "avg_net_pct": 0.18, "hold_win_rate": 0.70,
+                   "hold_avg_net_pct": 0.00, "trades_per_month": 99,
+                   "targets": 0.41, "stops": 0.52, "timeouts": 0.06},
+        "small": {"win_rate": 0.701, "avg_net_pct": 0.06, "hold_win_rate": 0.69,
+                  "hold_avg_net_pct": -0.03, "trades_per_month": 165,
+                  "targets": 0.39, "stops": 0.55, "timeouts": 0.06},
     },
-    "note": ("An account holding at most three trades at once, taking the calls in "
-             "the order they came, did better per trade (+0.43% on the last two "
-             "half-years) than taking every call (+0.16%)."),
+    "note": ("Taking a third off halfway lifts the win rate from about 61% to 73%: a "
+             "trade that gets halfway can no longer lose. It costs about a third of "
+             "the return. An account holding at most three trades at once did better "
+             "per trade than taking every call, and won 75% (73% in the latest year)."),
 }
 
 # What independent studies measured for other bots and signal sellers, so the
@@ -2403,17 +2457,32 @@ def _settle_order(rec: Dict[str, Any], a, live: Optional[Dict[str, Any]]
     info = a.order_info
     od = copy.copy(a.order)
     before = od.state
+    was_taken = bool(getattr(od, "taken", False))
     # the forming bar opens at the last close; an order resting away from it
     # fills at its own price, which is what the research assumed
     open_px = float(info.get("last_close") or od.limit)
     od.step(int(info["next"]), open_px, max(highs), min(lows),
             float(live.get("price") or od.limit), closed=False)
-    if od.state == before:
+    took = bool(getattr(od, "taken", False)) and not was_taken
+    if od.state == before and not took:
         return rec, ""
     from .alerts import _price_text
     word = "buy" if od.long else "sell"
     placed = pd.Timestamp(info["placed_at"]) if info.get("placed_at") is not None else None
     at = f" from the {placed:%a %H:%M} UTC close" if placed is not None else ""
+    if took and od.state == "filled":
+        from monitor import _part_words
+        detail = (f"Halfway reached during the current bar: take {_part_words(od.scale_part)} off at "
+                  f"{_price_text(od.scale_price)} and move the stop on the rest to your entry "
+                  f"{_price_text(od.fill)}. The trade can no longer lose; the rest runs to the "
+                  f"target {_price_text(od.target)}.")
+        out = dict(rec)
+        order = dict(out.get("order") or {})
+        order.update({"state": od.state, "fill": _num(od.fill), "taken": True,
+                      "stop": _num(od.stop), "scale_price": _num(od.scale_price)})
+        out.update({"action": "WAIT", "tone": "flat", "detail": detail, "order": order,
+                    "size_pct": None, "smart_note": ""})
+        return out, ""
     if before == "open" and od.state == "filled":
         detail = (f"In the trade: the {word} order{at} filled at {_price_text(od.fill)} during "
                   f"the current bar. It runs to the target {_price_text(od.target)} or the stop "
@@ -2431,9 +2500,18 @@ def _settle_order(rec: Dict[str, Any], a, live: Optional[Dict[str, Any]]
     else:
         detail = f"The trade{at} was stopped at {_price_text(od.stop)} during the current bar."
         outcome = "stop"
+    if getattr(od, "taken", False) and od.state in ("target", "stop", "timeout"):
+        from monitor import _part_words
+        rest = {"target": "the rest reached the target", "stop": "the rest came back to the entry",
+                "timeout": "the rest closed on time"}[od.state]
+        detail = (f"The trade{at} took {_part_words(od.scale_part)} off at "
+                  f"{_price_text(od.scale_price)} and {rest} during the current bar: "
+                  f"{od.ret_pct():+.2f}% overall.")
     out = dict(rec)
     order = dict(out.get("order") or {})
-    order.update({"state": od.state, "fill": _num(od.fill), "exit": _num(od.exit)})
+    order.update({"state": od.state, "fill": _num(od.fill), "exit": _num(od.exit),
+                  "taken": bool(getattr(od, "taken", False)), "stop": _num(od.stop),
+                  "ret_pct": _num(od.ret_pct()) if od.state in ("target", "stop", "timeout") else None})
     out.update({"action": "WAIT", "tone": "flat", "detail": detail, "order": order,
                 "size_pct": None, "smart_note": ""})
     return out, outcome
@@ -2525,7 +2603,9 @@ def _order_json(a) -> Optional[Dict[str, Any]]:
             "fill": _num(info.get("fill")), "placed_at": t(info.get("placed_at")),
             "valid_until": t(info.get("valid_until")), "hold_until": t(info.get("hold_until")),
             "filled_at": t(info.get("filled_at")), "level": info.get("level"),
-            "offset_atr": _num(info.get("offset_atr")), "exit": _num(info.get("exit"))}
+            "offset_atr": _num(info.get("offset_atr")), "exit": _num(info.get("exit")),
+            "scale_part": _num(info.get("scale_part")), "scale_price": _num(info.get("scale_price")),
+            "taken": bool(info.get("taken")), "ret_pct": _num(info.get("ret_pct"))}
 
 
 def _recommendation(primary, secondary, stale: bool) -> Dict[str, Any]:

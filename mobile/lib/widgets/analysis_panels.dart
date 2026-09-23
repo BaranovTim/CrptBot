@@ -148,7 +148,16 @@ class LevelsPanel extends StatelessWidget {
     this.fixed = false,
     this.entryLimit,
     this.entryUntil,
+    this.scaleOut,
+    this.scalePart = '',
+    this.scaleTaken = false,
   });
+
+  /// Halfway to the target: where `scalePart` ("a third") comes off and the
+  /// stop on the rest moves to the entry. `scaleTaken` once it has.
+  final double? scaleOut;
+  final String scalePart;
+  final bool scaleTaken;
 
   final double? price, takeProfit, stopLoss, pUp;
 
@@ -211,6 +220,23 @@ class LevelsPanel extends StatelessWidget {
                     '${entryUntil == null ? '' : ', good until ${_hhmm(entryUntil!)}'}. '
                     'If it never fills, there is no trade. The target and stop '
                     'below are measured from this price.',
+              ),
+              _divider(),
+            ],
+            if (!_flat && (scaleOut != null || scaleTaken)) ...[
+              _row(
+                scaleTaken
+                    ? 'Halfway — ${scalePart.isEmpty ? 'part' : scalePart} taken'
+                    : 'Halfway: take ${scalePart.isEmpty ? 'part' : scalePart} off',
+                scaleTaken ? 'done' : money(scaleOut),
+                scaleTaken ? Obsidian.outline : Obsidian.green,
+                sub: scaleTaken
+                    ? 'The stop on the rest is at your entry now: this trade can '
+                        'no longer lose. The rest runs to the take profit.'
+                    : 'When the price gets here, close ${scalePart.isEmpty ? 'part' : scalePart} of '
+                        'the position and move your stop to your entry. From '
+                        'then on the trade cannot lose. This is what lifts the '
+                        'win rate above 70%.',
               ),
               _divider(),
             ],

@@ -331,3 +331,165 @@ def test_the_entry_alert_names_the_order():
     got = e.refresh()
     assert len(got) == 1 and "Buy limit 99.00, good until Wed 04:00 UTC" in got[0].body, got[0].body
     return True
+
+
+def test_calls_from_before_the_model_was_installed_are_not_replayed():
+    """After an install, the window reaches back over bars the model was
+    fitted on; their back-filled readings must not become trades."""
+    import monitor
+
+    bars = _calm(_bars(), 2)
+    sc = np.full(len(bars), 0.5); sc[-3] = 0.99            # a call two closes ago
+    X = _X(bars); last = bars.index[-1]
+    call_at = bars.index[-3]
+
+    def card(pool):
+        cfg = Agent5Config(max_hold_bars=16, k_up=1.0, k_dn=1.0, geometry="structure",
+                           side="long", stop_buffer_atr=0.5, rank_pool=pool,
+                           entry_offset_atr=0.5, entry_valid_bars=4)
+        real = monitor.SCOREBOOK
+        monitor.SCOREBOOK = _book()
+        try:
+            _fill(monitor.SCOREBOOK, f"{pool}|long", [f"C{i}" for i in range(9)], last + HOUR)
+            return evaluate(RankedJudge("long", sc, cfg=cfg), bars, X, "A", last,
+                            last + 16 * HOUR, 16, symbol="MINE")
+        finally:
+            monitor.SCOREBOOK = real
+
+    before = (call_at - HOUR).strftime("crypto-4h-%Y%m%dT%H%M%SZ")    # installed before the call
+    after = (call_at + HOUR).strftime("crypto-4h-%Y%m%dT%H%M%SZ")     # installed after it
+    a = card(before)
+    assert a.action == "ENTER LONG NOW" and a.order_info["state"] == "open", a.reason
+    b = card(after)
+    assert b.action != "ENTER LONG NOW" and not b.order_info, b.reason
+    assert all(not rows for rows in b.order_book.values())
+    assert monitor.pool_installed_at("P") is None
+    return True
+
+
+# ------------------------------------------------------------ the scale-out
+def _scaled(long=True, **kw):
+    base = dict(placed=0, long=long, limit=99.0, stop=95.0, target=107.0,
+                valid_to=4, hold_to=16, level=3, scale_part=1 / 3, scale_at=0.5)
+    base.update(kw)
+    return RestingOrder(**base)
+
+
+def test_halfway_takes_a_third_off_and_moves_the_stop_to_the_entry():
+    od = _scaled()
+    od.step(1, 100.0, 100.5, 98.5, 99.5)                 # fills at 99
+    assert od.state == "filled" and od.fill == 99.0 and od.scale_price == 103.0
+    od.step(2, 99.5, 103.2, 99.2, 103.0)                  # halfway (99 -> 107 is 103)
+    assert od.taken and od.stop == 99.0 and od.state == "filled"
+    od.step(3, 103.0, 103.1, 98.9, 99.0)                  # back to the entry
+    assert od.state == "stop" and od.exit == 99.0
+    # a third at +4.04%, the rest flat: a win
+    assert abs(od.ret_pct() - (1 / 3) * (103 / 99 - 1) * 100) < 1e-9 and od.ret_pct() > 0.1
+    return True
+
+
+def test_the_rest_can_still_reach_the_target_and_a_stop_first_is_a_full_loss():
+    od = _scaled()
+    od.step(1, 100.0, 100.5, 98.5, 99.5)
+    od.step(2, 99.5, 103.5, 99.5, 103.0)                  # halfway
+    od.step(3, 103.0, 107.5, 102.0, 107.0)                # target
+    want = (1 / 3) * (103 / 99 - 1) * 100 + (2 / 3) * (107 / 99 - 1) * 100
+    assert od.state == "target" and abs(od.ret_pct() - want) < 1e-9
+    lose = _scaled()
+    lose.step(1, 100.0, 100.5, 98.5, 99.5)
+    lose.step(2, 99.0, 102.0, 94.5, 95.0)                 # the stop before halfway
+    assert lose.state == "stop" and not lose.taken
+    assert abs(lose.ret_pct() - (95 / 99 - 1) * 100) < 1e-9
+    # halfway and the target in one bar: the trade ends at the target, scaled
+    one = _scaled()
+    one.step(1, 100.0, 100.5, 98.5, 99.5)
+    one.step(2, 99.5, 108.0, 99.5, 107.5)
+    assert one.state == "target" and one.taken
+    # a short is the mirror
+    sh = _scaled(long=False, limit=101.0, stop=105.0, target=93.0)
+    sh.step(1, 100.0, 101.5, 99.5, 100.5)                 # fills at 101
+    sh.step(2, 100.5, 101.0, 96.8, 97.0)                  # halfway 101 -> 93 is 97
+    assert sh.taken and sh.stop == 101.0
+    return True
+
+
+def test_the_card_names_the_halfway_price_and_the_notice_fires_once():
+    import monitor
+    from tests.test_alerts import StubService, _engine
+
+    bars = _bars()
+    sc = np.full(len(bars), 0.5); sc[-1] = 0.99
+    X = _X(bars); last = bars.index[-1]
+    cfg = Agent5Config(max_hold_bars=16, k_up=1.0, k_dn=1.0, geometry="structure",
+                       side="long", stop_buffer_atr=0.5, rank_pool="P",
+                       entry_offset_atr=0.5, entry_valid_bars=6,
+                       scale_out_part=1 / 3, scale_out_at=0.5)
+    real = monitor.SCOREBOOK
+    monitor.SCOREBOOK = _book()
+    try:
+        _fill(monitor.SCOREBOOK, "P|long", [f"C{i}" for i in range(9)], last + HOUR)
+        a = evaluate(RankedJudge("long", sc, cfg=cfg), bars, X, "A", last, last + 16 * HOUR, 16,
+                     symbol="MINE")
+    finally:
+        monitor.SCOREBOOK = real
+    info = a.order_info
+    want = info["limit"] + 0.5 * (info["target"] - info["limit"])
+    assert abs(info["scale_price"] - want) < 1e-9 and info["scale_part"] == 1 / 3
+    assert "take a third off" in a.reason, a.reason
+
+    svc = StubService(action="WAIT", strength="strong")
+    base = svc.dashboard
+    order = {"state": "filled", "limit": 99.0, "fill": 99.0, "stop": 95.0, "target": 107.0,
+             "placed_at": "2026-09-23T12:00:00+00:00", "scale_part": 1 / 3, "scale_price": 103.0,
+             "taken": False, "level": "strong"}
+    state = {"o": dict(order)}
+
+    def dash(symbol=None, interval=None):
+        d = base(symbol, interval)
+        d["recommendation"]["action"] = svc.action
+        d["recommendation"]["order"] = dict(state["o"])
+        return d
+    svc.dashboard = dash
+    e = _engine(svc)
+    state["o"].update(taken=True, stop=99.0)
+    got = e.refresh()
+    assert len(got) == 1 and "halfway, take a third off" in got[0].title, [x.title for x in got]
+    assert "Move the stop on the rest to your entry 99.00" in got[0].body
+    assert e.refresh() == []
+    svc.action = "FLAT"
+    state["o"].update(state="stop", exit=99.0, ret_pct=1.35)
+    end = e.refresh()
+    assert len(end) == 1 and "+1.35% overall" in end[0].title and "came back to the entry" in end[0].body
+    return True
+
+
+def test_a_trade_back_at_the_entry_after_the_third_is_not_a_stop_in_the_record():
+    from api.ledger import OrderLedger
+    L = OrderLedger(Path(tempfile.mkdtemp()) / "o.json")
+    row = {"placed_at": pd.Timestamp("2026-09-23 20:00", tz="UTC"), "state": "stop", "long": True,
+           "limit": 99.0, "stop": 99.0, "target": 107.0, "fill": 99.0, "exit": 99.0,
+           "closed_at": pd.Timestamp("2026-09-24 08:00", tz="UTC"), "ret_pct": 1.35, "taken": True}
+    L.record("BTCUSDT", "4h", {"strong": [row]})
+    st = L.summary()["levels"]["strong"]
+    assert st["stops"] == 0 and st["back_to_entry"] == 1 and st["wins"] == 1
+    try:
+        Agent5Config(scale_out_part=0.33)
+    except ValueError:
+        return True
+    raise AssertionError("a scale-out with no point was accepted")
+
+
+def test_the_forming_bar_can_reach_halfway_between_closes():
+    from types import SimpleNamespace
+    from api.service import _settle_order
+
+    od = _scaled()
+    od.step(1, 100.0, 100.5, 98.5, 99.5)                  # filled at 99, halfway 103
+    a = SimpleNamespace(order=od, order_info={"next": 2, "last_close": 100.0,
+                                              "placed_at": pd.Timestamp("2026-09-23 12:00", tz="UTC")})
+    rec = {"action": "WAIT", "order": {"state": "filled", "fill": 99.0, "taken": False}}
+    out, reached = _settle_order(rec, a, {"high": 103.4, "low": 99.6, "price": 103.1})
+    assert reached == "" and out["order"]["taken"] and out["order"]["stop"] == 99.0
+    assert "take a third off at 103.00" in out["detail"], out["detail"]
+    assert od.taken is False                                # the card's own order untouched
+    return True

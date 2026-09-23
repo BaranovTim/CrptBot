@@ -369,7 +369,7 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "pick":
 
 # ------------------------------------------------- as the server trades it
 def served(C: pd.DataFrame, offset: float = 0.5, wait: int = 4, through: float = 0.0,
-           hold: int = 16) -> pd.DataFrame:
+           hold: int = 16, scale_part: float = 0.0, scale_at: float = 0.0) -> pd.DataFrame:
     """The calls traded exactly as the app tells a person to trade them --
     `monitor.resting_orders`, the code the server runs: one order resting
     at the newest call's price, one position at a time per coin and side.
@@ -386,7 +386,8 @@ def served(C: pd.DataFrame, offset: float = 0.5, wait: int = 4, through: float =
         tp[ii] = g["tp"].to_numpy(); sl[ii] = g["sl"].to_numpy()
         meta = g.set_index("i")
         for od in resting_orders(d["o"], d["h"], d["l"], d["c"], d["atr"], tp, sl, level,
-                                 side == "long", offset, wait, hold, min_level=3, through_atr=through):
+                                 side == "long", offset, wait, hold, min_level=3, through_atr=through,
+                                 scale_part=scale_part, scale_at=scale_at):
             if od.state in ("target", "stop", "timeout"):
                 m = meta.loc[od.placed]
                 rows.append(dict(coin=coin, side=side, t=m["t"], pos=m["pos"], window=m["window"],

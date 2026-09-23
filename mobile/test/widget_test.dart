@@ -2496,6 +2496,64 @@ void main() {
       expect(find.text(r'Limit $100.00 · TP +2.00% · SL −5.00%'), findsOneWidget);
     });
 
+    test('the scale-out parses: the halfway price, the part, and taken', () {
+      final j = payload(state: 'filled', action: 'WAIT');
+      (j['recommendation'] as Map)['order'] = {
+        ...((j['recommendation'] as Map)['order'] as Map),
+        'scale_part': 1 / 3, 'scale_price': 86642.5, 'taken': false,
+      };
+      (j['levels'] as Map)['scale_out'] = 86642.5;
+      final d = Dashboard.fromJson(j);
+      final o = d.recommendation.order!;
+      expect(o.scalePrice, 86642.5);
+      expect(o.partWords, 'a third');
+      expect(o.partShort, '⅓');
+      expect(o.taken, isFalse);
+      expect(d.scaleOut, 86642.5);
+    });
+
+    testWidgets('the levels panel names the halfway price, then says it is done', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: LevelsPanel(
+                      price: 86367.4, takeProfit: 87385.1, stopLoss: 79800.0,
+                      side: 'LONG', fixed: true, scaleOut: 86642.5,
+                      scalePart: 'a third')))));
+      expect(find.text('Halfway: take a third off'), findsOneWidget);
+      expect(find.textContaining('move your stop to your entry'), findsOneWidget);
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: LevelsPanel(
+                      price: 86700.0, takeProfit: 87385.1, stopLoss: 85900.0,
+                      side: 'LONG', fixed: true, scalePart: 'a third',
+                      scaleTaken: true)))));
+      expect(find.text('Halfway — a third taken'), findsOneWidget);
+      expect(find.textContaining('can no longer lose'), findsOneWidget);
+    });
+
+    testWidgets('the calls list shows where the third comes off', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: SignalsPanel(
+                      data: LiveSignals.fromJson({
+                        'signals': [
+                          {'symbol': 'BTCUSDT', 'interval': '4h', 'action': 'BUY',
+                           'strength': 'strong', 'detail': '', 'side': 'LONG',
+                           'price': 101.0, 'entry_limit': 100.0,
+                           'take_profit': 102.0, 'stop_loss': 95.0,
+                           'order': {'state': 'open', 'limit': 100.0, 'target': 102.0,
+                                     'stop': 95.0, 'scale_part': 1 / 3, 'scale_price': 101.0}},
+                        ],
+                        'watched_symbols': 1, 'intervals': ['4h'],
+                      }),
+                      onOpen: (_) {})))));
+      await t.pumpAndSettle();
+      expect(find.text(r'Limit $100.00 · TP +2.00% · ⅓ at +1.00% · SL −5.00%'), findsOneWidget);
+    });
+
     test('the instructions explain the order and the rotation', () {
       final titles = howToSteps.map((h) => h.title).join(' | ');
       expect(titles, contains('limit order'));

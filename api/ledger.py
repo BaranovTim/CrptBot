@@ -101,6 +101,7 @@ class OrderLedger:
                            "rank": r.get("rank"), "fill": r.get("fill"),
                            "filled_at": _iso(r.get("filled_at")), "exit": r.get("exit"),
                            "closed_at": _iso(r.get("closed_at")), "ret_pct": r.get("ret_pct"),
+                           "taken": bool(r.get("taken")), "scale_price": r.get("scale_price"),
                            "pool": pool}
                     if old is None:
                         row["seen_at"] = _iso(now if now is not None else pd.Timestamp.now(tz="UTC"))
@@ -135,7 +136,11 @@ class OrderLedger:
             "in_trade": len([r for r in rows if r.get("state") == "filled"]),
             "closed": len(trades),
             "targets": len([r for r in trades if r["state"] == "target"]),
-            "stops": len([r for r in trades if r["state"] == "stop"]),
+            # a stop AFTER the scale-out is the entry: the part taken off
+            # halfway made the trade a win, so it is not counted as a stop
+            "stops": len([r for r in trades if r["state"] == "stop" and not r.get("taken")]),
+            "back_to_entry": len([r for r in trades if r["state"] == "stop" and r.get("taken")]),
+            "partials": len([r for r in rows if r.get("taken")]),
             "timeouts": len([r for r in trades if r["state"] == "timeout"]),
             "wins": len(wins),
             "win_rate": (len(wins) / len(nets)) if nets else None,

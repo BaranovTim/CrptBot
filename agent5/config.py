@@ -130,6 +130,14 @@ class Agent5Config:
     # single seed on both periods and every single seed on the total
     # (research/QUANT.md, round four).
     bag_seeds: tuple = ()
+    # THE SCALE-OUT (research/win_rate.py, the owner's choice for a 70%+
+    # win rate): once filled, `scale_out_part` of the position comes off
+    # when price has gone `scale_out_at` of the way to the target, and the
+    # stop on the rest moves to the entry. A third at halfway: wins 75% /
+    # 71% (development / latest year) against 62% / 58%, for about a third
+    # less return over three years. 0 = off.
+    scale_out_part: float = 0.0
+    scale_out_at: float = 0.0
 
     # --- regime block -------------------------------------------------------
     vol_window: int = 24            # realized-vol lookback (bars)
@@ -171,6 +179,10 @@ class Agent5Config:
             raise ValueError("a resting entry needs at least one bar to fill in")
         if len(set(self.bag_seeds)) != len(tuple(self.bag_seeds)):
             raise ValueError("bag_seeds must be distinct")
+        if not 0 <= self.scale_out_part < 1:
+            raise ValueError("scale_out_part must be in [0, 1)")
+        if self.scale_out_part > 0 and not 0 < self.scale_out_at < 1:
+            raise ValueError("a scale-out needs a point between the entry and the target")
 
 
 DEFAULT_CONFIG = Agent5Config()

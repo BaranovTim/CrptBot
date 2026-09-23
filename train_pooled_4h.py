@@ -78,6 +78,12 @@ ENTRY_VALID_BARS = 6
 # Sharpe 2.22/2.22 to 1.82/1.40; the bag beat the average seed on both
 # periods and every seed on the six-half-year total.
 BAG_SEEDS = (7, 11, 13, 17, 19)
+# THE SCALE-OUT (research/win_rate.py; the owner chose it for a 70%+ win
+# rate): a third off halfway from the fill to the target, the stop on the
+# rest to the entry. Wins 75% / 71% (development / latest year) against
+# 62% / 58%; about a third less return over three years.
+SCALE_OUT_PART = 1.0 / 3.0
+SCALE_OUT_AT = 0.5
 EPOCH = pd.Timestamp("2015-01-01", tz="UTC")
 BAR = pd.Timedelta(hours=4)
 # the fifteen the walk-forward validated, which are also the ones served
@@ -165,11 +171,14 @@ def update_rules(coins) -> int:
                 print(f"  {path.name}: not a pooled model, left alone")
                 continue
             judge.cfg = dataclasses.replace(judge.cfg, entry_offset_atr=ENTRY_OFFSET_ATR,
-                                            entry_valid_bars=ENTRY_VALID_BARS)
+                                            entry_valid_bars=ENTRY_VALID_BARS,
+                                            scale_out_part=SCALE_OUT_PART,
+                                            scale_out_at=SCALE_OUT_AT)
             judge.save(path)
             n += 1
     print(f"entry rule written into {n} installed models "
-          f"({ENTRY_OFFSET_ATR:g} ATR, {ENTRY_VALID_BARS} bars)")
+          f"({ENTRY_OFFSET_ATR:g} ATR, {ENTRY_VALID_BARS} bars; "
+          f"{SCALE_OUT_PART:.2f} off at {SCALE_OUT_AT:.0%} of the way)")
     return 0
 
 
@@ -218,7 +227,8 @@ def main(argv=None) -> int:
         cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k, geometry="structure",
                            side=side, stop_buffer_atr=a.stop_buffer, rank_pool=pool_id,
                            entry_offset_atr=ENTRY_OFFSET_ATR, entry_valid_bars=ENTRY_VALID_BARS,
-                           bag_seeds=BAG_SEEDS)
+                           bag_seeds=BAG_SEEDS, scale_out_part=SCALE_OUT_PART,
+                           scale_out_at=SCALE_OUT_AT)
         parts = {}
         for sym, (bars, fr, warm) in frames.items():
             ds = JudgeAgent(cfg).build(bars, warmup=warm, **fr)

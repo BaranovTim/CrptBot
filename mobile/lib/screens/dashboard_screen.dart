@@ -1443,6 +1443,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 10),
             _outcomeChip(d, outcome),
           ],
+          // Nothing live: say how the next 4h call will arrive, so the order
+          // is not a feature you only discover when a call happens to be up.
+          if (!settled && action == 'FLAT' && d.interval == '4h' && order == null) ...[
+            const SizedBox(height: 10),
+            Text(
+                'When a 4h call comes, it arrives here as a limit order — '
+                'a price to buy or sell at, good for 24 hours — and a third '
+                'comes off halfway to the target.',
+                textAlign: TextAlign.center,
+                style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+          ],
           // THE ORDER. A pooled 4h call enters with a resting limit order,
           // not at the market; the card leads with where and until when.
           if (!settled && !gated && order != null && order.isOpen &&
@@ -1450,14 +1461,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 12),
             _orderChip(
                 '${r.action == 'SELL' ? 'SELL' : 'BUY'} LIMIT ${LevelsPanel.money(order.limit)}',
-                order.validUntil == null ? null : 'good until ${_utc(order.validUntil!)}',
+                [
+                  if (order.validUntil != null) 'good until ${_utc(order.validUntil!)}',
+                  if (order.scalePrice != null)
+                    'take ${order.partShort} off at ${LevelsPanel.money(order.scalePrice)}, then stop to entry',
+                ].join(' · ').ifEmptyNull,
                 c),
           ],
           if (!settled && !gated && r.inTrade && order?.fill != null) ...[
             const SizedBox(height: 12),
-            _orderChip('IN THE TRADE · FILLED ${LevelsPanel.money(order!.fill)}',
-                order.holdUntil == null ? null : 'closes by ${_utc(order.holdUntil!)}',
-                Obsidian.primary),
+            _orderChip(
+                order!.taken
+                    ? '${order.partShort} TAKEN · STOP AT ENTRY ${LevelsPanel.money(order.fill)}'
+                    : 'IN THE TRADE · FILLED ${LevelsPanel.money(order.fill)}',
+                [
+                  if (!order.taken && order.scalePrice != null)
+                    'take ${order.partShort} off at ${LevelsPanel.money(order.scalePrice)}, then stop to entry',
+                  if (order.holdUntil != null) 'closes by ${_utc(order.holdUntil!)}',
+                ].join(' · ').ifEmptyNull,
+                order.taken ? Obsidian.green : Obsidian.primary),
           ],
           if (!settled && !gated && r.strength.isNotEmpty && !r.inTrade) ...[
             const SizedBox(height: 8),
@@ -1527,11 +1549,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// TARGET REACHED in green, STOP HIT in red — the one line that says why
   /// the card reads WAIT where it read BUY an hour ago.
   Widget _outcomeChip(Dashboard d, String outcome) {
-    final won = outcome == 'target';
-    final c = won ? Obsidian.green : Obsidian.red;
+    final order = d.recommendation.order;
     final called = d.recommendation.called.isNotEmpty
         ? d.recommendation.called
         : d.recommendation.action;
+    // A trade that took its part off halfway and then came back to the
+    // entry is a WIN overall: the stop it hit was the entry, not a loss.
+    if (order != null && order.taken) {
+      final r = order.retPct;
+      final c = (r ?? 0) >= 0 ? Obsidian.green : Obsidian.red;
+      final rest = outcome == 'target' ? 'REST AT TARGET' : 'REST AT ENTRY';
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: c.withValues(alpha: 0.45)),
+        ),
+        child: Text(
+            '$called · ${order.partShort} TAKEN · $rest'
+            '${r == null ? '' : ' · ${r >= 0 ? '+' : '−'}${r.abs().toStringAsFixed(2)}% OVERALL'}',
+            style: Obsidian.labelSm(color: c, size: 10.5)),
+      );
+    }
+    final won = outcome == 'target';
+    final c = won ? Obsidian.green : Obsidian.red;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -1572,6 +1614,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       fixed: d.levelsAreFixed,
       entryLimit: d.entryLimit,
       entryUntil: d.recommendation.order?.validUntil,
+      scaleOut: d.scaleOut,
+      scalePart: d.recommendation.order?.partWords ?? '',
+      scaleTaken: d.recommendation.order?.taken ?? false,
     );
   }
 
@@ -1847,4 +1892,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   static String _money(double? v) => priceText(v);
+}
+
+
+extension _EmptyNull on String {
+  /// null for an empty string: a chip's second line is omitted, not blank.
+  String? get ifEmptyNull => isEmpty ? null : this;
 }

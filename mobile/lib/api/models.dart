@@ -174,14 +174,44 @@ class EntryOrder {
         placedAt = _t(j['placed_at']),
         validUntil = _t(j['valid_until']),
         holdUntil = _t(j['hold_until']),
-        filledAt = _t(j['filled_at']);
+        filledAt = _t(j['filled_at']),
+        exit = _d(j['exit']),
+        scalePart = _d(j['scale_part']),
+        scalePrice = _d(j['scale_price']),
+        taken = j['taken'] as bool? ?? false,
+        retPct = _d(j['ret_pct']);
 
   /// open | filled | target | stop | timeout | expired
   final String state, level;
-  final double? limit, stop, target, fill;
+  final double? limit, stop, target, fill, exit;
   final DateTime? placedAt, validUntil, holdUntil, filledAt;
 
+  /// THE SCALE-OUT: `scalePart` of the position comes off at `scalePrice`
+  /// (halfway from the entry to the target) and the stop on the rest moves
+  /// to the entry. `taken` once it has; `retPct` is the whole trade's
+  /// return, both parts weighted, once it has ended.
+  final double? scalePart, scalePrice, retPct;
+  final bool taken;
+
   bool get isOpen => state == 'open';
+
+  /// "a third", "half", or a percentage -- for the card's words.
+  String get partWords {
+    final p = scalePart;
+    if (p == null) return '';
+    if ((p - 1 / 3).abs() < 0.01) return 'a third';
+    if ((p - 0.5).abs() < 0.01) return 'half';
+    return '${(p * 100).round()}%';
+  }
+
+  /// The same, as the short badge text: ⅓, ½ or a percentage.
+  String get partShort {
+    final p = scalePart;
+    if (p == null) return '';
+    if ((p - 1 / 3).abs() < 0.01) return '⅓';
+    if ((p - 0.5).abs() < 0.01) return '½';
+    return '${(p * 100).round()}%';
+  }
 
   static DateTime? _t(Object? v) =>
       v is String && v.isNotEmpty ? DateTime.tryParse(v)?.toUtc() : null;
@@ -267,6 +297,7 @@ class Dashboard {
         side = (j['levels'] as Map)['side'] as String? ?? '',
         levelsReached = (j['levels'] as Map)['reached'] as String? ?? '',
         entryLimit = _d((j['levels'] as Map)['entry_limit']),
+        scaleOut = _d((j['levels'] as Map)['scale_out']),
         levelGeometry = (j['levels'] as Map)['geometry'] as String? ??
             (j['recommendation'] as Map?)?['geometry'] as String? ??
             'atr',
@@ -279,6 +310,10 @@ class Dashboard {
   /// The resting order's price when the call enters with one: the levels
   /// are measured from here, and a logged entry defaults to it.
   final double? entryLimit;
+
+  /// Where part of the position comes off (halfway to the target) while
+  /// that has not happened yet; null otherwise.
+  final double? scaleOut;
 
   /// The 200-day trend, on the timeframes that gate on it (daily). Null
   /// elsewhere, or with too little history to say.
@@ -1627,6 +1662,7 @@ class RecordLevel {
         closed = (j['closed'] as num?)?.toInt() ?? 0,
         targets = (j['targets'] as num?)?.toInt() ?? 0,
         stops = (j['stops'] as num?)?.toInt() ?? 0,
+        backToEntry = (j['back_to_entry'] as num?)?.toInt() ?? 0,
         timeouts = (j['timeouts'] as num?)?.toInt() ?? 0,
         wins = (j['wins'] as num?)?.toInt() ?? 0,
         winRate = _d(j['win_rate']),
@@ -1635,6 +1671,10 @@ class RecordLevel {
 
   final int orders, filled, expired, openOrders, inTrade, closed;
   final int targets, stops, timeouts, wins;
+
+  /// Trades that took their part off halfway and then came back to the
+  /// entry: wins overall, not stops.
+  final int backToEntry;
   final double? winRate, avgNetPct;
   final double sumNetPct;
 }
@@ -1647,9 +1687,13 @@ class RecordTrade {
         fill = _d(j['fill']),
         exit = _d(j['exit']),
         netPct = _d(j['net_pct']),
+        taken = j['taken'] as bool? ?? false,
         closedAt = DateTime.tryParse(j['closed_at'] as String? ?? '')?.toUtc();
 
   final String symbol, side, state;
+
+  /// The third came off halfway (a stop after that is the entry).
+  final bool taken;
   final double? fill, exit, netPct;
   final DateTime? closedAt;
 

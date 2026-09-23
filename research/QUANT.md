@@ -855,3 +855,46 @@ flow predicts the weekly cross-section (Anastasopoulos et al., J. Financial
 Markets 2026 -- the exact premium not re-checked). The last one is now in
 the rotation (above). Left, in order: quarter-hour imbalance on 4h (needs
 1m bars or aggTrades), an OI-flush reversal rule, spot-led vs perp-led flow.
+
+### A 70% win rate, and its price (research/win_rate.py, 2026-09-23)
+
+The owner asked for at least 70% wins. The served rule wins 62% / 58%
+(development / latest year). Every lever that buys win rate sells money;
+the question is which sells least. Bagged model, served policy, every call
+(3-at-once account in brackets):
+
+| rule | win, every call | per trade, every call | Sharpe (3 at once) | 3 years |
+|---|---|---|---|---|
+| served now | 62% / 58% | +0.59% / +0.16% | 2.65 / 1.94 | +269% |
+| target at 60% of the way, stop +0.5 ATR | 71% / 68% (71 / 70) | +0.43% / +0.02% | 1.97 / 1.25 | +186% |
+| **take a third off halfway, stop to entry on the rest** | **75% / 71%** (76 / 73) | +0.36% / 0.00% | **2.33 / 1.40** | +187% |
+| take half off a third of the way | 80% / 76% (81 / 80) | +0.26% / −0.06% | 2.12 / 1.77 | +150% |
+| rank ≥ 0.99, half off halfway | 77% / 75% (76 / 76) | **+0.48% / +0.24%** | 1.44 / 1.37 | +90% |
+| market entry (the old way) | 69% / 67% | +0.21% / −0.04% | 0.48 / 0.28 | +46% |
+
+Chosen on development with win ≥ 70%: the third-off-halfway rule has the
+best development Sharpe, and the latest year confirms 71% (73% at three at
+once) -- at the cost of about a third of the three-year return. The
+strictest cut with a half off is the only 70%+ rule whose latest-year
+return per trade BEATS the served rule (+0.24% vs +0.16%), on 40% as many
+trades. The scale-out replay reproduces the served policy exactly when
+nothing is taken off.
+
+**Shipped 2026-09-23 (the owner's choice): a third off halfway, stop to the
+entry.** `Agent5Config.scale_out_part/at`, `monitor.RestingOrder` (the halfway
+point is set at the fill; the stop is checked first in a bar, then halfway,
+then the target), written into the installed models by
+`train_pooled_4h.py --update-rules`. Re-measured through the server's own code
+(`improve_4h.served(..., scale_part=1/3, scale_at=0.5)`): strong calls win
+75% / 71% (73% over three years), +0.24% a trade taking every call, account
+Sharpe 2.30 / 1.37; medium 73% / 70%; small 71% / 69%. A trade that takes
+its third and comes back to the entry is a win and is recorded as "back to
+entry", not a stop.
+
+**A bug this surfaced:** the server runs pandas 3, whose DatetimeIndex is
+microsecond-resolution, so `ScoreBook.record` stored every live reading in
+microseconds (`asi8` returns the index's unit). They sorted below the
+laptop's nanosecond back-fill, were trimmed, and `rank` never saw them -- the
+live pool was frozen at the install's back-fill and would have emptied ~90
+days later, ending all 4h calls. Fixed (`as_unit("ns")`, mixed units repaired
+on load) and redeployed the same day.

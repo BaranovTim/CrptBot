@@ -109,7 +109,9 @@ class RecordPanel extends StatelessWidget {
       ]),
       const SizedBox(height: 10),
       Text(
-          '${lv.targets} target${lv.targets == 1 ? '' : 's'} · ${lv.stops} stop${lv.stops == 1 ? '' : 's'}'
+          '${lv.targets} target${lv.targets == 1 ? '' : 's'}'
+          '${lv.backToEntry > 0 ? ' · ${lv.backToEntry} back to entry after ⅓ off' : ''}'
+          ' · ${lv.stops} stop${lv.stops == 1 ? '' : 's'}'
           ' · ${lv.timeouts} on time · ${lv.inTrade} open · ${lv.expired} never filled',
           style: Obsidian.body(color: Obsidian.onSurfaceVariant, size: 11.5)),
       const SizedBox(height: 8),
@@ -136,7 +138,10 @@ class RecordPanel extends StatelessWidget {
 
   Widget _trade(RecordTrade t) {
     final tone = (t.netPct ?? 0) >= 0 ? Obsidian.green : Obsidian.red;
-    final how = {'target': 'target', 'stop': 'stopped', 'timeout': 'on time'}[t.state] ?? t.state;
+    final how = t.taken
+        ? {'target': '⅓ off, then target', 'stop': '⅓ off, back to entry',
+            'timeout': '⅓ off, on time'}[t.state] ?? t.state
+        : {'target': 'target', 'stop': 'stopped', 'timeout': 'on time'}[t.state] ?? t.state;
     return Row(children: [
       SizedBox(
           width: 64,
@@ -261,6 +266,10 @@ class RecordPanel extends StatelessWidget {
         'target, at the stop, or when its window runs out -- from the fill '
         'price, less 0.10% for fees. Orders that never filled are listed, not '
         'counted as wins or losses.',
+    'Halfway to the target a third comes off and the stop on the rest moves '
+        'to the entry, so a trade that gets that far is counted with both '
+        'parts: the third at the halfway price, the rest wherever it ended. '
+        'One that then comes back to the entry is a small win, not a stop.',
     'Win rate alone says little: this system wins more often than it loses, '
         'but a win and a loss are not the same size. Per-trade and total '
         'returns are the numbers that pay.',

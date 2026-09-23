@@ -457,6 +457,13 @@ POOL_MIN_COINS = 8
 _LEVELS_CACHE: dict = {}
 
 
+def _as_ns(t: np.ndarray) -> np.ndarray:
+    """Epoch integers in whatever unit they were written, to nanoseconds.
+    Any time after 2001 is > 1e18 in ns, > 1e15 in us, > 1e12 in ms."""
+    t = np.asarray(t, dtype=np.int64)
+    return np.where(t < 10**14, t * 10**6, np.where(t < 10**17, t * 10**3, t))
+
+
 class ScoreBook:
     """Recent raw scores of pooled models, across every coin they serve.
 
@@ -504,9 +511,16 @@ class ScoreBook:
         try:
             raw = json.loads(self.path.read_text())
             for pool, syms in (raw.get("pools") or {}).items():
-                self._pools[pool] = {
-                    s: (np.asarray(v["t"], dtype=np.int64), np.asarray(v["s"], dtype=float))
-                    for s, v in syms.items()}
+                book = {}
+                for s, v in syms.items():
+                    t, x = _as_ns(np.asarray(v["t"], dtype=np.int64)), np.asarray(v["s"], dtype=float)
+                    # entries written in another unit can duplicate a bar;
+                    # the later write of a bar wins, as in `record`
+                    o = np.argsort(t, kind="stable")
+                    t, x = t[o], x[o]
+                    last = np.r_[t[1:] != t[:-1], True]
+                    book[s] = (t[last][-self.KEEP:], x[last][-self.KEEP:])
+                self._pools[pool] = book
                 self._touched[pool] = float((raw.get("touched") or {}).get(pool, 0.0))
         except (OSError, ValueError, KeyError, TypeError):
             # a cache: a broken file is recomputed by the next builds
@@ -534,7 +548,13 @@ class ScoreBook:
         same bars held before; keeps the newest KEEP bars per coin."""
         t = pd.DatetimeIndex(times)
         t = t.tz_localize("UTC") if t.tz is None else t.tz_convert("UTC")
-        ns = t.asi8.astype(np.int64)
+        # NANOSECONDS, whatever the index's own unit. pandas 3 (the server's)
+        # parses times at microsecond resolution and `asi8` returns THAT
+        # unit: from the 2026-09-22 install to 09-23 every live reading was
+        # stored in microseconds, sorted below the nanosecond back-fill, was
+        # trimmed, and was invisible to `rank`. The book would have emptied
+        # ~90 days after an install and the calls stopped.
+        ns = t.as_unit("ns").asi8.astype(np.int64)
         v = np.asarray(scores, dtype=float)
         ok = np.isfinite(v)
         ns, v = ns[ok], v[ok]
@@ -560,7 +580,8 @@ class ScoreBook:
         POOL_MIN_COINS coins and 50 readings."""
         at = pd.Timestamp(at)
         at = at.tz_localize("UTC") if at.tzinfo is None else at.tz_convert("UTC")
-        hi = at.value; lo = (at - span).value
+        at = at.as_unit("ns")
+        hi = at.value; lo = (at - span).as_unit("ns").value
         with self._lock:
             self._load()
             book = dict(self._pools.get(pool, {}))
@@ -608,15 +629,29 @@ class RestingOrder:
     filled_at: int = -1
     exit: float = float("nan")
     closed_at: int = -1
+    # THE SCALE-OUT (research/win_rate.py): once filled, when price has gone
+    # `scale_at` of the way from the fill to the target, `scale_part` of the
+    # position comes off there and the stop on the rest moves to the fill.
+    # A trade that gets that far can no longer lose. 0 = off.
+    scale_part: float = 0.0
+    scale_at: float = 0.0
+    scale_price: float = float("nan")    # set at the fill
+    taken: bool = False
+    taken_at: int = -1
 
     @property
     def active(self) -> bool:
         return self.state in ("open", "filled")
 
     def ret_pct(self) -> float:
-        """% from the fill to the exit, from the trade's side."""
+        """% from the fill to the exit, from the trade's side -- the part
+        taken off and the rest, weighted, when the trade scaled out."""
         s = 1.0 if self.long else -1.0
-        return s * (self.exit / self.fill - 1.0) * 100.0
+        rest = s * (self.exit / self.fill - 1.0) * 100.0
+        if self.taken:
+            part = s * (self.scale_price / self.fill - 1.0) * 100.0
+            return self.scale_part * part + (1.0 - self.scale_part) * rest
+        return rest
 
     def step(self, j: int, o: float, h: float, lo: float, c: float,
              closed: bool = True) -> None:
@@ -640,6 +675,8 @@ class RestingOrder:
                 self.fill = min(self.limit, o) if long else max(self.limit, o)
                 self.filled_at = j
                 self.state = "filled"
+                if self.scale_part > 0:
+                    self.scale_price = self.fill + self.scale_at * (self.target - self.fill)
                 if (lo <= self.stop) if long else (h >= self.stop):
                     self.state, self.exit, self.closed_at = "stop", self.stop, j
                 return
@@ -649,7 +686,16 @@ class RestingOrder:
         if self.state == "filled":
             if (lo <= self.stop) if long else (h >= self.stop):
                 self.state, self.exit, self.closed_at = "stop", self.stop, j
-            elif (h >= self.target) if long else (lo <= self.target):
+                return
+            if (self.scale_part > 0 and not self.taken
+                    and ((h >= self.scale_price) if long else (lo <= self.scale_price))):
+                # halfway: a part off, the rest's stop to the entry. A bar that
+                # also reaches the target ends the trade there; one that only
+                # reached halfway cannot also have hit the new stop (OHLC
+                # cannot order them, and the old stop was not touched).
+                self.taken, self.taken_at = True, j
+                self.stop = self.fill
+            if (h >= self.target) if long else (lo <= self.target):
                 self.state, self.exit, self.closed_at = "target", self.target, j
             elif closed and j >= self.hold_to:
                 self.state, self.exit, self.closed_at = "timeout", c, j
@@ -658,7 +704,8 @@ class RestingOrder:
 def resting_orders(o, h, lo, c, atr, tp_pct, sl_pct, level, long: bool,
                    offset_atr: float, valid_bars: int, hold_bars: int,
                    min_level: int = 1, policy: str = "replace",
-                   through_atr: float = 0.0) -> List[RestingOrder]:
+                   through_atr: float = 0.0, scale_part: float = 0.0,
+                   scale_at: float = 0.0) -> List[RestingOrder]:
     """One side of one coin, replayed as resting orders, one position at a time.
 
     THE POLICY, which is what the app tells a person to do:
@@ -697,7 +744,8 @@ def resting_orders(o, h, lo, c, atr, tp_pct, sl_pct, level, long: bool,
                 stop=entry * (1 - s * sl_pct[j] / 100.0) - shift,
                 target=entry * (1 + s * tp_pct[j] / 100.0),
                 valid_to=j + valid_bars, hold_to=j + hold_bars, level=int(level[j]),
-                need=(entry - shift - s * through_atr * atr[j]) if through_atr else float("nan"))
+                need=(entry - shift - s * through_atr * atr[j]) if through_atr else float("nan"),
+                scale_part=scale_part, scale_at=scale_at)
             out.append(cur)
     return out
 
@@ -926,6 +974,24 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
 LEVEL_NAMES = {3: "strong", 2: "medium", 1: "small"}
 
 
+def _part_words(part: float) -> str:
+    """0.333 -> "a third", 0.5 -> "half", else a percentage."""
+    for v, w in ((1 / 3, "a third"), (0.5, "half"), (0.25, "a quarter"), (2 / 3, "two thirds")):
+        if abs(part - v) < 0.01:
+            return w
+    return f"{part:.0%}"
+
+
+def pool_installed_at(pool: str):
+    """`crypto-4h-20260922T191908Z` -> 2026-09-22 19:19:08 UTC; None when the
+    pool name carries no install time (research and test pools)."""
+    try:
+        return pd.Timestamp(pd.to_datetime(str(pool).rsplit("-", 1)[-1],
+                                           format="%Y%m%dT%H%M%SZ", utc=True))
+    except (ValueError, TypeError):
+        return None
+
+
 def _order_row(od: "RestingOrder", when, ranks) -> dict:
     """One replayed order as the live record keeps it. Times are the bar
     closes as a person reads them; the return is the trade's, gross."""
@@ -937,7 +1003,9 @@ def _order_row(od: "RestingOrder", when, ranks) -> dict:
             "filled_at": when(od.filled_at) if od.filled_at >= 0 else None,
             "exit": float(od.exit) if np.isfinite(od.exit) else None,
             "closed_at": when(od.closed_at) if od.closed_at >= 0 else None,
-            "ret_pct": float(od.ret_pct()) if closed else None}
+            "ret_pct": float(od.ret_pct()) if closed else None,
+            "taken": bool(od.taken),
+            "scale_price": float(od.scale_price) if np.isfinite(od.scale_price) else None}
 
 
 def _px(v: float) -> str:
@@ -967,6 +1035,8 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
     or a trade that closed at the latest close, if one did.
     """
     k = float(cfg.entry_offset_atr); V = int(cfg.entry_valid_bars); H = int(cfg.max_hold_bars)
+    sp = float(getattr(cfg, "scale_out_part", 0.0) or 0.0)
+    sa = float(getattr(cfg, "scale_out_at", 0.0) or 0.0)
     # twice the life of an order plus its trade, so a trade opened before
     # the window cannot quietly block the calls inside it
     m = min(2 * (H + V) + 2, len(tail))
@@ -983,6 +1053,17 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
             if np.isfinite(r) and r >= cut:
                 lev[q] = 3 - n
                 break
+    # NO CALLS FROM BEFORE THE MODEL EXISTED. Right after an install, the
+    # window reaches back over bars the model was fitted on, and its score
+    # book was back-filled with its own in-sample readings -- more extreme
+    # than live ones, so they "call" often. Replayed, those calls became
+    # trades nobody was ever told about (eight coins "in the trade" the hour
+    # after the 2026-09-23 install), and a phantom trade blocks every real
+    # call on its coin until it times out. The live record (api/ledger.py)
+    # already starts at the install; now the card does too.
+    since = pool_installed_at(getattr(cfg, "rank_pool", ""))
+    if since is not None:
+        lev[np.asarray(pd.DatetimeIndex(times) < since)] = 0
     o = bars["open"].to_numpy(float)[bi]; h = bars["high"].to_numpy(float)[bi]
     lo = bars["low"].to_numpy(float)[bi]; c = bars["close"].to_numpy(float)[bi]
     from agent5.labels import _atr
@@ -1000,7 +1081,8 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
     # speaks for the strongest, the live record (api/ledger.py) keeps all three
     gov = None; last = None
     for ml in (3, 2, 1):
-        orders = resting_orders(o, h, lo, c, atr, tp, sl, lev, long, k, V, H, min_level=ml)
+        orders = resting_orders(o, h, lo, c, atr, tp, sl, lev, long, k, V, H, min_level=ml,
+                                scale_part=sp, scale_at=sa)
         a.order_book[LEVEL_NAMES[ml]] = [_order_row(od, when, ranks) for od in orders]
         if gov is None and orders and orders[-1].active:
             gov = (ml, orders[-1])
@@ -1021,11 +1103,22 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
                 "stop": f"The trade from the {placed:%a %H:%M} UTC order was stopped out.",
                 "timeout": f"The trade from the {placed:%a %H:%M} UTC order ran out of time and closes here.",
             }[last.state]
+            if last.taken and last.state in ("target", "stop", "timeout"):
+                rest = {"target": "the rest reached the target",
+                        "stop": "the rest came back to the entry",
+                        "timeout": "the rest closed on time"}[last.state]
+                note = (f"The trade from the {placed:%a %H:%M} UTC order took "
+                        f"{_part_words(last.scale_part)} off at {_px(last.scale_price)} and {rest}: "
+                        f"{last.ret_pct():+.2f}% overall.")
             a.order = last
             a.order_info = {"state": last.state, "limit": last.limit, "stop": last.stop,
                             "target": last.target, "placed_at": placed,
                             "fill": last.fill if np.isfinite(last.fill) else None,
                             "exit": last.exit if np.isfinite(last.exit) else None,
+                            "scale_part": sp or None,
+                            "scale_price": last.scale_price if np.isfinite(last.scale_price) else None,
+                            "taken": bool(last.taken),
+                            "ret_pct": float(last.ret_pct()) if last.state in ("target", "stop", "timeout") else None,
                             "level": LEVEL_NAMES[last.level], "next": m, "note": note}
         return False
 
@@ -1039,12 +1132,17 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
     tp_from = s * (od.target / entry - 1.0) * 100.0
     sl_from = s * (od.stop / entry - 1.0) * 100.0
     a.order = od
+    # where the third comes off: from the fill once filled, from the limit
+    # (where it is meant to fill) while the order rests
+    scale_px = (od.scale_price if filled and np.isfinite(od.scale_price)
+                else (entry + sa * (od.target - entry) if sp > 0 else None))
     a.order_info = {"state": od.state, "limit": od.limit, "stop": od.stop, "target": od.target,
                     "placed_at": placed, "valid_until": valid_until, "hold_until": hold_until,
                     "fill": od.fill if filled else None,
                     "filled_at": when(od.filled_at) if filled else None,
                     "level": LEVEL_NAMES[ml], "rank": float(ranks[od.placed]), "next": m,
-                    "offset_atr": k, "last_close": float(c[-1])}
+                    "offset_atr": k, "last_close": float(c[-1]),
+                    "scale_part": sp or None, "scale_price": scale_px, "taken": bool(od.taken)}
     a.rank = float(ranks[od.placed])
     a.strength = LEVEL_NAMES[ml]
     a.side = side
@@ -1054,12 +1152,23 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
     a.size_pct = min(float(cfg.equal_size_pct), cfg.max_position_pct)
     a.ends_at = hold_until if filled else valid_until
     over = f"the last 90 days' readings across {pool_coins} coins"
-    if filled:
+    third = _part_words(sp)
+    if filled and od.taken:
+        a.action = "WAIT"
+        a.reason = (f"In the trade, {third} already taken off at {_px(od.scale_price)}: the "
+                    f"{word.lower()} order from the {placed:%a %H:%M} UTC close filled at "
+                    f"{_px(od.fill)}, and the stop on the rest is now at that entry — this trade "
+                    f"can no longer lose. The rest runs to the target {_px(od.target)} "
+                    f"({tp_from:+.2f}%) or back to the entry, or closes at {hold_until:%a %H:%M} UTC.")
+    elif filled:
         a.action = "WAIT"
         a.reason = (f"In the trade: the {word.lower()} order from the {placed:%a %H:%M} UTC close "
                     f"filled at {_px(od.fill)}. It runs to the target {_px(od.target)} "
                     f"({tp_from:+.2f}%) or the stop {_px(od.stop)} ({sl_from:+.2f}%), or closes "
                     f"at {hold_until:%a %H:%M} UTC. No new entry on this coin until it does.")
+        if sp > 0 and scale_px is not None:
+            a.reason += (f" At {_px(scale_px)}, halfway, take {third} off and move the stop "
+                         f"on the rest to your entry.")
     else:
         a.action = f"ENTER {side} NOW"
         a.reason = (f"A {a.strength} signal — the {placed:%a %H:%M} UTC reading was stronger than "
@@ -1067,9 +1176,13 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
                     f"{_px(od.limit)} ({k:g} ATR {'under' if long else 'over'} that close), good "
                     f"until {valid_until:%a %H:%M} UTC. Target {_px(od.target)} ({tp_from:+.2f}%), "
                     f"stop {_px(od.stop)} ({sl_from:+.2f}%), both from the limit.")
+        if sp > 0 and scale_px is not None:
+            a.reason += (f" Halfway, at {_px(scale_px)}, take {third} off and move the stop to "
+                         f"the entry.")
     a.diagnostic = (f"p(target first) {p:.3f}; pooled rank {a.rank:.3f} at the "
                     f"{placed:%a %H:%M} close; order {od.state}; resting {k:g} ATR, "
-                    f"{V} bars; stop moved with the entry")
+                    f"{V} bars; stop moved with the entry"
+                    + (f"; {third} off at {sa:.0%} of the way, then stop to entry" if sp > 0 else ""))
     return True
 
 

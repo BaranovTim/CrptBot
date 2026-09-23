@@ -208,6 +208,18 @@ def _usd(v) -> str:
     return f"${x:,.0f}"
 
 
+def _part(v) -> str:
+    """0.333 -> "a third"; the share of a position the scale-out takes."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "part"
+    for x, w in ((1 / 3, "a third"), (0.5, "half"), (0.25, "a quarter"), (2 / 3, "two thirds")):
+        if abs(f - x) < 0.01:
+            return w
+    return f"{f:.0%}"
+
+
 def _hhmm(iso) -> str:
     """'Wed 04:00 UTC' from an ISO time, or '' when there is none."""
     if not iso:
@@ -556,7 +568,11 @@ class AlertEngine:
         prev_order = self._last_order.get(key)
         self._last_order[key] = (order.get("placed_at"), order.get("limit")) if order.get("state") == "open" else None
 
-        now_state = ((order.get("placed_at"), order.get("state"))
+        # the state, with "+taken" once the scale-out has happened, so the
+        # halfway point is a transition of its own
+        now_state = ((order.get("placed_at"),
+                      str(order.get("state")) + ("+taken" if order.get("taken")
+                                                 and order.get("state") == "filled" else ""))
                      if order.get("placed_at") and order.get("state") else None)
         was_state = self._order_state.get(key)
         self._order_state[key] = now_state
@@ -569,7 +585,11 @@ class AlertEngine:
             if was_state[1] == "open" and now_state[1] == "filled":
                 out.append(self._order_alert(d, iv, rec, order, "filled"))
                 return out
-            if was_state[1] in ("open", "filled") and now_state[1] in ("target", "stop", "timeout"):
+            if was_state[1] in ("open", "filled") and now_state[1] == "filled+taken":
+                out.append(self._order_alert(d, iv, rec, order, "partial"))
+                return out
+            if (was_state[1] in ("open", "filled", "filled+taken")
+                    and now_state[1] in ("target", "stop", "timeout")):
                 out.append(self._order_alert(d, iv, rec, order, now_state[1]))
                 return out
 
@@ -691,9 +711,27 @@ class AlertEngine:
             r = (px / fill - 1.0) * 100.0 * (1 if long else -1)
             return f" ({r:+.2f}% from the fill)"
 
+        part = _part(order.get("scale_part"))
+        if what == "partial":
+            sp = order.get("scale_price")
+            title = f"{sym}: {iv}; halfway, take {part} off"
+            lines = [f"Take {part} off at {_price_text(sp)}{pct(sp)}.",
+                     f"Move the stop on the rest to your entry {_price_text(fill)}.",
+                     "The trade can no longer lose.",
+                     f"Take profit {_price_text(order.get('target'))} for the rest"]
+            return Alert(
+                id=_hash("order", sym, iv, what, str(order.get("placed_at"))),
+                kind="signal", severity="high", symbol=sym, interval=iv,
+                strength=str(order.get("level") or rec.get("strength") or ""),
+                title=title, body="\n".join(lines),
+                at=utc_now(), detected_at=utc_now(),
+                extra={"bar": d["last_closed_bar"], "window_ends": str(rec.get("window_ends", "")),
+                       "from": rec.get("action"), "to": rec.get("action"), "order": what})
         if what == "filled":
             title = f"{sym}: {iv}; {word.lower()} order filled"
             lines = [f"Filled at {_price_text(fill)}. In the trade.",
+                     (f"Halfway {_price_text(order.get('scale_price'))}: take {part} off, stop to entry"
+                      if order.get("scale_price") else ""),
                      f"Take profit {_price_text(order.get('target'))}",
                      f"Stop loss {_price_text(order.get('stop'))}",
                      f"Closes by {_hhmm(order.get('hold_until'))}" if order.get("hold_until") else ""]
@@ -717,6 +755,16 @@ class AlertEngine:
                       "timeout": (f"The {word.lower()} trade ran out of time; close it at the market"
                                   + (f" (last {_price_text(exit_px)}{pct(exit_px)})." if exit_px else "."))}[what],
                      "It is in the live record."]
+            if order.get("taken"):
+                # the part came off halfway; a stop here is the ENTRY
+                rest = {"target": f"The rest reached the target {_price_text(exit_px)}.",
+                        "stop": f"The rest came back to the entry {_price_text(exit_px)}.",
+                        "timeout": "The rest ran out of time; close it at the market."}[what]
+                r = order.get("ret_pct")
+                title = (f"{sym}: {iv}; trade closed"
+                         + (f", {r:+.2f}% overall" if r is not None else ""))
+                lines = [f"{part.capitalize()} was taken at {_price_text(order.get('scale_price'))}.",
+                         rest, "It is in the live record."]
             return Alert(
                 id=_hash("order", sym, iv, what, str(order.get("placed_at"))),
                 kind="signal", severity="medium", symbol=sym, interval=iv,
