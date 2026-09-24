@@ -436,6 +436,7 @@ def test_the_card_names_the_halfway_price_and_the_notice_fires_once():
     want = info["limit"] + 0.5 * (info["target"] - info["limit"])
     assert abs(info["scale_price"] - want) < 1e-9 and info["scale_part"] == 1 / 3
     assert "take a third off" in a.reason, a.reason
+    assert "chance of reaching the target before the stop" in a.reason, a.reason
 
     svc = StubService(action="WAIT", strength="strong")
     base = svc.dashboard
@@ -492,4 +493,54 @@ def test_the_forming_bar_can_reach_halfway_between_closes():
     assert reached == "" and out["order"]["taken"] and out["order"]["stop"] == 99.0
     assert "take a third off at 103.00" in out["detail"], out["detail"]
     assert od.taken is False                                # the card's own order untouched
+    return True
+
+
+# ------------------------------------------------- ranked against its own
+def test_the_own_rank_is_the_researchs_rank_coin():
+    import research.wf4h as L
+    from monitor import _own_ranks
+
+    rng = np.random.default_rng(5)
+    raw = rng.random(700)
+    raw[[100, 350]] = raw[99]                       # ties count half in both
+    pos = np.arange(700)
+    want = L._trailing_rank(pos, raw, pos, raw)
+    got = _own_ranks(raw)
+    both = np.isfinite(want)
+    assert np.array_equal(both, np.isfinite(got))
+    assert np.allclose(got[both], want[both])
+    return True
+
+
+def test_a_coin_scoped_call_ignores_every_other_coin():
+    """Ranked against its own readings, a coin's call is the same whatever
+    the other coins read -- which is what lets the app add coins."""
+    import monitor
+
+    bars = _bars()
+    sc = np.full(len(bars), 0.5); sc[-1] = 0.99
+    X = _X(bars); last = bars.index[-1]
+    cfg = Agent5Config(max_hold_bars=16, k_up=1.0, k_dn=1.0, geometry="structure",
+                       side="long", stop_buffer_atr=0.5, rank_pool="P",
+                       entry_offset_atr=0.5, entry_valid_bars=6, rank_scope="coin")
+
+    def card(other_level):
+        real = monitor.SCOREBOOK
+        monitor.SCOREBOOK = _book()
+        try:
+            # nine other coins, reading everything from nothing to far above ours
+            _fill(monitor.SCOREBOOK, "P|long", [f"C{i}" for i in range(9)], last + HOUR)
+            for i in range(9):
+                monitor.SCOREBOOK._pools["P|long"][f"C{i}"] = (
+                    monitor.SCOREBOOK._pools["P|long"][f"C{i}"][0],
+                    np.full(len(monitor.SCOREBOOK._pools["P|long"][f"C{i}"][0]), other_level))
+            return evaluate(RankedJudge("long", sc, cfg=cfg), bars, X, "A", last,
+                            last + 16 * HOUR, 16, symbol="MINE")
+        finally:
+            monitor.SCOREBOOK = real
+
+    low, high = card(0.0), card(5.0)
+    assert low.rank == high.rank and low.action == high.action == "ENTER LONG NOW"
+    assert "this coin's own readings" in low.reason
     return True

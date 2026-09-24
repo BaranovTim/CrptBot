@@ -70,10 +70,11 @@ def coin_data(coin: str):
     return _BARS[coin]
 
 
-def calls(variant: str = VARIANT, cut: float = 0.97) -> pd.DataFrame:
-    """Every bar the live rule would call, with its levels as prices."""
+def calls(variant: str = VARIANT, cut: float = 0.97, rank: str = "rank_pool") -> pd.DataFrame:
+    """Every bar the live rule would call, with its levels as prices.
+    `rank`: "rank_pool" (against every coin) or "rank_coin" (its own)."""
     R = L.with_ranks(pickle.load(open(L.SCORES / f"{variant}_scores.pkl", "rb")))
-    R = R[R["rank_pool"] >= cut].copy()
+    R = R[R[rank] >= cut].copy()
     idx = []
     for coin, g in R.groupby("coin"):
         d = coin_data(coin)

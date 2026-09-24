@@ -398,6 +398,12 @@ VARIANTS = {
                           seeds=[7, 11, 13, 17, 19]),
     "live_cbp_bag5": dict(pooled=True, blocks=["base", "cbp"], data="sb0.5", extra=["cbp"],
                           seeds=[7, 11, 13, 17, 19]),
+    # PARENT AND CHILD (the owner's question): a model per coin on the live
+    # data (the child), to blend with the pooled parent; and the pooled model
+    # told which coin it is looking at
+    "child_per_coin": dict(pooled=False, blocks=["base"], data="sb0.5"),
+    "live_coinid_bag5": dict(pooled=True, blocks=["base"], data="sb0.5", coin_dummies=True,
+                             seeds=[7, 11, 13, 17, 19]),
     "live_cbp":      dict(pooled=True, blocks=["base", "cbp"], data="sb0.5", extra=["cbp"]),
     # the noise floor, measured more than once
     "live_seed13":   dict(pooled=True, blocks=["base"], data="sb0.5", params=dict(seed=13)),
@@ -480,6 +486,13 @@ def run(name: str) -> pd.DataFrame:
             D = D.merge(block(b), on=["coin", "t"], how="left")
         fs = feature_sets(D)
         cols = [c for b in v["blocks"] for c in fs[b] if c not in v.get("drop", ())]
+        if v.get("coin_dummies"):
+            # THE CHILD INSIDE THE PARENT: the coin itself as an input, one
+            # 0/1 column per coin, so the shared model can learn a coin's own
+            # departures from the common patterns where its data supports them
+            for c in sorted(D["coin"].unique()):
+                D[f"is_{c}"] = (D["coin"] == c).astype(float)
+                cols.append(f"is_{c}")
         cfg = Agent5Config(max_hold_bars=HOLD, geometry="structure", side=side)
         if v.get("params") or v.get("cfg"):
             params = dict(cfg.lgbm_params); params.update(v.get("params") or {})

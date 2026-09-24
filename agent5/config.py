@@ -138,6 +138,14 @@ class Agent5Config:
     # less return over three years. 0 = off.
     scale_out_part: float = 0.0
     scale_out_at: float = 0.0
+    # WHAT A POOLED MODEL'S READING IS RANKED AGAINST. "pool": every coin's
+    # recent readings (a call is the top 3% of all coins). "coin": this
+    # coin's own last 90 days only -- so adding or removing a coin cannot
+    # change another coin's calls. Measured on the 15 (bagged, scale-out):
+    # pool 73.4% won, Sharpe 2.30 / 1.37; coin 72.4%, 2.19 / 1.35 -- and
+    # with ten more coins served, the 15's own trades were unchanged to the
+    # trade under "coin" (research/QUANT.md, "More coins").
+    rank_scope: str = "pool"
 
     # --- regime block -------------------------------------------------------
     vol_window: int = 24            # realized-vol lookback (bars)
@@ -183,6 +191,8 @@ class Agent5Config:
             raise ValueError("scale_out_part must be in [0, 1)")
         if self.scale_out_part > 0 and not 0 < self.scale_out_at < 1:
             raise ValueError("a scale-out needs a point between the entry and the target")
+        if self.rank_scope not in ("pool", "coin"):
+            raise ValueError("rank_scope must be pool or coin")
 
 
 DEFAULT_CONFIG = Agent5Config()

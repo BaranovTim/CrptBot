@@ -1,0 +1,381 @@
+{
+ "x15_bag5_on15@0.97": {
+  "trades": 2329,
+  "trades_dev": 1514,
+  "trades_hold": 815,
+  "win_dev": 0.6221928665785997,
+  "win_hold": 0.5803680981595092,
+  "net_dev": 0.5913220478943226,
+  "net_hold": 0.15600450595942975,
+  "acct_trades_dev": 961,
+  "acct_trades_hold": 448,
+  "acct_win_dev": 0.627471383975026,
+  "acct_win_hold": 0.6071428571428571,
+  "acct_net_dev": 0.629393155665686,
+  "acct_net_hold": 0.42716089503651394,
+  "sh_dev": 2.6540448399536545,
+  "sh_hold": 1.9361190987401307,
+  "dd_dev": 32.80012354868856,
+  "dd_hold": 15.412852797605453,
+  "half_years": [
+   98.58715407778274,
+   37.48842045139332,
+   50.49994084232165,
+   16.058923442900802,
+   28.676314558830697,
+   37.83309287058645
+  ],
+  "total": 269.14384624381563,
+  "positive": 6
+ },
+ "x15_bag5_on15@0.982": {
+  "trades": 1624,
+  "trades_dev": 1069,
+  "trades_hold": 555,
+  "win_dev": 0.6435921421889617,
+  "win_hold": 0.5981981981981982,
+  "net_dev": 0.7104362764809727,
+  "net_hold": 0.301410131067966,
+  "acct_trades_dev": 742,
+  "acct_trades_hold": 345,
+  "acct_win_dev": 0.6347708894878706,
+  "acct_win_hold": 0.6231884057971014,
+  "acct_net_dev": 0.5722958388938267,
+  "acct_net_hold": 0.5427061910179669,
+  "sh_dev": 2.1964100658481702,
+  "sh_hold": 2.0786817149373316,
+  "dd_dev": 34.41343038690178,
+  "dd_hold": 17.836549911533968,
+  "half_years": [
+   71.07140802735144,
+   26.609818916406986,
+   46.190845160725935,
+   -0.9333036175860348,
+   23.090203044607087,
+   42.78350732066125
+  ],
+  "total": 208.81247885216663,
+  "positive": 5
+ },
+ "x25_bag5@0.982": {
+  "trades": 2600,
+  "trades_dev": 1691,
+  "trades_hold": 909,
+  "win_dev": 0.6292134831460674,
+  "win_hold": 0.5863586358635864,
+  "net_dev": 0.6044060089758746,
+  "net_hold": 0.09470229443519783,
+  "acct_trades_dev": 904,
+  "acct_trades_hold": 436,
+  "acct_win_dev": 0.6305309734513275,
+  "acct_win_hold": 0.5986238532110092,
+  "acct_net_dev": 0.571299018800806,
+  "acct_net_hold": 0.2711832524723125,
+  "sh_dev": 2.345476368890241,
+  "sh_hold": 1.1256253719338125,
+  "dd_dev": 36.07251958792463,
+  "dd_hold": 24.954018314552677,
+  "half_years": [
+   79.17677443784606,
+   36.12979032711722,
+   48.04443872555766,
+   7.845913606075468,
+   10.80926031053534,
+   30.85555717699803
+  ],
+  "total": 212.86173458412978,
+  "positive": 6
+ },
+ "x25_bag5b@0.982": {
+  "trades": 2637,
+  "trades_dev": 1720,
+  "trades_hold": 917,
+  "win_dev": 0.6325581395348837,
+  "win_hold": 0.5812431842966194,
+  "net_dev": 0.6315067286563808,
+  "net_hold": 0.0646133971965551,
+  "acct_trades_dev": 929,
+  "acct_trades_hold": 438,
+  "acct_win_dev": 0.6329386437029063,
+  "acct_win_hold": 0.5844748858447488,
+  "acct_net_dev": 0.5917267967278699,
+  "acct_net_hold": 0.20530384094883336,
+  "sh_dev": 2.433499220941069,
+  "sh_hold": 0.8543292241418864,
+  "dd_dev": 42.369257767466166,
+  "dd_hold": 28.146252735223918,
+  "half_years": [
+   67.74812782320777,
+   50.934170780176984,
+   59.05865137046339,
+   4.543490540007045,
+   0.7188153730500869,
+   31.77843826674701
+  ],
+  "total": 214.78169415365227,
+  "positive": 6
+ },
+ "x15_bag5@0.982": {
+  "trades": 2656,
+  "trades_dev": 1730,
+  "trades_hold": 926,
+  "win_dev": 0.6265895953757226,
+  "win_hold": 0.5691144708423326,
+  "net_dev": 0.6153176798178737,
+  "net_hold": 0.020702295004635322,
+  "acct_trades_dev": 918,
+  "acct_trades_hold": 427,
+  "acct_win_dev": 0.6285403050108932,
+  "acct_win_hold": 0.6018735362997658,
+  "acct_net_dev": 0.6489574234384445,
+  "acct_net_hold": 0.2018790718072943,
+  "sh_dev": 2.6370933550074023,
+  "sh_hold": 0.8022875213414045,
+  "dd_dev": 27.867077033803014,
+  "dd_hold": 23.329076052894855,
+  "half_years": [
+   90.76455658809022,
+   55.879837617786514,
+   55.51836657873858,
+   -3.3210307937998054,
+   -2.547942294913064,
+   33.97442035969337
+  ],
+  "total": 230.2682080555958,
+  "positive": 4
+ },
+ "x25_bag5_per_new_coin": {
+  "AAVEUSDT": {
+   "count_dev": 113.0,
+   "count_hold": 59.0,
+   "mean_dev": 0.6746176495106793,
+   "mean_hold": 0.19425293592159423
+  },
+  "AVAXUSDT": {
+   "count_dev": 102.0,
+   "count_hold": 62.0,
+   "mean_dev": 0.49072484550087647,
+   "mean_hold": -0.8231044340418799
+  },
+  "BCHUSDT": {
+   "count_dev": 111.0,
+   "count_hold": 50.0,
+   "mean_dev": 0.3648729187593329,
+   "mean_hold": 0.07049033942447891
+  },
+  "DOTUSDT": {
+   "count_dev": 94.0,
+   "count_hold": 36.0,
+   "mean_dev": 0.136343123741359,
+   "mean_hold": -0.037866916319144864
+  },
+  "FILUSDT": {
+   "count_dev": 104.0,
+   "count_hold": 49.0,
+   "mean_dev": 0.10364164039539439,
+   "mean_hold": -1.463452345081824
+  },
+  "LINKUSDT": {
+   "count_dev": 113.0,
+   "count_hold": 58.0,
+   "mean_dev": 0.8154655036950327,
+   "mean_hold": 0.023419732704204988
+  },
+  "LTCUSDT": {
+   "count_dev": 116.0,
+   "count_hold": 59.0,
+   "mean_dev": -0.22598640522800958,
+   "mean_hold": -0.36880304537232494
+  },
+  "ONDOUSDT": {
+   "count_dev": 89.0,
+   "count_hold": 49.0,
+   "mean_dev": 1.621757091974854,
+   "mean_hold": -0.10021510625328166
+  },
+  "TAOUSDT": {
+   "count_dev": 57.0,
+   "count_hold": 52.0,
+   "mean_dev": 0.07785477200657163,
+   "mean_hold": -0.12540253857417152
+  },
+  "WLDUSDT": {
+   "count_dev": 105.0,
+   "count_hold": 50.0,
+   "mean_dev": 0.28465614050555654,
+   "mean_hold": -0.7356942767998117
+  }
+ },
+ "x25_bag5b_per_new_coin": {
+  "AAVEUSDT": {
+   "count_dev": 107.0,
+   "count_hold": 58.0,
+   "mean_dev": 0.45744211808984714,
+   "mean_hold": -0.21428919350813921
+  },
+  "AVAXUSDT": {
+   "count_dev": 104.0,
+   "count_hold": 64.0,
+   "mean_dev": 0.5679147504947177,
+   "mean_hold": -0.686873091053836
+  },
+  "BCHUSDT": {
+   "count_dev": 115.0,
+   "count_hold": 48.0,
+   "mean_dev": 0.23034564015235134,
+   "mean_hold": 0.013139530560995557
+  },
+  "DOTUSDT": {
+   "count_dev": 91.0,
+   "count_hold": 35.0,
+   "mean_dev": 0.055629918460944845,
+   "mean_hold": -0.3610516377831998
+  },
+  "FILUSDT": {
+   "count_dev": 101.0,
+   "count_hold": 51.0,
+   "mean_dev": 0.04127681338919689,
+   "mean_hold": -1.6668979664631458
+  },
+  "LINKUSDT": {
+   "count_dev": 106.0,
+   "count_hold": 59.0,
+   "mean_dev": 0.7638469593671856,
+   "mean_hold": -0.02200613501265119
+  },
+  "LTCUSDT": {
+   "count_dev": 117.0,
+   "count_hold": 62.0,
+   "mean_dev": -0.152432361517818,
+   "mean_hold": -0.38046894104754514
+  },
+  "ONDOUSDT": {
+   "count_dev": 86.0,
+   "count_hold": 51.0,
+   "mean_dev": 1.5325043782579617,
+   "mean_hold": 0.0023999306608383166
+  },
+  "TAOUSDT": {
+   "count_dev": 57.0,
+   "count_hold": 52.0,
+   "mean_dev": -0.17182128662862975,
+   "mean_hold": -0.0865618338463218
+  },
+  "WLDUSDT": {
+   "count_dev": 98.0,
+   "count_hold": 49.0,
+   "mean_dev": 0.3768600771123462,
+   "mean_hold": -0.553295921499063
+  }
+ },
+ "x25_bag5_devsel": {
+  "trades": 3682,
+  "trades_dev": 2442,
+  "trades_hold": 1240,
+  "win_dev": 0.6154791154791155,
+  "win_hold": 0.5685483870967742,
+  "net_dev": 0.49585335660693675,
+  "net_hold": -0.03044536392138268,
+  "acct_trades_dev": 1147,
+  "acct_trades_hold": 523,
+  "acct_win_dev": 0.6129032258064516,
+  "acct_win_hold": 0.5869980879541109,
+  "acct_net_dev": 0.3673618908870138,
+  "acct_net_hold": 0.1784426498772051,
+  "sh_dev": 1.6250254534748785,
+  "sh_hold": 0.8299962198576111,
+  "dd_dev": 35.446224560428874,
+  "dd_hold": 27.14959689137594,
+  "half_years": [
+   54.64159320635635,
+   30.419017053666284,
+   55.41716791507097,
+   -1.9851342308111692,
+   22.21062453564825,
+   8.368549662155008
+  ],
+  "total": 169.07181814208568,
+  "positive": 5,
+  "coins": [
+   "1000PEPEUSDT",
+   "ADAUSDT",
+   "ARBUSDT",
+   "BNBUSDT",
+   "BTCUSDT",
+   "DOGEUSDT",
+   "ENAUSDT",
+   "ETHUSDT",
+   "HYPEUSDT",
+   "NEARUSDT",
+   "SOLUSDT",
+   "SUIUSDT",
+   "UNIUSDT",
+   "XRPUSDT",
+   "ZECUSDT",
+   "AAVEUSDT",
+   "AVAXUSDT",
+   "BCHUSDT",
+   "DOTUSDT",
+   "FILUSDT",
+   "LINKUSDT",
+   "ONDOUSDT",
+   "TAOUSDT",
+   "WLDUSDT"
+  ]
+ },
+ "x25_bag5b_devsel": {
+  "trades": 3630,
+  "trades_dev": 2404,
+  "trades_hold": 1226,
+  "win_dev": 0.6085690515806988,
+  "win_hold": 0.566068515497553,
+  "net_dev": 0.4814082688325836,
+  "net_hold": -0.07076492732788844,
+  "acct_trades_dev": 1144,
+  "acct_trades_hold": 516,
+  "acct_win_dev": 0.6040209790209791,
+  "acct_win_hold": 0.5891472868217055,
+  "acct_net_dev": 0.3976458167703122,
+  "acct_net_hold": 0.1577776121086179,
+  "sh_dev": 1.7921021970630293,
+  "sh_hold": 0.6771954137804069,
+  "dd_dev": 38.74482509539038,
+  "dd_hold": 20.308863075735005,
+  "half_years": [
+   72.182453454613,
+   31.474956484610267,
+   36.0310925000549,
+   8.695649634953304,
+   18.999406714453457,
+   8.051056425475819
+  ],
+  "total": 175.43461521416074,
+  "positive": 6,
+  "coins": [
+   "1000PEPEUSDT",
+   "ADAUSDT",
+   "ARBUSDT",
+   "BNBUSDT",
+   "BTCUSDT",
+   "DOGEUSDT",
+   "ENAUSDT",
+   "ETHUSDT",
+   "HYPEUSDT",
+   "NEARUSDT",
+   "SOLUSDT",
+   "SUIUSDT",
+   "UNIUSDT",
+   "XRPUSDT",
+   "ZECUSDT",
+   "AAVEUSDT",
+   "AVAXUSDT",
+   "BCHUSDT",
+   "DOTUSDT",
+   "FILUSDT",
+   "LINKUSDT",
+   "ONDOUSDT",
+   "TAOUSDT",
+   "WLDUSDT"
+  ]
+ }
+}

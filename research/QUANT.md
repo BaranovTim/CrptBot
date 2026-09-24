@@ -898,3 +898,51 @@ laptop's nanosecond back-fill, were trimmed, and `rank` never saw them -- the
 live pool was frozen at the install's back-fill and would have emptied ~90
 days later, ending all 4h calls. Fixed (`as_unit("ns")`, mixed units repaired
 on load) and redeployed the same day.
+
+## More coins: per-coin ranking, parent and child, and what "strong" means (2026-09-24)
+
+The owner plans many more coins, and asked why ten new ones changed the
+existing fifteen's results at all. They did not change how any coin is
+predicted; they changed which coins got CALLED, through two choices:
+
+* **The pooled rank.** A reading called when it was in the top 3% of every
+  coin's readings, so new coins competed for that top 3%. Replaced by a
+  per-coin rank (`Agent5Config.rank_scope = "coin"`, `monitor._own_ranks`,
+  identical to the lab's `rank_coin` bar for bar): each coin against its own
+  last 540 readings. On the fifteen it costs almost nothing -- won 73.4% ->
+  72.4%, Sharpe 2.30/1.37 -> 2.19/1.35 (bagged, scale-out) -- and with ten
+  more coins served, the fifteen's own trades were **identical to the trade**.
+  Shipped.
+* **The three-position account** used for scoring let new coins' calls take
+  slots from better ones. A scoring choice, not a constraint on anyone.
+
+The ten themselves (AVAX, LINK, LTC, BCH, AAVE, FIL, DOT, WLD, TAO, ONDO;
+`research/expand_coins.py`, checked independently): the model wins 68% of
+the time on them with the scale-out but loses money per trade (−0.15%,
+−0.52% in the latest year). Training on 25 coins did not improve the 15
+(results mixed, within the seed noise). Not served.
+
+**Parent and child** (the owner's proposal: the shared 4h model as the
+parent, a per-coin model adding each coin's own patterns), per-coin rank,
+scale-out on, dev / latest year:
+
+| | AUC by window | Sharpe | 3 years |
+|---|---|---|---|
+| parent only (live) | 0.60 0.60 0.62 0.57 0.63 0.60 | 2.19 / 1.35 | +180% |
+| child only (a model per coin) | 0.53 0.56 0.56 0.55 0.59 0.56 | −0.13 / −0.46 | −19% |
+| parent told which coin (coin as an input) | same to 3 decimals | 2.03 / 1.38 | +164% |
+| 80% parent + 20% child | ≈ same | 1.38 / 1.00 | +116% |
+| 50% / 50% | lower | 1.25 / 0.78 | +98% |
+
+A coin alone has too little history: its own model memorises noise, and the
+parent, told the coin, does not use it. The personal part that works is the
+per-coin rank.
+
+**"Strong" from the model's own probability** (the owner's framing). The
+model's probability is fairly honest out of time (said 0.62 -> got 0.61;
+said 0.72 -> got 0.66-0.69), but a fixed line drifts with the market: chance
+≥ 70% gave Sharpe 0.88 / 1.43 (+96%), ≥ 72% 1.37 / 1.75 (+99%), against the
+per-coin rank's 2.19 / 1.35 (+180%). Rank AND ≥ 70% looked best on the
+latest year (2.05) but lost on the years that choose (1.39). So the label
+stays the per-coin rank, and the card now LEADS with the model's own chance
+that the target comes before the stop.

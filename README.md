@@ -1,4 +1,113 @@
-# TradingBot — detector agents
+# Vanth — crypto calls you can check
+
+A crypto prediction app: a Flutter app (Android first, iOS from the same code)
+reading a Python API on one small server. It tells you **when to enter, where
+to place the order, where to take profit and where the stop goes** on 15 coins,
+and it keeps an honest public record of how those calls actually did. It holds
+no exchange key and places no orders: you trade on your exchange, the app says
+what and when.
+
+This page is the map. Every number on it comes from `research/QUANT.md`, which
+records every experiment — including the many that failed — and how each was
+measured. Deploying is in `DEPLOY.md`; the app has its own `mobile/README.md`.
+
+## What it does today (September 2026)
+
+| | What you get | How it is decided |
+|---|---|---|
+| **4h calls** | BUY / SELL with a **limit order** 0.5 ATR better than the close, good for 24 hours; target at the next swing level; stop 0.5 ATR beyond the last one; **a third off halfway**, then the stop moves to your entry | One model trained on all 15 coins together (long and short sides, five seeds averaged). A coin calls when its reading is in the top 3% (strong), 5% (medium) or 10% (small) **of its own readings over the last 90 days** — other coins cannot change it. The card leads with the model's own chance that the target comes before the stop |
+| **1d calls** | Swing entries with **no time limit**: a trailing stop follows the confirmed swing lows; longs only above the 200-day average | Pooled daily models (long and short), structure levels |
+| **Weekly rotation** | Every Monday 00:00 UTC: long 5 / short 5 of the 30 most-traded Binance perpetuals, held a week | 15-day momentum and a week of net taker buying (buyers more aggressive than the price shows), ranks averaged |
+| **Smart money** | Whether followed top traders on Hyperliquid took the same side recently | Raises or lowers a call one level; not a model input |
+| **Live record** | Every order since the model went live: filled or not, target / stop / back to entry, after fees, per sensitivity | `api/ledger.py`, written as it happens; nothing reconstructed |
+| **Notifications** | New call, order moved, **filled**, **halfway — take a third off**, trade ended, order expired, Monday rotation | `api/alerts.py`, transitions only |
+
+## How good it is — measured on data the models never saw
+
+Walk-forward: refit every six months on the past only, scored on the next six,
+**Sep 2023 → Sep 2026**. Rules were chosen on the first two years and only
+*confirmed* on the last one. Net of 0.10% fees.
+
+| | Win rate | Per trade | Risk-adjusted (Sharpe) | Notes |
+|---|---|---|---|---|
+| 4h, strong calls, taking every call | 72% (70% last year) | +0.21% (−0.02% last year) | — | a trade that reaches halfway can no longer lose |
+| 4h, holding at most 3 trades at once | 75% (73%) | — | 2.19 / 1.35 | first come, first served |
+| 1d longs, trailed (above the 200-day) | 24% | +4.8% to +5.1% | — | most end at the stop; winners run +15–30% |
+| Weekly rotation | — | — | 0.91 / 1.09 | worst weeks −15% to −18% |
+
+For scale: peer-reviewed machine-learning forecasts of bitcoin were right
+51–56% of the time an hour or less ahead, and no bot or signal seller we could
+find publishes an audited record (QUANT.md, round four). Backtests decay in
+real life; the live record is the number that counts, and the app says so.
+
+Things that were measured and **did not** help, so they are not in the app:
+order flow and sweeps inside the 4h model, estimated liquidation maps,
+weekly/monthly levels, the Coinbase premium, a model per coin (alone or
+blended with the shared one), strength from a fixed probability line,
+round-number targets, and ten extra coins (below).
+
+## Adding coins
+
+Each coin is ranked against **its own** history, so adding a coin never
+changes another coin's calls (tested: the 15's trades were identical with ten
+more coins served). What decides whether a new coin gets calls is **its own
+out-of-sample record**:
+
+```bash
+python3 research/expand_coins.py fetch          # history for the candidates
+python3 research/expand_coins.py lab-build
+python3 research/expand_coins.py lab-run x25_bag5 x15_bag5
+python3 research/expand_coins.py lab-report     # per-coin: does it pay?
+```
+
+AVAX, LINK, LTC, BCH, AAVE, FIL, DOT, WLD, TAO and ONDO were tested on
+2026-09-24: the model wins 68% of the time on them but loses money per trade
+(−0.15%, −0.52% in the last year), so they are not served. Training on them
+did not improve the other 15 either.
+
+## Running it
+
+```bash
+pip3 install -r requirements.txt
+python3 run_tests.py                 # 592 tests, no network needed
+cd mobile && flutter test            # 163 app tests
+
+python3 serve.py                     # the API locally (read-only JSON)
+python3 train_pooled_4h.py           # refit the 4h models (every ~6 months)
+python3 train_pooled_4h.py --update-rules   # change entry/exit rules, no refit
+python3 train_daily_pooled.py        # refit the daily models
+
+python3 research/wf4h.py run <variant>      # the walk-forward lab
+python3 research/win_rate.py                # win rate vs money, every lever
+python3 research/momentum_pit.py            # the rotation on every perpetual
+```
+
+A retrain starts a new rank pool; see `DEPLOY.md` for filling it from current
+bars before uploading, and for the rules that keep the server alive (one vCPU,
+967 MB: never run model-loading scripts inside the containers).
+
+## Where things live
+
+```
+api/          the server: service.py (dashboards, orders, record), alerts.py
+              (notifications), ledger.py (live record), momentum.py (rotation),
+              server.py (routes), push.py, accounts/billing/oauth
+monitor.py    the call logic: ranking, resting orders, scale-out, the card text
+agent1-5/     the detectors (1-4) and the model (5) -- documented below
+smartmoney/   followed Hyperliquid traders: selection and tracking
+research/     every study, and QUANT.md, the record of what was measured
+mobile/       the Flutter app
+train_pooled_4h.py, train_daily_pooled.py    the production fits
+```
+
+---
+
+*Everything below documents the components as they were built: the four
+detector agents, the judge, the first version of the app and the whale
+tracking. The design reasoning still holds; the configuration that runs today
+is the one described above.*
+
+# The detector agents
 
 **Agent 1** (patterns / smart money), **Agent 2** (indicators), **Agent 3**
 (news), **Agent 4** (order flow). All four measure. None of them judges — that
@@ -36,7 +145,7 @@ weights *are* Agent 5.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py            # 184 tests, no network needed
+python3 run_tests.py            # 592 tests, no network needed
 python3 run_tests.py --real     # + leak checks on live Binance data
 python3 main.py --offline       # synthetic bars
 python3 main.py                 # real BTCUSDT 1h perps, both agents
@@ -614,9 +723,10 @@ Three decisions worth knowing:
   be worse — it selectively deletes the most volatile moments.
 - **Tail bars get no label at all**, never a partial one. A window that peeked
   at "the data so far" would systematically favour whatever the final bars did.
-- **Long only.** `k_up=2, k_dn=1` is the payoff geometry of a *long*. A low `p`
-  does **not** imply a profitable short — for a short those barriers are the
-  wrong way round. Shorting needs its own model on mirrored labels.
+- **One side per model.** `k_up=2, k_dn=1` is the payoff geometry of a *long*.
+  A low `p` does **not** imply a profitable short — for a short those barriers
+  are the wrong way round. So shorts have their own model on mirrored labels
+  (the pooled 4h and daily fits are a long model and a short model).
 
 ## The scoreboard is the product
 
@@ -1058,14 +1168,8 @@ why Agent 4 reads `aggTrades` directly.
 
 ## Next
 
-1. The evaluation harness — triple-barrier labels, purged CV with embargo,
-   uniqueness weights. Until it exists you cannot tell whether any of these 100
-   columns is worth keeping.
-2. Agent 5, block by block: regime only → +agent 2 → +agent 1 → +agent 4 →
-   +agent 3. Each step is one full run through the harness. That sequence *is*
-   the ablation, and it is how you get `N, W, P, I`.
-
-Start with 10–15 features, not all 100. After uniqueness weighting your
-effective sample size is a few thousand independent observations, and 100
-features on 3,000 effective samples will confidently find patterns that are
-not there.
+The harness and the judge described here exist and run in production. What is
+still open — and what was tried and closed — is kept current in
+`research/QUANT.md`: the quarter-hour opening order imbalance on 4h, an
+open-interest flush reversal rule, and spot-led versus perp-led flow are next
+in line.

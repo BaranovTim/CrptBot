@@ -437,6 +437,23 @@ class Analysis:
 # 4h bars. Long enough that a decile is ~54 bars, short enough to follow the
 # score distribution as it drifts.
 TRAIL_BARS = 540
+# how many bars back a coin-scoped rank is needed for (the order replay's
+# window, 2 x (16 + 6) + 2 = 46, with room)
+OWN_REPLAY_BARS = 64
+
+
+def _own_ranks(raw: np.ndarray) -> np.ndarray:
+    """Each reading's rank against the same coin's TRAIL_BARS readings
+    strictly before it -- research/wf4h.py's `rank_coin`, bar for bar. Ties
+    count half; NaN with fewer than 50 before it."""
+    out = np.full(len(raw), np.nan)
+    for k in range(len(raw)):
+        ref = raw[max(0, k - TRAIL_BARS):k]
+        ref = ref[np.isfinite(ref)]
+        if len(ref) < 50 or not np.isfinite(raw[k]):
+            continue
+        out[k] = float((ref < raw[k]).mean() + 0.5 * (ref == raw[k]).mean())
+    return out
 
 # The rank a structure entry must clear for each sensitivity. Measured on
 # research/structure_levels.py (5 coins, 4h, 16 bars): the top decile netted
@@ -857,17 +874,23 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
 
     long = cfg.side == "long"
     side = "LONG" if long else "SHORT"
-    tail = X.iloc[-min(TRAIL_BARS, len(X)):]
+    pool = str(getattr(cfg, "rank_pool", "") or "")
+    own_scope = bool(pool) and str(getattr(cfg, "rank_scope", "pool") or "pool") == "coin"
+    # A coin-scoped rank needs 540 readings BEFORE each bar the order replay
+    # looks at, so it scores that much further back.
+    ext = X.iloc[-min(TRAIL_BARS + (OWN_REPLAY_BARS if own_scope else 0), len(X)):]
+    tail = ext.iloc[-min(TRAIL_BARS, len(ext)):]
     # RANK ON THE RAW SCORE, READ THE CALIBRATED ONE. See JudgeAgent.raw_scores
     # for why the two must not be the same array. Ties -- still possible on
     # a logistic model -- count half, so a repeated score ranks in the
     # middle of its run rather than under it.
-    raw = judge.raw_scores(tail) if hasattr(judge, "raw_scores") else judge.predict_proba(tail)
+    raw_ext = judge.raw_scores(ext) if hasattr(judge, "raw_scores") else judge.predict_proba(ext)
+    raw = raw_ext[-len(tail):]
+    own = _own_ranks(np.asarray(raw_ext, float))[-len(tail):] if own_scope else None
     p = float(judge.predict_proba(tail.iloc[[-1]])[0])
     cur = float(raw[-1])
     past = raw[:-1]
     past = past[np.isfinite(past)]
-    pool = str(getattr(cfg, "rank_pool", "") or "")
     pool_coins = 0
     if pool:
         # ONE BOOK PER SIDE. The long and the short model of a fit share its
@@ -883,7 +906,14 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
             SCOREBOOK.record(pool, symbol, tail.index, raw)
         step = (pd.Series(tail.index).diff().median()
                 if len(tail) > 1 else pd.Timedelta(hours=4))
-        a.rank, n_ref, pool_coins = SCOREBOOK.rank(pool, tail.index[-1], cur, TRAIL_BARS * step)
+        if own_scope:
+            # against this coin's own last 540 readings: other coins, added
+            # or removed, cannot move it
+            a.rank = float(own[-1])
+            n_ref = int(min(TRAIL_BARS, len(raw_ext) - 1))
+            pool_coins = 1
+        else:
+            a.rank, n_ref, pool_coins = SCOREBOOK.rank(pool, tail.index[-1], cur, TRAIL_BARS * step)
         ranks = POOLED_RANKS
         a.pooled = True
     else:
@@ -912,7 +942,7 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
     if pool and float(getattr(cfg, "entry_offset_atr", 0.0) or 0.0) > 0 \
             and int(getattr(cfg, "entry_valid_bars", 0) or 0) > 0:
         done = _resting_decision(a, cfg, bars, tail, raw, lab, pool, step, long, side,
-                                 p, pool_coins)
+                                 p, pool_coins, own=own)
         if done:
             return a
     lvl = "the next swing" if long else "the last swing"
@@ -921,9 +951,11 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
         stop = "just below the last swing" if long else "just above the next swing"
     else:
         stop = "at the last swing" if long else "at the next swing"
-    over = (f"the last 90 days' readings across {pool_coins} coins" if pool
+    over = ("this coin's own readings over the last 90 days" if own_scope
+            else f"the last 90 days' readings across {pool_coins} coins" if pool
             else "the last 90 days'")
-    where = (f"pooled rank {a.rank:.3f} over {n_ref} readings from {pool_coins} coins"
+    where = (f"rank {a.rank:.3f} against {n_ref} of its own readings" if own_scope
+             else f"pooled rank {a.rank:.3f} over {n_ref} readings from {pool_coins} coins"
              if pool else f"rank {a.rank:.3f} over {n_ref} bars")
     if a.strength:
         if pool:
@@ -934,7 +966,8 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
             a.size_pct = min(cfg.kelly_fraction * max(f, 0.05) * 100.0, cfg.max_position_pct)
         a.action = f"ENTER {side} NOW"
         a.side = side
-        a.reason = (f"A {a.strength} signal — this reading is stronger than "
+        a.reason = (f"A {a.strength} signal. The model gives this entry a {100 * p:.0f}% chance of "
+                    f"reaching the target before the stop — this reading is stronger than "
                     f"{100 * a.rank:.0f}% of {over}. Target at {lvl} "
                     f"({'+' if long else '-'}{tp_pct:.2f}%), stop {stop}.")
         # NO EV FOR A POOLED CALL. p is calibrated on every bar together and
@@ -956,6 +989,10 @@ def _evaluate_structure(judge, bars: pd.DataFrame, X: pd.DataFrame,
         a.diagnostic = (f"p(target first) {p:.3f}; {where}; "
                         + (f"target {tp_pct:+.2f}% / stop -{sl_pct:.2f}%" if pool else f"EV {ev:+.3f}%")
                         + "; barriers on structure")
+    elif own_scope:
+        a.reason = (f"No {side.lower()} entry yet: this coin needs 50 of its own readings "
+                    f"before one can be ranked.")
+        a.diagnostic = f"p(target first) {p:.3f}; fewer than 50 own readings"
     elif pool:
         a.reason = (f"No {side.lower()} entry yet: this reading is ranked against every "
                     f"coin's, and only {pool_coins} of them have reported since the model "
@@ -1019,7 +1056,7 @@ def _px(v: float) -> str:
 
 def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame,
                       raw, lab, pool: str, step, long: bool, side: str, p: float,
-                      pool_coins: int) -> bool:
+                      pool_coins: int, own=None) -> bool:
     """The card for a model that enters with a RESTING ORDER.
 
     The recent calls of this side are replayed as the app tells a person to
@@ -1047,7 +1084,12 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
     rr = np.asarray(raw, dtype=float)[-m:]
     lev = np.zeros(m, int); ranks = np.full(m, np.nan)
     for q in range(m):
-        r = a.rank if q == m - 1 else SCOREBOOK.rank(pool, times[q], float(rr[q]), TRAIL_BARS * step)[0]
+        if q == m - 1:
+            r = a.rank
+        elif own is not None:
+            r = float(own[len(own) - m + q])        # this coin's own trailing rank
+        else:
+            r = SCOREBOOK.rank(pool, times[q], float(rr[q]), TRAIL_BARS * step)[0]
         ranks[q] = r
         for n, (_, cut) in enumerate(POOLED_RANKS):
             if np.isfinite(r) and r >= cut:
@@ -1151,7 +1193,8 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
     a.upper, a.lower = (od.target, od.stop) if long else (od.stop, od.target)
     a.size_pct = min(float(cfg.equal_size_pct), cfg.max_position_pct)
     a.ends_at = hold_until if filled else valid_until
-    over = f"the last 90 days' readings across {pool_coins} coins"
+    over = ("this coin's own readings over the last 90 days" if own is not None
+            else f"the last 90 days' readings across {pool_coins} coins")
     third = _part_words(sp)
     if filled and od.taken:
         a.action = "WAIT"
@@ -1171,7 +1214,13 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
                          f"on the rest to your entry.")
     else:
         a.action = f"ENTER {side} NOW"
-        a.reason = (f"A {a.strength} signal — the {placed:%a %H:%M} UTC reading was stronger than "
+        # THE MODEL'S OWN CHANCE FIRST (the owner's framing): what the model,
+        # trained on every coin's history, gives THIS entry. The rank against
+        # the coin's own recent readings is why it counts as strong: a fixed
+        # probability line drifts with the market and tested worse.
+        chance = (f"The model gives this entry a {100 * p:.0f}% chance of reaching the target "
+                  f"before the stop — " if od.placed == m - 1 and np.isfinite(p) else "")
+        a.reason = (f"A {a.strength} signal. {chance}the {placed:%a %H:%M} UTC reading was stronger than "
                     f"{100 * a.rank:.0f}% of {over}. {word} with a limit order at "
                     f"{_px(od.limit)} ({k:g} ATR {'under' if long else 'over'} that close), good "
                     f"until {valid_until:%a %H:%M} UTC. Target {_px(od.target)} ({tp_from:+.2f}%), "
@@ -1179,7 +1228,8 @@ def _resting_decision(a: "Analysis", cfg, bars: pd.DataFrame, tail: pd.DataFrame
         if sp > 0 and scale_px is not None:
             a.reason += (f" Halfway, at {_px(scale_px)}, take {third} off and move the stop to "
                          f"the entry.")
-    a.diagnostic = (f"p(target first) {p:.3f}; pooled rank {a.rank:.3f} at the "
+    a.diagnostic = (f"p(target first) {p:.3f}; {'own' if own is not None else 'pooled'} rank "
+                    f"{a.rank:.3f} at the "
                     f"{placed:%a %H:%M} close; order {od.state}; resting {k:g} ATR, "
                     f"{V} bars; stop moved with the entry"
                     + (f"; {third} off at {sa:.0%} of the way, then stop to entry" if sp > 0 else ""))

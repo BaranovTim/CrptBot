@@ -27,6 +27,24 @@ WHAT IS REUSED, UNCHANGED
     constants) and the daily one's (research/pooled_daily). This file only
     points them at other directories.
 
+RESULTS (2026-09-23; research/results/wf4h_25coins/report*.json, detail.json)
+    Two disjoint five-seed bags (A = 7..19, B = 23..41); served = 3-at-once
+    account Sharpe, development / holdout, and the six-half-year total.
+
+                          no scale-out (wait 6)        shipped scale-out
+      (a) 15 on the 15    A 2.65/1.94 +269  B 2.32/1.84 +237   A 2.30/1.37 +184  B 1.75/1.31 +147
+      (b) 25 on the 15    A 1.75/1.90 +195  B 2.00/2.27 +230   A 1.68/1.77 +151  B 1.77/1.67 +156
+      (c) 25 on all 25    A 1.72/0.83 +177  B 1.88/0.48 +175   A 1.41/1.28 +137  B 1.58/0.69 +136
+      (d) 15 on all 25    A 1.60/1.37 +200  B 1.65/1.38 +206   A 1.64/1.48 +167  B 1.29/1.53 +148
+
+    (a) bag A reproduces the shipped `live_bag5` scores bit for bit.
+    Training on 25 lifts AUC on the fifteen a little on development
+    (0.6073 -> 0.6119) and not on holdout (0.6166 -> 0.6172); the account is
+    worse on development in all four pairs. Serving 25 is worse on every
+    period in every pair; the new ten's served trades earn about half of
+    what the fifteen's do in the same runs, and are ~40% of the calls. At an
+    equal call count (cut 0.982) holdout is still 1.13 / 0.85 vs 1.94 / 1.84.
+
 WHERE THINGS GO (nothing here writes to output/, the score book, or
 data_cache/live/ -- the ten new coins' bars live in their own store)
     data_cache/staging_25coins/
@@ -42,8 +60,12 @@ data_cache/live/ -- the ten new coins' bars live in their own store)
     python3 research/expand_coins.py fetch          # bars, funding, frames
     python3 research/expand_coins.py lab-build      # 25-coin sb0.5 datasets
     python3 research/expand_coins.py lab-run x25_bag5 x15_bag5
+    python3 research/expand_coins.py lab-run x25_bag5b x15_bag5b   # a second bag
     python3 research/expand_coins.py lab-report     # the (a)-(d) table
+    python3 research/expand_coins.py lab-report scaled   # ... with the shipped scale-out
+    python3 research/expand_coins.py lab-detail     # equal call count; dev-chosen subset
     python3 research/expand_coins.py stage-4h       # candidate 4h models
+    python3 research/expand_coins.py stage-4h 15    # the fifteen refit, reference only
     python3 research/expand_coins.py stage-1d       # candidate 1d models
 """
 from __future__ import annotations
@@ -238,13 +260,21 @@ def lab_build() -> None:
         base = pickle.load(open(Path("data_cache/research_frames/wf4h") / f"{side}_sb0.5.pkl", "rb"))
         D = L.load(side, "sb0.5")
         sub = D[D["coin"].isin(OLD)].reset_index(drop=True)
-        same_cols = list(base.columns) == [c for c in D.columns if c in base.columns]
+        base = base.reset_index(drop=True)
         extra = [c for c in D.columns if c not in base.columns]
-        pd.testing.assert_frame_equal(sub[list(base.columns)], base.reset_index(drop=True),
-                                      check_dtype=False)
+        # every column the base-block variants read -- the labels, P&L,
+        # weights, timing and the 87 features -- must match exactly
+        used = list(L.META) + L.feature_sets(base)["base"]
+        pd.testing.assert_frame_equal(sub[used], base[used], check_dtype=False)
+        # the rest (geo_/pos_ blocks, unused here) is reported, not required:
+        # the geo_ level-KIND one-hots changed with agent5/structure.py after
+        # the baseline's cache was built (2026-09-22 21:54 vs 22:15)
+        other = [c for c in base.columns if c not in used and not (
+            sub[c].astype(str).to_numpy() == base[c].astype(str).to_numpy()).all()]
         print(f"{side}: {len(D):,} rows over {D['coin'].nunique()} coins; the fifteen's "
-              f"{len(sub):,} rows identical to the baseline's (column order kept: {same_cols}; "
-              f"columns only in the 25-coin set: {extra or 'none'})", flush=True)
+              f"{len(sub):,} rows identical to the baseline's on META + {len(used) - len(L.META)} "
+              f"base features; unused columns that differ: {other or 'none'}; "
+              f"columns only in the 25-coin set: {extra or 'none'}", flush=True)
         for s, g in D[~D["coin"].isin(OLD)].groupby("coin"):
             print(f"   {s:<9} {len(g):6,} rows  {g['t'].min():%Y-%m-%d} -> {g['t'].max():%Y-%m-%d}  "
                   f"base rate {np.average(g['y'], weights=g['w']):.3f}", flush=True)
@@ -316,16 +346,26 @@ ROWS = [  # (label, score file)
 ]
 
 
-def lab_report(wait: int = 6) -> dict:
+def lab_report(wait: int = 6, scaled: bool = False) -> dict:
+    """The (a)-(d) table. `scaled`: trade the calls with the scale-out the
+    owner shipped on 2026-09-23 (train_pooled_4h.SCALE_OUT_PART/_AT: a third
+    off halfway to the target, the rest's stop to the entry), through
+    improve_4h.served -> monitor.resting_orders, the server's own code."""
     import research.improve_4h as I
     L = lab()
+    kw = {}
+    if scaled:
+        import train_pooled_4h as T
+        kw = dict(scale_part=T.SCALE_OUT_PART, scale_at=T.SCALE_OUT_AT)
+        print(f"served WITH the scale-out: {T.SCALE_OUT_PART:.3f} off at {T.SCALE_OUT_AT:.0%} "
+              f"of the way, the rest's stop to the entry", flush=True)
     out = {}
     for label, name in ROWS:
         if not (L.SCORES / f"{name}_scores.pkl").exists():
             continue
         R = L.with_ranks(pickle.load(open(L.SCORES / f"{name}_scores.pkl", "rb")))
         C = I.calls(name)
-        D = I.served(C, wait=wait)
+        D = I.served(C, wait=wait, **kw)
         m = _measure(D)
         m["auc_window"] = _auc(R)
         m["auc_side"] = {k: v for k, v in _auc(R, "side").items()}
@@ -350,8 +390,9 @@ def lab_report(wait: int = 6) -> dict:
         out[name] = dict(m, label=label)
         _show(label, name, m)
     LAB_OUT.mkdir(parents=True, exist_ok=True)
-    (LAB_OUT / "report.json").write_text(json.dumps(out, indent=1, default=float))
-    print(f"\nwritten {LAB_OUT / 'report.json'}", flush=True)
+    f = LAB_OUT / ("report_scaled.json" if scaled else "report.json")
+    f.write_text(json.dumps(out, indent=1, default=float))
+    print(f"\nwritten {f}", flush=True)
     return out
 
 
@@ -375,6 +416,66 @@ def _show(label: str, name: str, m: dict) -> None:
               f"{o['trades']} trades win {o['win'] or 0:.1%} net {o['net'] or 0:+.3f}%", flush=True)
 
 
+def lab_detail(wait: int = 6) -> dict:
+    """Two diagnostics behind (c), both on the 25-coin pool's scores.
+
+    EQUAL CALL COUNT. At the served cut (top 3% of the pooled rank) 25
+    coins make ~65% more calls than 15, so (c) mixes "better choice" with
+    "more trades". Cut 0.982 is the same 3% of the fifteen's readings spread
+    over 25 coins (3% x 15/25 = 1.8%) -- arithmetic, not a search -- so the
+    calls are the best ~as-many as today, from a bigger pool.
+
+    A SUBSET CHOSEN ON DEVELOPMENT. The new coins whose served trades made
+    money in the four development half-years (bag A), added to the fifteen,
+    then read on the two holdout half-years it did not see. Per-coin P&L
+    on ~100 trades is noisy, so this is the most a subset can be expected
+    to show, not a recommendation of the subset.
+    """
+    import research.improve_4h as I
+    L = lab()
+    out = {}
+    for name in ("x15_bag5" + ON15, "x25_bag5", "x25_bag5b", "x15_bag5"):
+        for cut in (0.97, 0.982):
+            if cut == 0.97 and name != "x15_bag5" + ON15:
+                continue
+            D = I.served(I.calls(name, cut=cut), wait=wait)
+            m = _measure(D)
+            out[f"{name}@{cut}"] = m
+            print(f"{name:<16} cut {cut}: served {m['trades']} trades ({m['trades_dev']}/{m['trades_hold']}), "
+                  f"win {m['win_dev']:.1%} / {m['win_hold']:.1%}, per trade {m['net_dev']:+.3f}% / "
+                  f"{m['net_hold']:+.3f}% | 3 at once Sharpe {m['sh_dev']:.2f} / {m['sh_hold']:.2f}, "
+                  f"total {m['total']:+.1f}%, positive {m['positive']}/6", flush=True)
+    # per new coin, development vs holdout, both bags
+    keep = None
+    for name in ("x25_bag5", "x25_bag5b"):
+        D = I.served(I.calls(name), wait=wait)
+        D["net"] = D["pnl"] - L.COST - D["funding"]
+        D["part"] = np.where(D["window"] < L.DEV_WINDOWS, "dev", "hold")
+        t = D[D["coin"].isin(NEW)].groupby(["coin", "part"])["net"].agg(["count", "mean"]).unstack("part")
+        print(f"\n{name}: the new ten, served trades (count, mean net %) dev | hold\n"
+              + t.round(3).to_string(), flush=True)
+        out[f"{name}_per_new_coin"] = {c: {k: float(v) for k, v in r.items()} for c, r in
+                                       t.set_axis([f"{a}_{b}" for a, b in t.columns], axis=1).iterrows()}
+        if keep is None:
+            dev = t[("mean", "dev")]
+            keep = sorted(dev[dev > 0].index)
+    print(f"\nnew coins positive on development (bag A): {keep}", flush=True)
+    for name in ("x25_bag5", "x25_bag5b"):
+        R = pickle.load(open(L.SCORES / f"{name}_scores.pkl", "rb"))
+        sel = f"{name}_devsel"
+        pickle.dump(R[R["coin"].isin(OLD + keep)].reset_index(drop=True),
+                    open(L.SCORES / f"{sel}_scores.pkl", "wb"))
+        m = _measure(I.served(I.calls(sel), wait=wait))
+        out[sel] = dict(m, coins=OLD + keep)
+        print(f"{sel:<18} ({15 + len(keep)} coins): served {m['trades']} trades, win {m['win_dev']:.1%} / "
+              f"{m['win_hold']:.1%}, per trade {m['net_dev']:+.3f}% / {m['net_hold']:+.3f}% | 3 at once "
+              f"Sharpe {m['sh_dev']:.2f} / {m['sh_hold']:.2f}, total {m['total']:+.1f}%, "
+              f"positive {m['positive']}/6", flush=True)
+    LAB_OUT.mkdir(parents=True, exist_ok=True)
+    (LAB_OUT / "detail.json").write_text(json.dumps(out, indent=1, default=float))
+    return out
+
+
 # ------------------------------------------------------------------- staging
 def _load_frames(directory: Path, sym: str, interval: str):
     """A cached (bars, frames, warm) triple, or an error. Never falls back to
@@ -385,21 +486,25 @@ def _load_frames(directory: Path, sym: str, interval: str):
     return pickle.load(open(p, "rb"))
 
 
-def stage_4h(coins=None) -> dict:
+def stage_4h(tag: str = "25") -> dict:
     """The production 4h fit (train_pooled_4h.main, step for step: same
     config, pooling, scale-bound drop, purged CV, shuffled control, gate,
     five-seed bag) over the 25 coins, saved to the staging directory.
-    Nothing is installed and no score book is touched."""
+    Nothing is installed and no score book is touched.
+
+    `tag="15"` refits the fifteen from the same frames as a REFERENCE for
+    the cross-validated numbers (it should reproduce the installed verdict);
+    its verdict is written, its models are not."""
     import train_pooled_4h as T
     import research.pooled_daily as PD
     from agent5 import Agent5Config, JudgeAgent
     from core import barriers_for, beats_shuffle, slot_side
 
-    coins = list(coins or ALL)
+    coins = {"25": ALL, "15": OLD}[tag]
     interval = T.INTERVAL
     frames = {s: _load_frames(TRAIN_4H, s, interval) for s in coins}
     k, h1, h2 = barriers_for(interval)
-    pool_id = f"crypto-4h-staging25-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    pool_id = f"crypto-4h-staging{tag}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
     MODELS.mkdir(parents=True, exist_ok=True)
     verdict = {"symbol": "POOLED", "interval": interval, "source": "pooled", "staging": True,
                "coins": sorted(frames), "rank_pool": pool_id,
@@ -413,7 +518,9 @@ def stage_4h(coins=None) -> dict:
         cfg = Agent5Config(max_hold_bars=hold, k_up=k, k_dn=k, geometry="structure",
                            side=side, stop_buffer_atr=T.STOP_BUFFER_ATR, rank_pool=pool_id,
                            entry_offset_atr=T.ENTRY_OFFSET_ATR, entry_valid_bars=T.ENTRY_VALID_BARS,
-                           bag_seeds=T.BAG_SEEDS)
+                           bag_seeds=T.BAG_SEEDS,
+                           scale_out_part=getattr(T, "SCALE_OUT_PART", 0.0),
+                           scale_out_at=getattr(T, "SCALE_OUT_AT", 0.0))
         parts = {}
         for sym, (bars, fr, warm) in frames.items():
             ds = JudgeAgent(cfg).build(bars, warmup=warm, **fr)
@@ -435,6 +542,8 @@ def stage_4h(coins=None) -> dict:
               f"({len(pooled):,} samples, {len(parts)} coins, {len(cols)} columns; "
               f"scale-bound dropped {dropped} vs {dropped15} on the fifteen) "
               f"[{time.time() - t0:.0f}s]", flush=True)
+        on15 = float(np.mean([a for c, a in by_coin.items() if c in OLD]))
+        print(f"     mean out-of-fold AUC on the fifteen {on15:.4f}", flush=True)
         print("     out-of-fold AUC per coin: " + "  ".join(
             f"{s}{'*' if s in NEW else ''} {a:.3f}" for s, a in sorted(by_coin.items(), key=lambda kv: -kv[1])),
             flush=True)
@@ -444,11 +553,13 @@ def stage_4h(coins=None) -> dict:
             "beats_shuffle": bool(ok), "hold": hold, "geometry": "structure", "side": side,
             "columns": len(cols), "dropped_scale_bound": dropped,
             "dropped_scale_bound_on_the_15": dropped15, "per_coin_oof_auc": by_coin,
+            "mean_oof_auc_on_the_15": round(on15, 4),
         }
-        path = MODELS / f"judge_POOLED25_4h_h{slot}.joblib"
-        judge.save(path)
-        print(f"     saved {path}", flush=True)
-    (MODELS / "eval_POOLED25_4h.json").write_text(json.dumps(verdict, indent=1))
+        if tag == "25":
+            path = MODELS / f"judge_POOLED25_4h_h{slot}.joblib"
+            judge.save(path)
+            print(f"     saved {path}", flush=True)
+    (MODELS / f"eval_POOLED{tag}_4h.json").write_text(json.dumps(verdict, indent=1))
     return verdict
 
 
@@ -525,9 +636,11 @@ def main() -> int:
     elif cmd == "lab-run":
         lab_run(sys.argv[2:])
     elif cmd == "lab-report":
-        lab_report()
+        lab_report(scaled=sys.argv[2:3] == ["scaled"])
+    elif cmd == "lab-detail":
+        lab_detail()
     elif cmd == "stage-4h":
-        stage_4h()
+        stage_4h(sys.argv[2] if len(sys.argv) > 2 else "25")
     elif cmd == "stage-1d":
         stage_1d()
     else:

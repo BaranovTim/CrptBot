@@ -2302,24 +2302,25 @@ def _smart_overlay(an, smart: Dict[str, Any], lower: bool = True) -> None:
 # choice was made on.
 RECORD_EXPECTED = {
     "source": "walk-forward, Sep 2023 - Sep 2026, out of time",
-    # the served rule since 2026-09-23: a third off halfway to the target,
-    # stop to the entry on the rest (research/win_rate.py), measured through
-    # monitor.resting_orders itself
+    # the served rule since 2026-09-24: each coin ranked against its own
+    # readings, a third off halfway to the target, stop to the entry on the
+    # rest -- measured through monitor.resting_orders itself
     "levels": {
-        "strong": {"win_rate": 0.734, "avg_net_pct": 0.24, "hold_win_rate": 0.71,
-                   "hold_avg_net_pct": 0.00, "trades_per_month": 67,
-                   "targets": 0.42, "stops": 0.52, "timeouts": 0.07},
-        "medium": {"win_rate": 0.718, "avg_net_pct": 0.18, "hold_win_rate": 0.70,
-                   "hold_avg_net_pct": 0.00, "trades_per_month": 99,
-                   "targets": 0.41, "stops": 0.52, "timeouts": 0.06},
-        "small": {"win_rate": 0.701, "avg_net_pct": 0.06, "hold_win_rate": 0.69,
-                  "hold_avg_net_pct": -0.03, "trades_per_month": 165,
+        "strong": {"win_rate": 0.724, "avg_net_pct": 0.21, "hold_win_rate": 0.699,
+                   "hold_avg_net_pct": -0.02, "trades_per_month": 74,
+                   "targets": 0.43, "stops": 0.51, "timeouts": 0.06},
+        "medium": {"win_rate": 0.718, "avg_net_pct": 0.16, "hold_win_rate": 0.696,
+                   "hold_avg_net_pct": -0.05, "trades_per_month": 105,
+                   "targets": 0.41, "stops": 0.53, "timeouts": 0.06},
+        "small": {"win_rate": 0.696, "avg_net_pct": 0.02, "hold_win_rate": 0.691,
+                  "hold_avg_net_pct": -0.04, "trades_per_month": 172,
                   "targets": 0.39, "stops": 0.55, "timeouts": 0.06},
     },
-    "note": ("Taking a third off halfway lifts the win rate from about 61% to 73%: a "
-             "trade that gets halfway can no longer lose. It costs about a third of "
-             "the return. An account holding at most three trades at once did better "
-             "per trade than taking every call, and won 75% (73% in the latest year)."),
+    "note": ("Taking a third off halfway lifts the win rate from about 61% to 72%: a "
+             "trade that gets halfway can no longer lose. Taking every call barely "
+             "breaks even in the latest year; an account holding at most three "
+             "trades at once, first come first served, did much better (won 73%, "
+             "Sharpe 1.35 in the latest year)."),
 }
 
 # What independent studies measured for other bots and signal sellers, so the

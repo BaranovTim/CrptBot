@@ -84,6 +84,12 @@ BAG_SEEDS = (7, 11, 13, 17, 19)
 # 62% / 58%; about a third less return over three years.
 SCALE_OUT_PART = 1.0 / 3.0
 SCALE_OUT_AT = 0.5
+# EACH COIN RANKED AGAINST ITS OWN READINGS, not every coin's: adding or
+# removing a coin then cannot change another coin's calls. On the 15 it
+# costs almost nothing (Sharpe 2.30/1.37 -> 2.19/1.35, won 73.4% -> 72.4%),
+# and with ten more coins served the 15's trades were identical to the
+# trade (research/QUANT.md, "More coins").
+RANK_SCOPE = "coin"
 EPOCH = pd.Timestamp("2015-01-01", tz="UTC")
 BAR = pd.Timedelta(hours=4)
 # the fifteen the walk-forward validated, which are also the ones served
@@ -173,12 +179,13 @@ def update_rules(coins) -> int:
             judge.cfg = dataclasses.replace(judge.cfg, entry_offset_atr=ENTRY_OFFSET_ATR,
                                             entry_valid_bars=ENTRY_VALID_BARS,
                                             scale_out_part=SCALE_OUT_PART,
-                                            scale_out_at=SCALE_OUT_AT)
+                                            scale_out_at=SCALE_OUT_AT,
+                                            rank_scope=RANK_SCOPE)
             judge.save(path)
             n += 1
     print(f"entry rule written into {n} installed models "
           f"({ENTRY_OFFSET_ATR:g} ATR, {ENTRY_VALID_BARS} bars; "
-          f"{SCALE_OUT_PART:.2f} off at {SCALE_OUT_AT:.0%} of the way)")
+          f"{SCALE_OUT_PART:.2f} off at {SCALE_OUT_AT:.0%} of the way; ranked per {RANK_SCOPE})")
     return 0
 
 
@@ -228,7 +235,7 @@ def main(argv=None) -> int:
                            side=side, stop_buffer_atr=a.stop_buffer, rank_pool=pool_id,
                            entry_offset_atr=ENTRY_OFFSET_ATR, entry_valid_bars=ENTRY_VALID_BARS,
                            bag_seeds=BAG_SEEDS, scale_out_part=SCALE_OUT_PART,
-                           scale_out_at=SCALE_OUT_AT)
+                           scale_out_at=SCALE_OUT_AT, rank_scope=RANK_SCOPE)
         parts = {}
         for sym, (bars, fr, warm) in frames.items():
             ds = JudgeAgent(cfg).build(bars, warmup=warm, **fr)
