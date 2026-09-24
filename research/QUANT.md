@@ -946,3 +946,24 @@ per-coin rank's 2.19 / 1.35 (+180%). Rank AND ≥ 70% looked best on the
 latest year (2.05) but lost on the years that choose (1.39). So the label
 stays the per-coin rank, and the card now LEADS with the model's own chance
 that the target comes before the stop.
+
+### Ten more coins, screened one by one (2026-09-24)
+
+`research/coin_screen.py`: the 29 most-traded USDT perpetuals listed before
+April 2023 (less the 15 and the failed ten; VET dropped for a download
+interruption), scored by the served model (trained on the 15, per-coin rank,
+scale-out), each coin's own trades, earlier years / latest year:
+
+* 21 of 29 paid on development; of those, 11 (52%) paid on the holdout --
+  against 55% of all 29. **Development success did not predict holdout
+  success**: at ~60 trades a coin-year, a coin's record is mostly noise. The
+  fifteen agree: 12/15 paid on development, 5/15 on the holdout, coin by coin.
+* As GROUPS it is different: all 29 candidates traded like the 15 (per trade
+  +0.25/+0.02% vs +0.33/−0.02%; account Sharpe 2.00/1.37 vs 2.19/1.35), and
+  15 + all 29 was 2.21/1.59. The earlier ten lost even as a group.
+* Served (the owner asked for ten that make money): the ten with the best
+  record in both periods -- CRV, DYDX, LDO, GALA, ALGO, CHZ, APE, AR, 1000LUNC,
+  ICP (ENS, the eleventh, was thinnest and weakest). Their in-sample numbers
+  (15 + these ten: 3.04/2.34) are selection-flattered; the expectation is the
+  group's. Collector now records 1m/4h/1d only (15m and 1h dropped: unused),
+  keeping 75 streams for 25 coins.

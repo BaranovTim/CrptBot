@@ -28,7 +28,7 @@ services:
       # Everything NOT listed here is still served — built on demand and
       # cached — it simply is not pre-warmed or watched for signal changes.
       # Raise this list when the box has the RAM to carry it.
-      RECORD_SYMBOLS: ${RECORD_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,ADAUSDT,XRPUSDT,ZECUSDT,HYPEUSDT,DOGEUSDT,BNBUSDT,ENAUSDT,UNIUSDT,NEARUSDT,SUIUSDT,1000PEPEUSDT,ARBUSDT}
+      RECORD_SYMBOLS: ${RECORD_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,ADAUSDT,XRPUSDT,ZECUSDT,HYPEUSDT,DOGEUSDT,BNBUSDT,ENAUSDT,UNIUSDT,NEARUSDT,SUIUSDT,1000PEPEUSDT,ARBUSDT,CRVUSDT,DYDXUSDT,LDOUSDT,GALAUSDT,ALGOUSDT,CHZUSDT,APEUSDT,ARUSDT,1000LUNCUSDT,ICPUSDT}
       # OPTIONAL, deliberately — note `:-` and not `:?`.
       #
       # Without these the equity screener has no data and says so; with `:?`
@@ -99,6 +99,11 @@ services:
     # nothing was updating — the app correctly showed STALE and there was no
     # process whose job it was to fix that.
     #
+    # 15m and 1h are no longer collected (2026-09-24): the app serves 4h and
+    # 1d only, and nothing reads them. That kept the stream count the same
+    # (15 x 5 = 25 x 3) when ten coins were added, on a collector that sits
+    # near its 256MB cap. 1m stays: the "since my entry" range check reads it.
+    #
     # Adding a coin in the app does NOT make the server collect it. The
     # watchlist is a device preference; this list is what the server records.
     #
@@ -121,8 +126,12 @@ services:
       --symbol UNIUSDT --symbol NEARUSDT
       --symbol SUIUSDT --symbol 1000PEPEUSDT
       --symbol ARBUSDT
-      --interval 1m --interval 15m
-      --interval 1h --interval 4h --interval 1d
+      --symbol CRVUSDT --symbol DYDXUSDT
+      --symbol LDOUSDT --symbol GALAUSDT
+      --symbol ALGOUSDT --symbol CHZUSDT
+      --symbol APEUSDT --symbol ARUSDT
+      --symbol 1000LUNCUSDT --symbol ICPUSDT
+      --interval 1m --interval 4h --interval 1d
     healthcheck:
       # NOT the image's default check — that one curls the API port, which
       # nothing serves in this container, so the collector would sit at

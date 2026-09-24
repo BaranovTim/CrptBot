@@ -157,7 +157,8 @@ class _AddCoinSheetState extends State<_AddCoinSheet> {
               ),
               const SizedBox(height: 8),
               Text(
-                'USD-M perpetuals listed on Binance, most traded first.',
+                'Coins with CALLS first — the ones the app gives entries on — '
+                'then every other Binance perpetual, most traded first.',
                 style: Obsidian.body(color: Obsidian.outline, size: 11.5),
               ),
               const SizedBox(height: 10),
@@ -221,9 +222,27 @@ class _AddCoinSheetState extends State<_AddCoinSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('${s.base} / ${s.quote}',
-                          style: Obsidian.bodyLg().copyWith(
-                              fontWeight: FontWeight.w600)),
+                      Row(children: [
+                        Flexible(
+                          child: Text('${s.base} / ${s.quote}',
+                              overflow: TextOverflow.ellipsis,
+                              style: Obsidian.bodyLg().copyWith(
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                        if (s.served) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Obsidian.green.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Obsidian.green.withValues(alpha: 0.4)),
+                            ),
+                            child: Text('CALLS',
+                                style: Obsidian.labelSm(color: Obsidian.green, size: 9)),
+                          ),
+                        ],
+                      ]),
                       const SizedBox(height: 2),
                       Text(
                           [s.symbol, _vol(s.volume24h)]

@@ -44,10 +44,15 @@ class SymbolInfo {
       : symbol = j['symbol'] as String,
         base = j['base'] as String,
         quote = j['quote'] as String? ?? 'USDT',
-        volume24h = _d(j['volume_24h']);
+        volume24h = _d(j['volume_24h']),
+        served = j['served'] as bool? ?? false;
 
   final String symbol, base, quote;
   final double? volume24h;
+
+  /// This server makes calls on it. The rest of Binance's list can be
+  /// followed for its chart and price, but no call will come.
+  final bool served;
 }
 
 /// How much of the take-profit-to-stop-loss span the round trip in fees eats.

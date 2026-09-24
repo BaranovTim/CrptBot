@@ -262,7 +262,8 @@ class TradingService:
 
     # ---------------------------------------------------- the universe
     def symbols(self, q: Optional[str] = None,
-                limit: int = 60, ttl: float = 21600.0) -> List[Dict[str, Any]]:
+                limit: int = 60, ttl: float = 21600.0,
+                served_first: bool = False) -> List[Dict[str, Any]]:
         """Every USD-M perpetual Binance is currently trading.
 
         Ordered by 24h quote volume, not alphabetically. A search for "b"
@@ -288,6 +289,14 @@ class TradingService:
             needle = q.strip().upper()
             rows = [r for r in rows
                     if needle in r["symbol"] or needle in r["base"]]
+        # which of them this server makes calls on -- the app lists those
+        # first and badges them, or the coins with calls would sit among five
+        # hundred that have none. (Internal callers keep the volume order:
+        # the momentum rotation's universe is chosen by it.)
+        served = set(self.record_symbols())
+        rows = [dict(r, served=r["symbol"] in served) for r in rows]
+        if served_first:
+            rows = sorted(rows, key=lambda r: not r["served"])      # stable: volume order within
         return rows[:max(1, min(limit, 500))]
 
     def _fetch_universe(self) -> List[Dict[str, Any]]:

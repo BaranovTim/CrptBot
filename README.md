@@ -2,7 +2,7 @@
 
 A crypto prediction app: a Flutter app (Android first, iOS from the same code)
 reading a Python API on one small server. It tells you **when to enter, where
-to place the order, where to take profit and where the stop goes** on 15 coins,
+to place the order, where to take profit and where the stop goes** on 25 coins,
 and it keeps an honest public record of how those calls actually did. It holds
 no exchange key and places no orders: you trade on your exchange, the app says
 what and when.
@@ -50,20 +50,32 @@ round-number targets, and ten extra coins (below).
 
 Each coin is ranked against **its own** history, so adding a coin never
 changes another coin's calls (tested: the 15's trades were identical with ten
-more coins served). What decides whether a new coin gets calls is **its own
-out-of-sample record**:
+more coins served). The model is trained on the original 15 and **serves**
+the others without retraining. What decides whether a coin gets calls is its
+own out-of-sample record, screened coin by coin:
 
 ```bash
-python3 research/expand_coins.py fetch          # history for the candidates
-python3 research/expand_coins.py lab-build
-python3 research/expand_coins.py lab-run x25_bag5 x15_bag5
-python3 research/expand_coins.py lab-report     # per-coin: does it pay?
+python3 research/coin_screen.py fetch-rest      # candidates' 4h and 1d history (REST, fast)
+python3 research/coin_screen.py fetch 0 6 ...   # feature frames, one process per part
+python3 research/coin_screen.py build
+python3 research/coin_screen.py run             # the served model scores every candidate
+python3 research/coin_screen.py report          # per coin: does it pay in BOTH periods?
+python3 train_pooled_4h.py --add-coins CRVUSDT,...   # serve them (no refit)
 ```
 
-AVAX, LINK, LTC, BCH, AAVE, FIL, DOT, WLD, TAO and ONDO were tested on
-2026-09-24: the model wins 68% of the time on them but loses money per trade
-(−0.15%, −0.52% in the last year), so they are not served. Training on them
-did not improve the other 15 either.
+then add the coins to the collector's `--symbol` list and `RECORD_SYMBOLS` in
+`docker-compose.yml`, and copy their 4h/1d bars to the server (see DEPLOY.md).
+
+**24 Sep 2026:** 29 of the most-traded perpetuals were screened; CRV, DYDX,
+LDO, GALA, ALGO, CHZ, APE, AR, LUNC and ICP paid in both periods and are now
+served (4h only). The caveat that stays attached: across the screen, paying in
+the earlier years did not predict paying in the latest one (52% of the coins
+that paid early paid later, against 55% of all candidates), so a single coin's
+record is mostly luck at ~60 trades a year. The honest expectation for the
+ten is the candidates' GROUP, which traded about as well as the original 15
+(Sharpe 2.00 / 1.37 against 2.19 / 1.35). The live record is the judge. An
+earlier batch (AVAX, LINK, LTC, BCH, AAVE, FIL, DOT, WLD, TAO, ONDO) lost money
+even as a group and is not served.
 
 ## Running it
 

@@ -2632,6 +2632,14 @@ void main() {
     });
   });
 
+  test('a pair the server makes calls on is flagged', () {
+    final s = SymbolInfo.fromJson({'symbol': 'CRVUSDT', 'base': 'CRV', 'quote': 'USDT',
+        'volume_24h': 1e8, 'served': true});
+    expect(s.served, isTrue);
+    final t = SymbolInfo.fromJson({'symbol': 'ZZZUSDT', 'base': 'ZZZ'});
+    expect(t.served, isFalse, reason: 'older servers send no flag');
+  });
+
   group('the size in dollars', () {
     Future<void> pump(WidgetTester t, {double? entry, double live = 86000.0}) async {
       SharedPreferences.setMockInitialValues({});

@@ -306,3 +306,47 @@ def test_the_score_book_stores_nanoseconds_whatever_the_index_unit():
     again = ScoreBook(path); again._load()
     assert (again._pools["P|long"]["C0"][0] > 10**17).all()
     return True
+
+
+def test_screened_coins_are_served_without_touching_the_fifteen():
+    """--add-coins installs the pooled models under a new coin's name, with a
+    verdict saying it is served, not trained on; a training coin is refused."""
+    import json, shutil
+    import train_pooled_4h as T
+    from core import model_paths, eval_path
+
+    out = Path(tempfile.mkdtemp())
+    src1, src2 = model_paths("BTCUSDT", "4h", out)
+    src1.parent.mkdir(parents=True, exist_ok=True)
+    src1.write_bytes(b"h1"); src2.write_bytes(b"h2")
+    eval_path("BTCUSDT", "4h", out).write_text(json.dumps({"symbol": "BTCUSDT", "rank_pool": "P"}))
+    real_mp, real_ep = T.model_paths, T.eval_path
+    T.model_paths = lambda s, i: model_paths(s, i, out)
+    T.eval_path = lambda s, i: eval_path(s, i, out)
+    try:
+        assert T.add_coins(["CRVUSDT", "ETHUSDT"]) == 1          # ETH trains; left alone
+    finally:
+        T.model_paths, T.eval_path = real_mp, real_ep
+    n1, n2 = model_paths("CRVUSDT", "4h", out)
+    assert n1.read_bytes() == b"h1" and n2.read_bytes() == b"h2"
+    v = json.loads(eval_path("CRVUSDT", "4h", out).read_text())
+    assert v["symbol"] == "CRVUSDT" and v["served_not_trained"] and v["rank_pool"] == "P"
+    assert not model_paths("ETHUSDT", "4h", out)[0].exists()
+    assert len(T.SERVED_EXTRA) == 10 and not set(T.SERVED_EXTRA) & set(T.COINS)
+    return True
+
+
+def test_the_pair_list_flags_and_leads_with_the_coins_that_get_calls():
+    from api.service import TradingService, _Cached
+    import time as _t
+    svc = object.__new__(TradingService)
+    rows = [{"symbol": s, "base": s[:-4], "quote": "USDT", "volume_24h": v}
+            for s, v in (("BTCUSDT", 9e9), ("AAAUSDT", 5e9), ("CRVUSDT", 1e8), ("ZZZUSDT", 5e7))]
+    svc._tickers = {"__universe__": _Cached(_t.time(), rows)}
+    svc.record_symbols = lambda: ["BTCUSDT", "CRVUSDT"]
+    plain = svc.symbols()
+    assert [r["symbol"] for r in plain] == ["BTCUSDT", "AAAUSDT", "CRVUSDT", "ZZZUSDT"]   # volume order kept
+    assert [r["served"] for r in plain] == [True, False, True, False]
+    first = svc.symbols(served_first=True)
+    assert [r["symbol"] for r in first] == ["BTCUSDT", "CRVUSDT", "AAAUSDT", "ZZZUSDT"]
+    return True

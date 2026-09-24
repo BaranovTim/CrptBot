@@ -189,6 +189,44 @@ def update_rules(coins) -> int:
     return 0
 
 
+# COINS SERVED BUT NOT TRAINED ON. Each coin is ranked against its own
+# history, so a coin can be served by the model the fifteen trained without
+# changing any other coin's calls. A coin is added here only after
+# research/coin_screen.py found its OWN record paying on both the
+# development years and the holdout year.
+# Screened 2026-09-24 (research/results/coin_screen/screen.json): the ten
+# with the best record in BOTH periods among the 29 most-traded candidates.
+# Caveat that stays attached: across the screen, paying in the earlier years
+# did not predict paying in the latest one (52% vs 55%), so the honest
+# expectation for these is the candidates' group -- about as good as the
+# fifteen (Sharpe 2.00/1.37 vs 2.19/1.35). The live record decides.
+SERVED_EXTRA: list = ["CRVUSDT", "DYDXUSDT", "LDOUSDT", "GALAUSDT", "ALGOUSDT",
+                      "CHZUSDT", "APEUSDT", "ARUSDT", "1000LUNCUSDT", "ICPUSDT"]
+
+
+def add_coins(coins, source: str = "BTCUSDT") -> int:
+    """Install the current pooled 4h models under new coins' names: the same
+    files (and so the same rules), and a verdict saying the coin is served,
+    not trained on. No refit, and the fifteen's files are not touched."""
+    src1, src2 = model_paths(source, INTERVAL)
+    verdict = json.loads(eval_path(source, INTERVAL).read_text())
+    n = 0
+    for sym in coins:
+        if sym in COINS:
+            print(f"  {sym}: already one of the training coins, left alone")
+            continue
+        d1, d2 = model_paths(sym, INTERVAL)
+        d1.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src1, d1)
+        shutil.copyfile(src2, d2)
+        eval_path(sym, INTERVAL).write_text(json.dumps(
+            dict(verdict, symbol=sym, served_not_trained=True,
+                 screened_by="research/coin_screen.py"), indent=1))
+        n += 1
+        print(f"  {sym}: installed (the {verdict.get('rank_pool')} models, served not trained)")
+    return n
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -199,9 +237,15 @@ def main(argv=None) -> int:
     p.add_argument("--stop-buffer", type=float, default=STOP_BUFFER_ATR)
     p.add_argument("--update-rules", action="store_true",
                    help="write the entry rule into the installed models; no refit")
+    p.add_argument("--add-coins", default="",
+                   help="comma-separated coins to SERVE with the installed models (no refit)")
     a = p.parse_args(argv)
+    if a.add_coins:
+        add_coins([c.strip().upper() for c in a.add_coins.split(",") if c.strip()])
+        return 0
     if a.update_rules:
-        return update_rules([c.strip().upper() for c in a.coins.split(",") if c.strip()])
+        return update_rules([c.strip().upper() for c in a.coins.split(",") if c.strip()]
+                            + [c for c in SERVED_EXTRA if c not in a.coins])
 
     PD.INTERVAL = INTERVAL
     PD.CACHE = Path(a.cache)
@@ -278,6 +322,9 @@ def main(argv=None) -> int:
             shutil.copyfile(tmp / f"pooled_h{slot}.joblib", dst)
         eval_path(sym, INTERVAL).write_text(json.dumps(dict(verdict, symbol=sym), indent=1))
     print(f"\ninstalled the pooled 4h models under {len(frames)} coins, with verdicts", flush=True)
+    if SERVED_EXTRA:
+        # the screened coins get the new models too (served, not trained on)
+        add_coins(SERVED_EXTRA, source=sorted(frames)[0])
 
     n = fill_score_book(sorted(frames))
     print(f"score book filled from {n} coins", flush=True)

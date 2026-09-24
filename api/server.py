@@ -396,7 +396,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send({"coins": svc.coins(picked)})
             elif route == "/api/symbols":
                 self._send({"symbols": svc.symbols(q=opt("q"),
-                                                  limit=arg("limit", 60))})
+                                                  limit=arg("limit", 60),
+                                                  served_first=True)})
             elif route == "/api/timeframes":
                 self._send({"timeframes": svc.timeframes(opt("symbol"))})
             elif route == "/api/dashboard":
