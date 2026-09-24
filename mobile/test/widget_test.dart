@@ -2640,6 +2640,45 @@ void main() {
     expect(t.served, isFalse, reason: 'older servers send no flag');
   });
 
+  group('the log form follows the call', () {
+    Widget card({String iv = '4h', double? tp, double? sl = 95.0, double? entry}) => MaterialApp(
+        home: Scaffold(
+            body: SingleChildScrollView(
+                child: LogEntryCard(
+                    symbol: 'BTCUSDT', short: 'BTC', interval: iv, livePrice: 100.0,
+                    suggestedSide: 'LONG', suggestedTp: tp, suggestedSl: sl,
+                    suggestedEntry: entry))));
+    // the fields in order: size, entry, take profit, stop loss
+    String tpText(WidgetTester t) =>
+        t.widget<TextField>(find.byType(TextField).at(2)).controller!.text;
+
+    testWidgets('switching 1d to 4h fills the take profit', (t) async {
+      SharedPreferences.setMockInitialValues({});
+      await t.pumpWidget(card(iv: '1d'));
+      await t.pumpAndSettle();
+      expect(tpText(t), '');
+      expect(find.text('none on 1d: the stop trails'), findsOneWidget);
+      await t.pumpWidget(card(iv: '4h', tp: 104.0));
+      await t.pump();
+      expect(tpText(t), priceInput(104.0));
+    });
+
+    testWidgets('a new call refreshes the levels, and a typed one is kept', (t) async {
+      SharedPreferences.setMockInitialValues({});
+      await t.pumpWidget(card(tp: 104.0));
+      await t.pumpAndSettle();
+      await t.pumpWidget(card(tp: 106.0, entry: 99.0));
+      await t.pump();
+      expect(tpText(t), priceInput(106.0));
+      expect(t.widget<TextField>(find.byType(TextField).at(1)).controller!.text, priceInput(99.0));
+      await t.enterText(find.byType(TextField).at(2), '110');
+      await t.pump();
+      await t.pumpWidget(card(tp: 108.0, entry: 99.0));
+      await t.pump();
+      expect(tpText(t), '110', reason: 'what you typed stays');
+    });
+  });
+
   group('the size in dollars', () {
     Future<void> pump(WidgetTester t, {double? entry, double live = 86000.0}) async {
       SharedPreferences.setMockInitialValues({});

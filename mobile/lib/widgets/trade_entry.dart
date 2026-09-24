@@ -80,6 +80,10 @@ class _LogEntryCardState extends State<LogEntryCard> {
 
   /// The dollar figure behind "Your amount", remembered between trades.
   double? _customUsd;
+
+  /// Fields the person has typed in (or tapped) themselves. The rest follow
+  /// the call: see `didUpdateWidget`.
+  bool _entryTouched = false, _tpTouched = false, _slTouched = false, _sideTouched = false;
   bool _saving = false;
   String? _error;
 
@@ -98,6 +102,45 @@ class _LogEntryCardState extends State<LogEntryCard> {
 
   // every digit the coin moves in -- see `priceDecimals`
   static String _fmt(double? v) => priceInput(v);
+
+  /// THE FORM FOLLOWS THE CALL. The fields used to be filled once, when the
+  /// card was first built, and never again -- so switching the page from 1d
+  /// (which leaves the take profit empty on purpose) to 4h kept the empty
+  /// field, and a call that arrived while the page was open kept yesterday's
+  /// levels. Now: a new coin or timeframe starts the form over, and a changed
+  /// suggestion refreshes every field the person has not typed in.
+  @override
+  void didUpdateWidget(covariant LogEntryCard old) {
+    super.didUpdateWidget(old);
+    if (old.symbol != widget.symbol || old.interval != widget.interval) {
+      _entryTouched = _tpTouched = _slTouched = _sideTouched = false;
+      _usd = null;
+      _size.clear();
+      _refill(force: true);
+      return;
+    }
+    _refill(old: old);
+  }
+
+  void _refill({LogEntryCard? old, bool force = false}) {
+    final w = widget;
+    if (!_tpTouched && (force || old?.suggestedTp != w.suggestedTp)) {
+      _tp.text = priceInput(w.suggestedTp);
+    }
+    if (!_slTouched && (force || old?.suggestedSl != w.suggestedSl)) {
+      _sl.text = priceInput(w.suggestedSl);
+    }
+    if (!_entryTouched && (force || (old?.suggestedEntry != w.suggestedEntry))) {
+      final e = w.suggestedEntry ?? (force ? w.livePrice : null);
+      if (e != null) {
+        _entry.text = priceInput(e);
+        _followUsd();
+      }
+    }
+    if (!_sideTouched && (force || old?.suggestedSide != w.suggestedSide)) {
+      _side = w.suggestedSide == 'SHORT' ? 'SHORT' : 'LONG';
+    }
+  }
 
   @override
   void dispose() {
@@ -230,6 +273,9 @@ class _LogEntryCardState extends State<LogEntryCard> {
     if (!mounted) return;
     _size.clear();
     _usd = null;
+    // the next entry starts from the call again
+    _entryTouched = _tpTouched = _slTouched = _sideTouched = false;
+    _refill(force: true);
     setState(() => _saving = false);
     widget.onLogged?.call();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -302,11 +348,15 @@ class _LogEntryCardState extends State<LogEntryCard> {
           const SizedBox(height: 8),
           _field(_entry,
               hint: '0.00',
-              onChanged: (_) => setState(_followUsd),
+              onChanged: (_) => setState(() {
+                    _entryTouched = true;
+                    _followUsd();
+                  }),
               trailingLabel: widget.livePrice == null ? null : 'MARKET',
               onTrailingTap: widget.livePrice == null
                   ? null
                   : () => setState(() {
+                        _entryTouched = true;
                         _entry.text = _fmt(widget.livePrice);
                         _followUsd();
                       })),
@@ -361,7 +411,10 @@ class _LogEntryCardState extends State<LogEntryCard> {
       final on = _side == value;
       return Expanded(
         child: GestureDetector(
-          onTap: () => setState(() => _side = value),
+          onTap: () => setState(() {
+            _side = value;
+            _sideTouched = true;
+          }),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 140),
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -534,7 +587,10 @@ class _LogEntryCardState extends State<LogEntryCard> {
           ),
           child: TextField(
             controller: c,
-            onChanged: (_) => setState(() {}),
+            onChanged: (_) => setState(() {
+              if (identical(c, _tp)) _tpTouched = true;
+              if (identical(c, _sl)) _slTouched = true;
+            }),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
@@ -553,7 +609,11 @@ class _LogEntryCardState extends State<LogEntryCard> {
         const SizedBox(height: 5),
         Text(
             pct == null
-                ? 'optional'
+                // on 1d the take profit is left empty ON PURPOSE: a daily
+                // entry is closed by its trailing stop, not a target
+                ? (identical(c, _tp) && widget.interval == '1d'
+                    ? 'none on 1d: the stop trails'
+                    : 'optional')
                 : '${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(2)}% $word',
             style: Obsidian.body(
                 color: pct == null ? Obsidian.outline : tone, size: 11)),
