@@ -117,8 +117,13 @@ const List<HowToStep> howToSteps = [
   HowToStep(
       '04',
       'Place the trade yourself, then log it',
-      'Use your own exchange. Log Market Entry at the bottom of the dashboard '
-          'records what you did, with your fill price and your levels.',
+      'Use your own exchange. Log Your Entry at the bottom of the dashboard '
+          'records what you did, with your fill price and your levels. LIMIT '
+          "beside the entry price puts in the call's order — its limit, target "
+          'and stop; logged before it fills, it waits as a limit order and '
+          'counts from when price reaches it. MARKET puts in the live price. '
+          'Only a coin you have logged gets the halfway, target and stop '
+          'notifications — they are about your trade.',
       Obsidian.amber,
       'YOUR MOVE'),
   HowToStep(
@@ -153,9 +158,13 @@ const List<HowToStep> howToSteps = [
       '08',
       'Daily entries have no time limit — the stop trails',
       'Log a daily entry with the stop at the last swing low and no take '
-          'profit. Each time a new swing low confirms on the daily chart, '
-          'the app moves your stop up to it and tells you. It never moves '
-          'back. The trade lives until the structure breaks. Trailed like '
+          'profit. Each time a new swing low confirms on the daily chart — a '
+          'low the three days before and after it stay above — the app moves '
+          'your stop up to it and tells you. It never moves back, and in a '
+          'straight run with no pullback it does not move at all. The entry '
+          'card says where the stop is, whether it locks in a profit, and the '
+          'next move if one is forming. The trade lives until the structure '
+          'breaks: you leave when price touches the stop. Trailed like '
           'this, buys with the trend averaged about +5% per trade in both '
           'years; a fixed target and a ten-day clock lost.',
       _cyan,
@@ -216,7 +225,10 @@ const List<HowToStep> howToSteps = [
           'you when it fills and when the trade ends. HALFWAY to the target, '
           'take a third of the position off and move your stop to your entry: '
           'from then on the trade cannot lose. The card shows the halfway '
-          'price and the app tells you when it is reached. Tested over three '
+          'price and the app tells you when it is reached; then tap TAKE THE '
+          'THIRD on your entry, and the log closes a third at that price and '
+          'keeps the rest with its stop at the entry — both parts stay '
+          'together in Profile as one trade. Tested over three '
           'years, that wins about 73% of trades (71% in the latest year) '
           'instead of 61%, for about a third less total return — the limit '
           'entry is the habit that separated the profitable big traders from '

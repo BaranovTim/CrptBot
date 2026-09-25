@@ -450,10 +450,20 @@ class ApiClient {
   /// High, low and last close since `since` — what price DID, not what it
   /// is now. Used to settle a logged trade against its own levels; see
   /// `Trades.settle`.
+  /// The high, low and last price since `since` (up to `until` when
+  /// given). With `touch`, also the first minute price reached that level
+  /// -- at or below it for a LONG's buy limit, at or above for a SHORT's --
+  /// as `touched_at`, null when it never did.
   Future<Map<String, dynamic>> priceRange(String symbol,
-          {required DateTime since, String interval = '1m'}) =>
+          {required DateTime since,
+          DateTime? until,
+          double? touch,
+          String? side,
+          String interval = '1m'}) =>
       _get('/api/range?symbol=$symbol&interval=$interval'
-          '&since=${Uri.encodeComponent(since.toUtc().toIso8601String())}');
+          '&since=${Uri.encodeComponent(since.toUtc().toIso8601String())}'
+          '${until == null ? '' : '&until=${Uri.encodeComponent(until.toUtc().toIso8601String())}'}'
+          '${touch == null ? '' : '&touch=$touch&side=${side ?? 'LONG'}'}');
 
   /// Every warm pair whose call is not FLAT. Answered from the server's
   /// cache, so it is cheap and reports only pairs it has a current reading

@@ -20,7 +20,8 @@ measured. Deploying is in `DEPLOY.md`; the app has its own `mobile/README.md`.
 | **Weekly rotation** | Every Monday 00:00 UTC: long 5 / short 5 of the 30 most-traded Binance perpetuals, held a week | 15-day momentum and a week of net taker buying (buyers more aggressive than the price shows), ranks averaged |
 | **Smart money** | Whether followed top traders on Hyperliquid took the same side recently | Raises or lowers a call one level; not a model input |
 | **Live record** | Every order since the model went live: filled or not, target / stop / back to entry, after fees, per sensitivity | `api/ledger.py`, written as it happens; nothing reconstructed |
-| **Notifications** | New call, order moved, **filled**, **halfway — take a third off**, trade ended, order expired, Monday rotation | `api/alerts.py`, transitions only |
+| **Your trades** | **Log Your Entry** on each coin page: **LIMIT** puts in the call's order (logged before it fills, it waits and counts from the minute price reaches it); **Take the third** splits an entry into the third taken and the rest with its stop at the entry, kept together in Profile as one trade; a daily entry says how it ends: the stop, whether it locks in a profit, the next move if one is forming | On the phone only (`mobile/lib/api/trades.dart`); the server answers "when did price first reach X" (`/api/range?touch=`) and "where does the trail go next" (`/api/trail` → `next`) |
+| **Notifications** | New call, order moved, **limit filled**, order expired, Monday rotation to everyone the call reaches; **halfway — take a third off**, target, stop and time limit **only to a phone with an entry logged on that coin and timeframe** | `api/alerts.py`, transitions only; `api/push.py` `MANAGED_ORDER_STEPS` |
 
 ## How good it is — measured on data the models never saw
 
@@ -81,8 +82,8 @@ even as a group and is not served.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py                 # 592 tests, no network needed
-cd mobile && flutter test            # 163 app tests
+python3 run_tests.py                 # 599 tests, no network needed
+cd mobile && flutter test            # 188 app tests
 
 python3 serve.py                     # the API locally (read-only JSON)
 python3 train_pooled_4h.py           # refit the 4h models (every ~6 months)
@@ -157,7 +158,7 @@ weights *are* Agent 5.
 
 ```bash
 pip3 install -r requirements.txt
-python3 run_tests.py            # 592 tests, no network needed
+python3 run_tests.py            # 599 tests, no network needed
 python3 run_tests.py --real     # + leak checks on live Binance data
 python3 main.py --offline       # synthetic bars
 python3 main.py                 # real BTCUSDT 1h perps, both agents

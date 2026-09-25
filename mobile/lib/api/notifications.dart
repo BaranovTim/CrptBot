@@ -83,12 +83,18 @@ String describeWhen(DateTime at, {DateTime? now}) {
 /// the price goes through `priceText` so it reads as the same number the
 /// dashboard shows.
 Future<String?> heldLine(String symbol,
-    {String? alertInterval, String? to}) async {
+    {String? alertInterval, String? to, bool managed = false}) async {
   final open = (await Trades.instance.load())
-      .where((t) => t.isOpen && t.symbol == symbol);
+      .where((t) => t.isOpen && t.symbol == symbol)
+      .toList();
   if (open.isEmpty) return null;
-  final t = open.first;
+  // the entry on the alert's own timeframe when there is one
+  final t = open.firstWhere((e) => e.interval == alertInterval,
+      orElse: () => open.first);
   final line = 'Open entry: ${t.side} @ ${priceText(t.entryPrice, prefix: '')}';
+  // A step in the running trade (halfway, target, stop) IS the advice;
+  // "stay in, the call agrees" under it would be a second, vaguer answer.
+  if (managed) return line;
   final adv = adviceLine(
       side: t.side, entryInterval: t.interval,
       alertInterval: alertInterval, to: to);
@@ -477,7 +483,8 @@ class Notifications {
     // line, and when you hold the coin a call just changed on, that line
     // is "you hold this".
     final held = a.kind == 'signal'
-        ? await heldLine(a.symbol, alertInterval: a.interval, to: a.extra['to'])
+        ? await heldLine(a.symbol,
+            alertInterval: a.interval, to: a.extra['to'], managed: a.managesTrade)
         : null;
     final body = [
       ?held,

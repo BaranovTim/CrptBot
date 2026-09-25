@@ -455,7 +455,10 @@ def test_the_card_names_the_halfway_price_and_the_notice_fires_once():
     state["o"].update(taken=True, stop=99.0)
     got = e.refresh()
     assert len(got) == 1 and "halfway, take a third off" in got[0].title, [x.title for x in got]
-    assert "Move the stop on the rest to your entry 99.00" in got[0].body
+    # sent only to a phone holding the coin (api/push.py), so it speaks to
+    # the entry, and says what to tap
+    assert "move the stop on the rest to your entry" in got[0].body, got[0].body
+    assert "Take the third" in got[0].body
     assert e.refresh() == []
     svc.action = "FLAT"
     state["o"].update(state="stop", exit=99.0, ret_pct=1.35)

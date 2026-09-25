@@ -26,6 +26,15 @@ String _money(double? v, {int? dp}) {
   return '\$$whole.${parts[1]}';
 }
 
+/// "Sat 14:00 UTC": when a limit order stops being good, in the same clock
+/// the order chip on the card above uses.
+String _hhmm(DateTime t) {
+  final u = t.toUtc();
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  return '${days[u.weekday - 1]} ${u.hour.toString().padLeft(2, '0')}:'
+      '${u.minute.toString().padLeft(2, '0')} UTC';
+}
+
 /// The form. Prefilled from the model's own call where one exists, because
 /// re-typing four numbers you are looking at is how a journal stops being
 /// kept.
@@ -40,6 +49,11 @@ class LogEntryCard extends StatefulWidget {
     this.suggestedTp,
     this.suggestedSl,
     this.suggestedEntry,
+    this.limitPrice,
+    this.limitResting = false,
+    this.limitUntil,
+    this.limitTp,
+    this.limitSl,
     this.onLogged,
   });
 
@@ -60,6 +74,17 @@ class LogEntryCard extends StatefulWidget {
   /// the levels describe begins. MARKET beside the field still fills in the
   /// live price for someone who bought at the market anyway.
   final double? suggestedEntry;
+
+  /// THE CALL'S ORDER, for the LIMIT button beside the entry price: the
+  /// limit while it rests, the fill once it has filled. `limitTp`/`limitSl`
+  /// are that order's target and stop. Null when the call has no order.
+  final double? limitPrice, limitTp, limitSl;
+
+  /// The order has not filled yet. Logging it at the limit then logs an
+  /// ORDER, not a trade: it waits for price to reach the limit, until
+  /// `limitUntil`, and only then counts.
+  final bool limitResting;
+  final DateTime? limitUntil;
   final VoidCallback? onLogged;
 
   @override
@@ -151,6 +176,35 @@ class _LogEntryCardState extends State<LogEntryCard> {
   }
 
   double? get _entryPrice => double.tryParse(_entry.text.replaceAll(',', ''));
+
+  /// Logging the call's RESTING order at its limit, with the market not
+  /// there yet: this is an order waiting to fill, not a trade.
+  bool get _waitingLimit {
+    final w = widget, e = _entryPrice, lim = w.limitPrice, live = w.livePrice;
+    if (!w.limitResting || lim == null || e == null) return false;
+    // the same number as typed: the field holds the limit rounded to the
+    // digits the coin moves in, not the limit itself
+    if (priceInput(e) != priceInput(lim)) return false;
+    if (live == null) return true;
+    final short = _side == 'SHORT';
+    return short ? live < lim : live > lim;
+  }
+
+  /// LIMIT: the call's order -- its price, target and stop -- back in the
+  /// form, following the call again from here.
+  void _useLimit() {
+    final w = widget;
+    setState(() {
+      _entryTouched = _tpTouched = _slTouched = _sideTouched = false;
+      _side = w.suggestedSide == 'SHORT' ? 'SHORT' : 'LONG';
+      _entry.text = priceInput(w.limitPrice);
+      if (w.interval != '1d') _tp.text = priceInput(w.limitTp ?? w.suggestedTp);
+      _sl.text = priceInput(w.limitSl ?? w.suggestedSl);
+      _followUsd();
+      _error = null;
+    });
+  }
+
   double? get _sizeVal => double.tryParse(_size.text.replaceAll(',', ''));
 
   /// Percentage from entry to the level, in the direction of the trade.
@@ -257,6 +311,7 @@ class _LogEntryCardState extends State<LogEntryCard> {
       setState(() => _error = 'Enter the price you got filled at.');
       return;
     }
+    final waiting = _waitingLimit;
     setState(() {
       _saving = true;
       _error = null;
@@ -269,6 +324,11 @@ class _LogEntryCardState extends State<LogEntryCard> {
       takeProfit: double.tryParse(_tp.text.replaceAll(',', '')),
       stopLoss: double.tryParse(_sl.text.replaceAll(',', '')),
       interval: widget.interval,
+      // an order good for as long as the call's is; a day when the call
+      // does not say
+      pendingUntil: waiting
+          ? (widget.limitUntil ?? DateTime.now().toUtc().add(const Duration(hours: 24)))
+          : null,
     ));
     if (!mounted) return;
     _size.clear();
@@ -280,8 +340,14 @@ class _LogEntryCardState extends State<LogEntryCard> {
     widget.onLogged?.call();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       backgroundColor: Obsidian.surfaceHigh,
-      content: Text('Logged. It is in your positions now — this app did not '
-          'place anything.', style: Obsidian.body()),
+      content: Text(
+          waiting
+              ? 'Logged as a limit order. It counts from when price reaches '
+                  '${priceText(entry)}; if it does not in time, it closes as '
+                  'not filled. This app did not place anything.'
+              : 'Logged. It is in your positions now — this app did not '
+                  'place anything.',
+          style: Obsidian.body()),
     ));
   }
 
@@ -298,7 +364,7 @@ class _LogEntryCardState extends State<LogEntryCard> {
               Icon(Icons.check_box_rounded, color: green, size: 22),
               const SizedBox(width: 10),
               Expanded(
-                child: Text('Log Market Entry', style: Obsidian.headlineMd()),
+                child: Text('Log Your Entry', style: Obsidian.headlineMd()),
               ),
               Container(
                 padding:
@@ -352,14 +418,24 @@ class _LogEntryCardState extends State<LogEntryCard> {
                     _entryTouched = true;
                     _followUsd();
                   }),
-              trailingLabel: widget.livePrice == null ? null : 'MARKET',
-              onTrailingTap: widget.livePrice == null
-                  ? null
-                  : () => setState(() {
+              trailing: [
+                // THE CALL'S ORDER: its limit (or its fill), target and stop
+                if (widget.limitPrice != null) ('LIMIT', _useLimit),
+                if (widget.livePrice != null)
+                  ('MARKET', () => setState(() {
                         _entryTouched = true;
                         _entry.text = _fmt(widget.livePrice);
                         _followUsd();
                       })),
+              ]),
+          if (_waitingLimit) ...[
+            const SizedBox(height: 6),
+            Text(
+                'A limit order: the price is not there yet. The entry counts '
+                'from when price reaches ${priceText(_entryPrice)}'
+                '${widget.limitUntil == null ? '' : ', and closes as not filled if it has not by ${_hhmm(widget.limitUntil!)}'}.',
+                style: Obsidian.body(color: Obsidian.primary, size: 11)),
+          ],
           const SizedBox(height: 18),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -397,7 +473,7 @@ class _LogEntryCardState extends State<LogEntryCard> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.black))
                   : const Icon(Icons.check_circle_rounded, size: 20),
-              label: Text('Log Trade Entry',
+              label: Text(_waitingLimit ? 'Log Limit Order' : 'Log Trade Entry',
                   style: Obsidian.labelSm(color: Colors.black, size: 14)),
             ),
           ),
@@ -517,8 +593,7 @@ class _LogEntryCardState extends State<LogEntryCard> {
       {String? hint,
       String? suffix,
       String? approx,
-      String? trailingLabel,
-      VoidCallback? onTrailingTap,
+      List<(String, VoidCallback)> trailing = const [],
       ValueChanged<String>? onChanged}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
@@ -555,14 +630,23 @@ class _LogEntryCardState extends State<LogEntryCard> {
           if (approx != null)
             Text(approx,
                 style: Obsidian.dataTable(size: 12.5, color: Obsidian.outline)),
-          if (trailingLabel != null)
+          for (final (label, onTap) in trailing)
             GestureDetector(
-              onTap: onTrailingTap,
+              behavior: HitTestBehavior.opaque,
+              onTap: onTap,
               child: Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Text(trailingLabel,
-                    style:
-                        Obsidian.labelSm(color: Obsidian.primary, size: 10.5)),
+                padding: const EdgeInsets.only(left: 10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                        color: Obsidian.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: Text(label,
+                      style: Obsidian.labelSm(
+                          color: Obsidian.primary, size: 10.5)),
+                ),
               ),
             ),
         ],

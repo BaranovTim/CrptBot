@@ -120,6 +120,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// Positions you logged for THIS pair. Read from the device, not the
   /// server — see `trades.dart` on why, and on what that costs.
   List<TradeEntry> _positions = const [];
+
+  /// The part taken off each split position, by its group id.
+  Map<String, TradeEntry> _taken = const {};
   Consensus? _consensus;
   SmartMoney? _smart;
   String? _error;
@@ -471,17 +474,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // for a panel that is usually about to render unchanged. What is stored
     // goes up immediately; if settling then closes something, the list is
     // rebuilt underneath.
-    final stored = await Trades.instance.forSymbol(widget.symbol);
-    if (mounted) setState(() => _positions = stored);
+    Future<void> show() async {
+      final all = await Trades.instance.forSymbol(widget.symbol, openOnly: false);
+      if (!mounted) return;
+      setState(() {
+        _positions = all.where((t) => t.isOpen).toList();
+        // the thirds already taken, by the trade they came off
+        _taken = {
+          for (final t in all)
+            if (t.isTakenPart && t.groupId != null) t.groupId!: t,
+        };
+      });
+    }
 
+    await show();
     try {
       final settled = await Trades.instance.settle(widget.client);
-      if (settled.isEmpty || !mounted) return;
-      final after = await Trades.instance.forSymbol(widget.symbol);
-      if (mounted) setState(() => _positions = after);
+      if (!mounted) return;
+      // a limit that filled changes the card as much as a close does
+      await show();
+      if (settled.isEmpty) return;
     } catch (_) {
       // offline; what is drawn above is still what is stored
     }
+  }
+
+  /// The price the call's order enters at: its limit while it rests, its
+  /// fill once filled. Null with no live order (none, expired, or ended).
+  double? _orderEntry(Dashboard d) {
+    final o = d.recommendation.order;
+    if (o == null) return null;
+    if (o.state == 'open') return o.limit;
+    if (o.state == 'filled') return o.fill ?? o.limit;
+    return null;
+  }
+
+  /// "Take the third" on an entry: ask the price the third came off at,
+  /// then split the entry into the part taken and the rest.
+  Future<void> _takeThird(TradeEntry t) async {
+    final price = await askTakeThird(context, t, livePrice: _livePrice);
+    if (price == null || price <= 0) return;
+    await Trades.instance.takeThird(t.id, price: price);
+    await _loadPositions();
   }
 
   Future<void> _editPosition(TradeEntry t) async {
@@ -492,6 +526,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _closePosition(TradeEntry t) async {
+    if (t.isPending) {
+      // an order that never filled has no exit price to ask for
+      await Trades.instance.cancelOrder(t.id);
+      await _loadPositions();
+      return;
+    }
     final price = await askExitPrice(context, t, livePrice: _livePrice);
     if (price == null || price <= 0) return;
     await Trades.instance.close(t.id, price);
@@ -677,8 +717,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ? d.symbol.substring(0, d.symbol.length - 4)
                   : d.symbol,
               livePrice: _livePrice ?? d.price,
+              taken: _taken,
               onClose: _closePosition,
               onEdit: _editPosition,
+              onTakeThird: _takeThird,
             ),
             const SizedBox(height: Obsidian.gutter),
           ],
@@ -725,7 +767,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 : d.liveTakeProfit(_livePrice),
             suggestedSl: d.liveStopLoss(_livePrice),
             // a call that enters with a resting order: log it at the order
-            suggestedEntry: d.entryLimit,
+            // -- its limit while it rests, its fill once it has filled
+            suggestedEntry: d.entryLimit ?? _orderEntry(d),
+            limitPrice: _orderEntry(d),
+            limitResting: d.recommendation.order?.isOpen ?? false,
+            limitUntil: (d.recommendation.order?.isOpen ?? false)
+                ? d.recommendation.order?.validUntil
+                : null,
+            limitTp: widget.interval == '1d' ? null : d.recommendation.order?.target,
+            limitSl: d.recommendation.order?.stop,
             onLogged: _loadPositions,
           ),
         ],
@@ -1362,7 +1412,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 style: Obsidian.dataTable(size: 14, color: c, w: FontWeight.w700)),
             if (sub != null) ...[
               const SizedBox(height: 3),
-              Text(sub, style: Obsidian.labelSm(color: Obsidian.outline, size: 10)),
+              Text(sub,
+                  textAlign: TextAlign.center,
+                  style: Obsidian.labelSm(color: Obsidian.outline, size: 10)),
             ],
           ],
         ),
@@ -1464,21 +1516,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 [
                   if (order.validUntil != null) 'good until ${_utc(order.validUntil!)}',
                   if (order.scalePrice != null)
-                    'take ${order.partShort} off at ${LevelsPanel.money(order.scalePrice)}, then stop to entry',
-                ].join(' · ').ifEmptyNull,
+                    'at ${LevelsPanel.money(order.scalePrice)} (halfway to the target) '
+                        'take ${order.partWords} off and move the stop to the entry',
+                ].join('\n').ifEmptyNull,
                 c),
           ],
           if (!settled && !gated && r.inTrade && order?.fill != null) ...[
             const SizedBox(height: 12),
+            // THE CALL'S ORDER FILLED: the model's trade is running. Said
+            // as the call's, so it does not read as a trade of yours -- yours
+            // are the position cards above.
             _orderChip(
                 order!.taken
-                    ? '${order.partShort} TAKEN · STOP AT ENTRY ${LevelsPanel.money(order.fill)}'
-                    : 'IN THE TRADE · FILLED ${LevelsPanel.money(order.fill)}',
+                    ? '${order.partWords.toUpperCase()} TAKEN · STOP AT ENTRY ${LevelsPanel.money(order.fill)}'
+                    : "THE CALL'S LIMIT FILLED AT ${LevelsPanel.money(order.fill)}",
                 [
                   if (!order.taken && order.scalePrice != null)
-                    'take ${order.partShort} off at ${LevelsPanel.money(order.scalePrice)}, then stop to entry',
-                  if (order.holdUntil != null) 'closes by ${_utc(order.holdUntil!)}',
-                ].join(' · ').ifEmptyNull,
+                    'at ${LevelsPanel.money(order.scalePrice)} (halfway to the target) '
+                        'take ${order.partWords} off and move the stop to the entry',
+                  if (order.holdUntil != null)
+                    'time limit ${_utc(order.holdUntil!)}: close at the market if '
+                        'neither level is reached',
+                ].join('\n').ifEmptyNull,
                 order.taken ? Obsidian.green : Obsidian.primary),
           ],
           if (!settled && !gated && r.strength.isNotEmpty && !r.inTrade) ...[
@@ -1567,7 +1626,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           border: Border.all(color: c.withValues(alpha: 0.45)),
         ),
         child: Text(
-            '$called · ${order.partShort} TAKEN · $rest'
+            '$called · ${order.partWords.toUpperCase()} TAKEN · $rest'
             '${r == null ? '' : ' · ${r >= 0 ? '+' : '−'}${r.abs().toStringAsFixed(2)}% OVERALL'}',
             style: Obsidian.labelSm(color: c, size: 10.5)),
       );

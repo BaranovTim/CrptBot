@@ -553,9 +553,17 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/record":
                 self._send(svc.live_record())
             elif route == "/api/range":
+                touch = opt("touch")
+                try:
+                    touch = float(touch) if touch else None
+                except ValueError:
+                    touch = None
                 self._send(svc.price_range(symbol=opt("symbol"),
                                            interval=opt("interval") or "1m",
-                                           since=opt("since")))
+                                           since=opt("since"),
+                                           until=opt("until"),
+                                           touch=touch,
+                                           side=(opt("side") or "LONG").upper()))
             elif route == "/api/chart":
                 self._send(svc.chart(symbol=opt("symbol"),
                                      interval=opt("interval"),

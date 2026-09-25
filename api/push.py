@@ -162,9 +162,11 @@ MAX_POSITIONS = 50
 
 def _clean_positions(raw) -> List[Dict[str, Any]]:
     """Keep only what the line needs, in a shape nothing downstream has to
-    defend against. One entry per symbol -- a second open entry on the same
-    coin is still one "you hold this"."""
-    out: Dict[str, Dict[str, Any]] = {}
+    defend against. One entry per symbol AND timeframe -- a second open
+    entry on the same coin and timeframe is still one "you hold this", but
+    a 4h entry beside a 1d one on the same coin is a different trade, and
+    the steps of the 4h one (halfway, target, stop) must find it."""
+    out: Dict[tuple, Dict[str, Any]] = {}
     for p in raw or ():
         if not isinstance(p, dict):
             continue
@@ -181,8 +183,8 @@ def _clean_positions(raw) -> List[Dict[str, Any]]:
         iv = str(p.get("interval") or "").strip()
         if iv not in ("15m", "1h", "4h", "1d"):
             iv = ""
-        if sym not in out and len(out) < MAX_POSITIONS:
-            out[sym] = {"symbol": sym, "side": side, "entry": entry, "interval": iv}
+        if (sym, iv) not in out and len(out) < MAX_POSITIONS:
+            out[(sym, iv)] = {"symbol": sym, "side": side, "entry": entry, "interval": iv}
     return list(out.values())
 
 
@@ -271,11 +273,29 @@ def advice_line(position: Dict[str, Any], alert_interval: str, to: str) -> Optio
             f"better than holding. A fresh {other} entry is on the card if you want to reverse.")
 
 
-def held_position(sub, symbol: str) -> Optional[Dict[str, Any]]:
+def held_position(sub, symbol: str, interval: str = "") -> Optional[Dict[str, Any]]:
+    """The open entry on this coin -- on `interval` when one is given and
+    the entry says which timeframe it was logged on."""
     for p in sub.positions:
         if p.get("symbol") == symbol:
+            piv = p.get("interval") or ""
+            if interval and piv and piv != interval:
+                continue
             return p
     return None
+
+
+# Steps in a trade already running: halfway (take a third off), the target,
+# the stop, the time limit. They are about a POSITION, so they go only to a
+# phone with an entry logged on that coin and timeframe -- someone with
+# nothing on the coin was told a third of a trade they never had "worked".
+# Mirrored by `Alert.managesTrade` in the app.
+MANAGED_ORDER_STEPS = ("partial", "target", "stop", "timeout")
+
+
+def manages_trade(a) -> bool:
+    extra = getattr(a, "extra", None) or {}
+    return getattr(a, "kind", "") == "signal" and extra.get("order") in MANAGED_ORDER_STEPS
 
 
 @dataclass
@@ -352,6 +372,10 @@ def _wants(sub: Subscription, a) -> bool:
         return False
     if utc_now() - a.detected_at > MAX_AGE:
         return False
+    # a step in a running trade: only where one is held, and then whatever
+    # the strength setting -- it is the owner's position talking
+    if manages_trade(a):
+        return held_position(sub, getattr(a, "symbol", ""), getattr(a, "interval", "")) is not None
     # An exit carries no strength — there is no expected value to grade when
     # nothing is being opened — so grading it by an ENTRY-strength setting
     # would reject every one of them. The app learned this the hard way; the
@@ -571,13 +595,16 @@ class PushRelay:
         # visible before you expand anything. Signals only: a news item
         # about a coin you hold is not a decision about your position.
         if getattr(a, "kind", "") == "signal":
-            pos = held_position(sub, getattr(a, "symbol", ""))
+            pos = (held_position(sub, getattr(a, "symbol", ""), getattr(a, "interval", ""))
+                   or held_position(sub, getattr(a, "symbol", "")))
             if pos:
                 lines = [entry_line(pos["side"], pos["entry"])]
                 # and what to do about it: the second line, before the
-                # strength and the levels, because it is the decision
+                # strength and the levels, because it is the decision. Not
+                # on a step of the running trade: that step IS the advice.
                 extra = getattr(a, "extra", None) or {}
-                adv = advice_line(pos, getattr(a, "interval", ""), str(extra.get("to", "")))
+                adv = (None if manages_trade(a) else
+                       advice_line(pos, getattr(a, "interval", ""), str(extra.get("to", ""))))
                 if adv:
                     lines.append(adv)
                 body = "\n".join(lines) + ("\n" + body if body else "")

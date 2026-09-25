@@ -67,6 +67,10 @@ class TradeEntry {
     this.limitAskedAt,
     this.keptPastLimit = false,
     this.stopMovedAt,
+    this.pendingUntil,
+    this.groupId,
+    this.nextStop,
+    this.nextStopAt,
   });
 
   factory TradeEntry.create({
@@ -78,13 +82,10 @@ class TradeEntry {
     double? stopLoss,
     String? interval,
     String note = '',
+    DateTime? pendingUntil,
   }) {
-    final r = Random.secure();
-    final id = List<int>.generate(8, (_) => r.nextInt(256))
-        .map((x) => x.toRadixString(16).padLeft(2, '0'))
-        .join();
     return TradeEntry(
-      id: id,
+      id: newId(),
       symbol: symbol.toUpperCase(),
       side: side == 'SHORT' ? 'SHORT' : 'LONG',
       size: size,
@@ -94,7 +95,16 @@ class TradeEntry {
       stopLoss: stopLoss,
       interval: interval,
       note: note,
+      pendingUntil: pendingUntil,
     );
+  }
+
+  /// Sixteen random hex digits.
+  static String newId() {
+    final r = Random.secure();
+    return List<int>.generate(8, (_) => r.nextInt(256))
+        .map((x) => x.toRadixString(16).padLeft(2, '0'))
+        .join();
   }
 
   factory TradeEntry.fromJson(Map<String, dynamic> j) => TradeEntry(
@@ -122,6 +132,14 @@ class TradeEntry {
         stopMovedAt: j['stop_moved_at'] == null
             ? null
             : DateTime.parse(j['stop_moved_at'] as String),
+        pendingUntil: j['pending_until'] == null
+            ? null
+            : DateTime.parse(j['pending_until'] as String),
+        groupId: j['group_id'] as String?,
+        nextStop: (j['next_stop'] as num?)?.toDouble(),
+        nextStopAt: j['next_stop_at'] == null
+            ? null
+            : DateTime.parse(j['next_stop_at'] as String),
       );
 
   final String id, symbol, side, note;
@@ -136,6 +154,59 @@ class TradeEntry {
 
   bool get autoClosed => closedBy == 'take_profit' ||
       closedBy == 'stop_loss' || closedBy == 'time_limit';
+
+  /// A LIMIT ORDER THAT HAS NOT FILLED YET. Logged with the call's resting
+  /// order price while the market was still away from it: there is no
+  /// trade until price reaches the limit, so no profit, no levels checked
+  /// and no clock. Non-null means waiting; the time is when the order
+  /// stops being good (the call's `valid_until`). The app fills it when
+  /// price touches the limit and closes it as 'unfilled' if it never does.
+  final DateTime? pendingUntil;
+  bool get isPending => pendingUntil != null && isOpen;
+
+  /// An order that expired without filling. Not a trade: no profit, not
+  /// in the win rate.
+  bool get unfilled => closedBy == 'unfilled';
+
+  /// THE TWO HALVES OF ONE TRADE. "Take the third" closes a third of the
+  /// position at the halfway price and keeps the rest open with its stop at
+  /// the entry. Both parts carry the id of the original entry here, so the
+  /// journal shows and counts them as one trade. Null on an entry that was
+  /// never split.
+  final String? groupId;
+
+  /// The part that came off. `closedBy` says so; its partner is the entry
+  /// with the same `groupId` that is not this.
+  bool get isTakenPart => closedBy == 'scale_out';
+
+  /// The part that stayed in after a third came off.
+  bool get isRestPart => groupId != null && !isTakenPart;
+
+  /// Halfway from the entry to the target: where a third comes off.
+  double? get halfwayPrice {
+    final tp = takeProfit;
+    return tp == null ? null : entryPrice + (tp - entryPrice) / 2;
+  }
+
+  /// "Take the third" is for an open, filled 4h-style entry with a target,
+  /// once. A daily entry has no target: its trail is the exit.
+  bool get canTakeThird =>
+      isOpen && !isPending && !trailed && takeProfit != null && groupId == null;
+
+  /// Has price been at least halfway to the target since the entry?
+  bool get reachedHalfway {
+    final h = halfwayPrice;
+    if (h == null) return false;
+    final ext = isShort ? lowSince : highSince;
+    if (ext == null) return false;
+    return isShort ? ext <= h : ext >= h;
+  }
+
+  /// THE NEXT STEP OF A DAILY TRAIL, from the server: the swing low (high,
+  /// for a short) the stop moves up to at `nextStopAt` if price does not
+  /// trade below it before then. Null when no such swing is forming.
+  final double? nextStop;
+  final DateTime? nextStopAt;
   final double size, entryPrice;
   final DateTime openedAt;
   final double? takeProfit, stopLoss;
@@ -217,7 +288,9 @@ class TradeEntry {
   /// When the model stops having an opinion about this entry. Null for a
   /// trailed entry -- it has no window to expire.
   DateTime? get timeLimit {
-    if (trailed) return null;
+    // an unfilled order has no trade yet, so no window; the window of a
+    // filled one runs from the fill, which is what `openedAt` becomes
+    if (trailed || isPending) return null;
     final h = horizonOf(interval);
     return h == null ? null : openedAt.add(h);
   }
@@ -249,11 +322,16 @@ class TradeEntry {
         'limit_asked_at': limitAskedAt?.toIso8601String(),
         'kept_past_limit': keptPastLimit,
         'stop_moved_at': stopMovedAt?.toIso8601String(),
+        'pending_until': pendingUntil?.toIso8601String(),
+        'group_id': groupId,
+        'next_stop': nextStop,
+        'next_stop_at': nextStopAt?.toIso8601String(),
       };
 
   /// The price this position is marked against: its close for a finished
   /// trade, the live price for an open one.
-  double? markPrice(double? live) => closedAt != null ? closePrice : live;
+  double? markPrice(double? live) =>
+      closedAt != null ? closePrice : (isPending ? null : live);
 
   /// Percentage move IN THE DIRECTION OF THE TRADE.
   ///
@@ -331,32 +409,120 @@ class TradeEntry {
     // positive = toward the target, for either side of the trade
     final favourable = isShort ? entryPrice - m : m - entryPrice;
     if (favourable >= 0) {
-      final span = spanTp ?? spanSl!;
+      // a trailed entry has no target on purpose: its right-hand end is
+      // three times the risk, so the bar still has room when price has gone
+      // as far up as the stop is down, rather than sitting full
+      final span = spanTp ?? (trailed ? spanSl! * 3 : spanSl!);
       return span <= 0 ? 0.0 : (favourable / span).clamp(0.0, 1.0);
     }
     final span = spanSl ?? spanTp!;
     return span <= 0 ? 0.0 : -((-favourable) / span).clamp(0.0, 1.0);
   }
 
-  TradeEntry closedAtPrice(double price, {String by = ''}) => TradeEntry(
-        id: id,
-        symbol: symbol,
-        side: side,
-        size: size,
-        entryPrice: entryPrice,
-        openedAt: openedAt,
-        takeProfit: takeProfit,
-        stopLoss: stopLoss,
-        closedAt: DateTime.now().toUtc(),
-        closePrice: price,
-        closedBy: by,
-        note: note,
-        highSince: highSince,
-        lowSince: lowSince,
-        interval: interval,
-        limitAskedAt: limitAskedAt,
-        keptPastLimit: keptPastLimit,
-      );
+  /// EVERY COPY GOES THROUGH HERE. Each one used to list every field by
+  /// hand, and two of them forgot `stopMovedAt`: a daily entry whose trail
+  /// had moved its stop lost the time of the move on the next price tick,
+  /// the settle pass then judged the raised stop against the range since the
+  /// ENTRY, and a low from before the stop moved could close the trade at a
+  /// stop it never touched. A field added here is carried by every copy.
+  static const Object _keep = Object();
+
+  TradeEntry _with({
+    Object? id = _keep,
+    Object? size = _keep,
+    Object? openedAt = _keep,
+    Object? takeProfit = _keep,
+    Object? stopLoss = _keep,
+    Object? closedAt = _keep,
+    Object? closePrice = _keep,
+    Object? closedBy = _keep,
+    Object? highSince = _keep,
+    Object? lowSince = _keep,
+    Object? limitAskedAt = _keep,
+    Object? keptPastLimit = _keep,
+    Object? stopMovedAt = _keep,
+    Object? pendingUntil = _keep,
+    Object? groupId = _keep,
+    Object? nextStop = _keep,
+    Object? nextStopAt = _keep,
+  }) {
+    T pick<T>(Object? v, T have) => identical(v, _keep) ? have : v as T;
+    return TradeEntry(
+      id: pick<String>(id, this.id),
+      symbol: symbol,
+      side: side,
+      size: pick<double>(size, this.size),
+      entryPrice: entryPrice,
+      openedAt: pick<DateTime>(openedAt, this.openedAt),
+      takeProfit: pick<double?>(takeProfit, this.takeProfit),
+      stopLoss: pick<double?>(stopLoss, this.stopLoss),
+      closedAt: pick<DateTime?>(closedAt, this.closedAt),
+      closePrice: pick<double?>(closePrice, this.closePrice),
+      closedBy: pick<String>(closedBy, this.closedBy),
+      note: note,
+      highSince: pick<double?>(highSince, this.highSince),
+      lowSince: pick<double?>(lowSince, this.lowSince),
+      interval: interval,
+      limitAskedAt: pick<DateTime?>(limitAskedAt, this.limitAskedAt),
+      keptPastLimit: pick<bool>(keptPastLimit, this.keptPastLimit),
+      stopMovedAt: pick<DateTime?>(stopMovedAt, this.stopMovedAt),
+      pendingUntil: pick<DateTime?>(pendingUntil, this.pendingUntil),
+      groupId: pick<String?>(groupId, this.groupId),
+      nextStop: pick<double?>(nextStop, this.nextStop),
+      nextStopAt: pick<DateTime?>(nextStopAt, this.nextStopAt),
+    );
+  }
+
+  TradeEntry closedAtPrice(double price, {String by = ''}) =>
+      _with(closedAt: DateTime.now().toUtc(), closePrice: price, closedBy: by);
+
+  /// An order that never filled: closed, with no exit price, because there
+  /// was never a position to exit.
+  TradeEntry expiredUnfilled() => _with(
+      closedAt: DateTime.now().toUtc(), closePrice: null,
+      closedBy: 'unfilled', pendingUntil: null);
+
+  /// The limit filled at `at`: the trade starts there. Its window and its
+  /// levels are judged from the fill, and the range since the log -- which
+  /// holds prices from before there was a position -- is dropped.
+  TradeEntry filledAt(DateTime at) => _with(
+      pendingUntil: null, openedAt: at, stopMovedAt: at,
+      highSince: null, lowSince: null);
+
+  /// THE SPLIT. "Take the third": `part` of the position closed at `price`,
+  /// the rest kept open with its stop moved to the entry. Two entries, one
+  /// trade: both carry this entry's id as their group.
+  ///
+  /// The rest KEEPS THIS ID -- it is the same position, still open, and
+  /// anything that refers to it (a pending notification, the time-limit
+  /// question) still finds it. The part that came off is the new entry.
+  ///
+  /// Why not "close it all and open a new one at the current price": the
+  /// money is identical, but then the rest would be measured from the
+  /// halfway price, and a stop at the entry would show as a loss on it when
+  /// it is exactly break-even. Measured from the real entry, the rest reads
+  /// the way the exchange shows it.
+  ({TradeEntry taken, TradeEntry rest}) splitThird(double price,
+      {double part = 1 / 3, DateTime? now}) {
+    final t = (now ?? DateTime.now()).toUtc();
+    final taken = _with(
+      id: newId(),
+      size: size * part,
+      closedAt: t,
+      closePrice: price,
+      closedBy: 'scale_out',
+      groupId: id,
+    );
+    final rest = _with(
+      size: size * (1 - part),
+      stopLoss: entryPrice,
+      // judged from now: the range since the entry holds prices below the
+      // entry that the moved stop was never exposed to
+      stopMovedAt: t,
+      groupId: id,
+    );
+    return (taken: taken, rest: rest);
+  }
 
   /// This entry with the question state changed. Public because tests
   /// build these states directly; the app reaches them through
@@ -371,14 +537,14 @@ class TradeEntry {
     final cur = stopLoss;
     final tighter = cur == null || (isShort ? stop < cur : stop > cur);
     if (!tighter) return this;
-    return TradeEntry(
-      id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
-      openedAt: openedAt, takeProfit: takeProfit, stopLoss: stop,
-      closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
-      note: note, highSince: highSince, lowSince: lowSince,
-      interval: interval, limitAskedAt: limitAskedAt,
-      keptPastLimit: keptPastLimit, stopMovedAt: movedAt,
-    );
+    return _with(stopLoss: stop, stopMovedAt: movedAt);
+  }
+
+  /// This entry with the trail's next step recorded (or cleared). Returns
+  /// this entry by identity when nothing changed.
+  TradeEntry withNextStop(double? stop, DateTime? at) {
+    if (stop == nextStop && at == nextStopAt) return this;
+    return _with(nextStop: stop, nextStopAt: at);
   }
 
   /// This entry with its levels changed by hand. Either may be cleared
@@ -386,28 +552,17 @@ class TradeEntry {
   /// have. A trailed entry whose stop is moved by hand starts its trail
   /// from there: the trail only ever tightens from the stop it is given.
   TradeEntry withLevels({required double? takeProfit, required double? stopLoss}) =>
-      TradeEntry(
-        id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
-        openedAt: openedAt, takeProfit: takeProfit, stopLoss: stopLoss,
-        closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
-        note: note, highSince: highSince, lowSince: lowSince,
-        interval: interval, limitAskedAt: limitAskedAt,
-        keptPastLimit: keptPastLimit,
+      _with(
+        takeProfit: takeProfit,
+        stopLoss: stopLoss,
         // a hand-set stop is judged from now, not from the entry: the range
         // since entry may hold a wick the new stop was placed to ignore
         stopMovedAt: stopLoss != this.stopLoss ? DateTime.now().toUtc() : stopMovedAt,
       );
 
-  TradeEntry _copy({DateTime? limitAskedAt, bool? keptPastLimit}) =>
-      TradeEntry(
-        id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
-        openedAt: openedAt, takeProfit: takeProfit, stopLoss: stopLoss,
-        closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
-        note: note, highSince: highSince, lowSince: lowSince,
-        interval: interval,
+  TradeEntry _copy({DateTime? limitAskedAt, bool? keptPastLimit}) => _with(
         limitAskedAt: limitAskedAt ?? this.limitAskedAt,
         keptPastLimit: keptPastLimit ?? this.keptPastLimit,
-        stopMovedAt: stopMovedAt,
       );
 
   /// This entry with the extremes widened to include `high`/`low`.
@@ -423,13 +578,7 @@ class TradeEntry {
     final h = _wider(highSince ?? entryPrice, high, (a, b) => a > b);
     final l = _wider(lowSince ?? entryPrice, low, (a, b) => a < b);
     if (h == highSince && l == lowSince) return this;
-    return TradeEntry(
-      id: id, symbol: symbol, side: side, size: size, entryPrice: entryPrice,
-      openedAt: openedAt, takeProfit: takeProfit, stopLoss: stopLoss,
-      closedAt: closedAt, closePrice: closePrice, closedBy: closedBy,
-      note: note, highSince: h, lowSince: l, interval: interval,
-      limitAskedAt: limitAskedAt, keptPastLimit: keptPastLimit,
-    );
+    return _with(highSince: h, lowSince: l);
   }
 
   static double _wider(double have, double? seen,
@@ -454,13 +603,33 @@ class TradeEntry {
 ///   this agrees with it deliberately: a journal that resolved ties in your
 ///   favour would flatter every statistic built on top of it.
 String? levelHitBy(TradeEntry t, {double? high, double? low}) {
-  if (!t.isOpen || high == null || low == null) return null;
+  // an order that has not filled has no position for a level to close
+  if (!t.isOpen || t.isPending || high == null || low == null) return null;
   final tp = t.takeProfit, sl = t.stopLoss;
   final hitTp = tp != null && (t.isShort ? low <= tp : high >= tp);
   final hitSl = sl != null && (t.isShort ? high >= sl : low <= sl);
   if (hitSl) return 'stop_loss';        // the tie goes here, on purpose
   if (hitTp) return 'take_profit';
   return null;
+}
+
+/// Did a price range fill a waiting limit order? 'fill', 'fill_stop' when
+/// the same range also went on to the stop, or null.
+///
+/// THE ORDER OF EVENTS IS KNOWN HERE, unlike a target-and-stop tie. A buy
+/// limit sits below the price and its stop below the limit: to reach the
+/// stop, price has to pass through the limit first. So a range that reached
+/// the stop filled the order and then stopped it out, in that order. The
+/// target is different -- it sits on the other side, and price may have
+/// touched it before coming down to fill -- so a target is only ever judged
+/// on prices after the fill.
+String? pendingFillBy(TradeEntry t, {double? high, double? low}) {
+  if (!t.isPending || high == null || low == null) return null;
+  final e = t.entryPrice, sl = t.stopLoss;
+  final filled = t.isShort ? high >= e : low <= e;
+  if (!filled) return null;
+  final stopped = sl != null && (t.isShort ? high >= sl : low <= sl);
+  return stopped ? 'fill_stop' : 'fill';
 }
 
 class Trades extends ChangeNotifier {
@@ -661,7 +830,7 @@ class Trades extends ChangeNotifier {
     final all = List<TradeEntry>.from(await load());
     for (var i = 0; i < all.length; i++) {
       final t = all[i];
-      if (!t.isOpen) continue;
+      if (!t.isOpen || t.isPending) continue;
       final p = tick(t);
       if (p == null) continue;
       final w = t.withExtremes(high: p, low: p);
@@ -684,6 +853,20 @@ class Trades extends ChangeNotifier {
       if (!t.isOpen) continue;
       final p = tick(t);
       if (p == null) continue;
+      // A WAITING LIMIT: filled by a tick at or through it, while the order
+      // is still good. An expired one is left to `settle`, which can see
+      // whether it filled while the app was closed.
+      if (t.isPending) {
+        if (now.toUtc().isBefore(t.pendingUntil!)) {
+          final f = pendingFillBy(t, high: p, low: p);
+          if (f != null) {
+            final c = await _fill(t.id, DateTime.now().toUtc(), stopped: f == 'fill_stop');
+            if (c != null) settled.add(c);
+            moved = true;                    // the card changes: redraw it
+          }
+        }
+        continue;
+      }
       // A barrier first: if the tick that closed the window also touched
       // a level, the level is the more specific fact.
       final hit = levelHitBy(t, high: p, low: p);
@@ -712,10 +895,12 @@ class Trades extends ChangeNotifier {
 
   Future<List<TradeEntry>> settle(ApiClient client) async {
     await syncTrails(client);
+    final stoppedAtFill = await _settlePending(client);
     final open = (await load())
-        .where((t) => t.isOpen && (t.takeProfit != null || t.stopLoss != null))
+        .where((t) => t.isOpen && !t.isPending &&
+            (t.takeProfit != null || t.stopLoss != null))
         .toList();
-    if (open.isEmpty) return const [];
+    if (open.isEmpty) return stoppedAtFill;
 
     // IN PARALLEL, not one after another.
     //
@@ -758,7 +943,7 @@ class Trades extends ChangeNotifier {
     }
     if (widened) await _save(all);
 
-    final settled = <TradeEntry>[];
+    final settled = <TradeEntry>[...stoppedAtFill];
     final limitOn = await Settings.instance.timeLimit();
     final now = DateTime.now();
     for (final e in ranges) {
@@ -782,6 +967,87 @@ class Trades extends ChangeNotifier {
     return settled;
   }
 
+  /// Every waiting limit order against the prices since it was logged, up
+  /// to when it stops being good: filled where price reached the limit (at
+  /// the minute it did), closed as unfilled once its time is up without
+  /// that. Returns the ones the same range also stopped out.
+  ///
+  /// One request per waiting order, asking the server for the first minute
+  /// the limit was touched. An older server that does not answer that
+  /// question leaves the order waiting rather than guessing either way.
+  Future<List<TradeEntry>> _settlePending(ApiClient client) async {
+    final waiting = (await load()).where((t) => t.isPending).toList();
+    if (waiting.isEmpty) return const [];
+    final out = <TradeEntry>[];
+    final now = DateTime.now().toUtc();
+    for (final t in waiting) {
+      Map<String, dynamic> r;
+      try {
+        r = await client.priceRange(t.symbol,
+            since: t.openedAt,
+            until: t.pendingUntil,
+            touch: t.entryPrice,
+            side: t.side);
+      } catch (e) {
+        debugPrint('[trades] could not check the limit on ${t.symbol}: $e');
+        continue;
+      }
+      if (!r.containsKey('touched_at')) continue;      // an older server
+      final at = DateTime.tryParse(r['touched_at'] as String? ?? '');
+      if (at != null) {
+        final f = pendingFillBy(t,
+            high: (r['high'] as num?)?.toDouble(),
+            low: (r['low'] as num?)?.toDouble());
+        final c = await _fill(t.id, at.toUtc(), stopped: f == 'fill_stop');
+        if (c != null) out.add(c);
+      } else if (!now.isBefore(t.pendingUntil!)) {
+        await _expire(t.id);
+      }
+    }
+    return out;
+  }
+
+  /// The limit filled: the entry becomes a trade from `at`. `stopped` when
+  /// the same stretch of prices also reached its stop -- then it is closed
+  /// there too, and returned.
+  Future<TradeEntry?> _fill(String id, DateTime at, {bool stopped = false}) async {
+    final all = List<TradeEntry>.from(await load());
+    final i = all.indexWhere((t) => t.id == id);
+    if (i < 0 || !all[i].isPending) return null;
+    all[i] = all[i].filledAt(at);
+    await _save(all);
+    if (!stopped) return null;
+    return autoClose(id, 'stop_loss');
+  }
+
+  Future<void> _expire(String id) async {
+    final all = List<TradeEntry>.from(await load());
+    final i = all.indexWhere((t) => t.id == id);
+    if (i < 0 || !all[i].isPending) return;
+    all[i] = all[i].expiredUnfilled();
+    await _save(all);
+  }
+
+  /// Cancel a logged limit order that has not filled: closed as not
+  /// filled, which the record does not count as a trade.
+  Future<void> cancelOrder(String id) => _expire(id);
+
+  /// "Take the third": a third of the entry closed at `price`, the rest
+  /// kept open with its stop at the entry. See `TradeEntry.splitThird`.
+  /// Returns the two parts, or null when the entry cannot be split.
+  Future<({TradeEntry taken, TradeEntry rest})?> takeThird(String id,
+      {required double price}) async {
+    if (!price.isFinite || price <= 0) return null;
+    final all = List<TradeEntry>.from(await load());
+    final i = all.indexWhere((t) => t.id == id);
+    if (i < 0 || !all[i].canTakeThird) return null;
+    final parts = all[i].splitThird(price);
+    all[i] = parts.rest;
+    all.add(parts.taken);
+    await _save(all);
+    return parts;
+  }
+
   /// Move every open trailed entry's stop to where the server's trail puts
   /// it now, and say so. Never loosens a stop; never touches an entry the
   /// person closed. Offline, nothing changes -- the next pass catches up.
@@ -803,11 +1069,20 @@ class Trades extends ChangeNotifier {
       final trail = r['trail'] as Map?;
       final stop = (trail?['stop'] as num?)?.toDouble();
       if (stop == null) continue;
+      // the step the trail is waiting on, if one is forming: shown on the
+      // entry so "when do I get out?" has an answer between moves
+      final next = trail?['next'] as Map?;
+      final nx = t.withNextStop((next?['stop'] as num?)?.toDouble(),
+          DateTime.tryParse(next?['at'] as String? ?? '')?.toUtc());
+      if (!identical(nx, t)) {
+        all[i] = nx;
+        changed = true;
+      }
       final at = DateTime.tryParse((trail?['moved_at'] as String?) ??
               (r['last_closed_bar'] as String? ?? '')) ??
           DateTime.now().toUtc();
-      final w = t.withTrailedStop(stop, at);
-      if (identical(w, t)) continue;
+      final w = all[i].withTrailedStop(stop, at);
+      if (identical(w, all[i])) continue;
       all[i] = w;
       changed = true;
       moved.add(w);

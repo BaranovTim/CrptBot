@@ -588,3 +588,52 @@ def test_the_relay_puts_the_advice_on_the_second_line():
     # and the interval survives a round trip through the registry
     assert r.for_account("tim")["positions"][0]["interval"] == "4h"
     return True
+
+
+def test_a_trade_step_goes_only_to_a_phone_holding_the_coin():
+    """Halfway, target, stop and time limit are about a POSITION. Sent to
+    everyone, a phone with nothing on the coin was told a third of a trade
+    it never had "worked out" (2026-09-25). Held on the same timeframe:
+    delivered whatever the strength setting, with the entry line and no
+    "stay in" advice under it -- the step is the advice."""
+    for step in ("partial", "target", "stop", "timeout"):
+        r, rec = _relay()
+        _held(r, {"symbol": "ETHUSDT", "side": "LONG", "entry": 2500.0, "interval": "4h"})
+        r.deliver([FakeAlert(interval="4h", strength="small", extra={"order": step, "to": "BUY"})])
+        assert rec.sent == [], (step, rec.sent)
+
+        r, rec = _relay()
+        _held(r, {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0, "interval": "1d"})
+        r.deliver([FakeAlert(interval="4h", strength="small", extra={"order": step, "to": "BUY"})])
+        assert rec.sent == [], (step, "a 1d entry is not the 4h trade")
+
+        r, rec = _relay()
+        _held(r, {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0, "interval": "4h"})
+        r.deliver([FakeAlert(interval="4h", strength="small", body="Take a third off",
+                             extra={"order": step, "to": "BUY"})])
+        assert len(rec.sent) == 1, (step, rec.sent)
+        lines = rec.sent[0]["message"].split("\n")
+        assert lines[0] == "Open entry: LONG @ 79,200.00", lines
+        assert lines[1] == "Take a third off", lines
+    return True
+
+
+def test_a_fill_still_goes_to_everyone_the_call_reaches():
+    """The limit filling is the moment to log the entry: it cannot wait for
+    one to be logged."""
+    r, rec = _relay()
+    _held(r)
+    r.deliver([FakeAlert(interval="4h", extra={"order": "filled", "to": "BUY"})])
+    assert len(rec.sent) == 1, rec.sent
+    return True
+
+
+def test_a_4h_and_a_1d_entry_on_one_coin_are_both_kept():
+    r, _ = _relay()
+    _held(r, {"symbol": "BTCUSDT", "side": "LONG", "entry": 79200.0, "interval": "1d"},
+          {"symbol": "BTCUSDT", "side": "LONG", "entry": 80100.0, "interval": "4h"},
+          {"symbol": "BTCUSDT", "side": "LONG", "entry": 80200.0, "interval": "4h"})
+    got = r.for_account("tim")["positions"]
+    assert [(p["interval"], p["entry"]) for p in got] == [("1d", 79200.0), ("4h", 80100.0)], got
+    return True
+

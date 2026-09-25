@@ -28,6 +28,7 @@ import 'client.dart';
 import 'models.dart';
 import 'muted.dart';
 import 'settings.dart';
+import 'trades.dart';
 
 /// The most notifications one collection may post.
 ///
@@ -91,6 +92,10 @@ List<Alert> selectDeliverable(
   /// Per-coin strength levels, SYMBOL -> level. A coin not in here uses
   /// `sensitivity`. Mirrored on the relay as `overrides`.
   Map<String, String> overrides = const {},
+  /// Does this phone have an open entry logged on the coin and timeframe?
+  /// Steps in a running trade (`Alert.managesTrade`) go only where it does.
+  /// Null: nothing is held, so none of them go.
+  bool Function(String symbol, String interval)? holds,
   DateTime? now,
   int limit = maxCatchUp,
 }) {
@@ -108,6 +113,14 @@ List<Alert> selectDeliverable(
 
     // Too old to interrupt for. It is still in the app.
     if (t.difference(a.detectedAt.toUtc()) > maxBacklogAge) continue;
+
+    // HALFWAY, TARGET, STOP, TIME LIMIT: about a trade, so only for a phone
+    // holding one on this coin and timeframe -- and then always, whatever
+    // the strength setting, because it is your position talking.
+    if (a.managesTrade) {
+      if (holds != null && holds(a.symbol, a.interval)) kept.add(a);
+      continue;
+    }
 
     // The sensitivity setting governs the notification exactly as it governs
     // the dashboard card. Without this the app could be withholding a small
@@ -200,6 +213,11 @@ Future<AlertBatch> collectAlerts(ApiClient client) async {
   final sensitivity = await Settings.instance.sensitivity();
   final overrides = await Settings.instance.sensitivityOverrides();
   final newsLevel = await Settings.instance.newsAlerts();
+  // the open log, for the steps of a running trade (`Alert.managesTrade`)
+  final open = (await Trades.instance.load()).where((t) => t.isOpen).toList();
+  bool holds(String symbol, String interval) => open.any((t) =>
+      t.symbol == symbol.toUpperCase() &&
+      (t.interval == null || t.interval == interval));
 
   // A first run has no cursor, so the server returns nothing and this simply
   // records where to start. That is what stops a fresh install replaying a
@@ -211,7 +229,8 @@ Future<AlertBatch> collectAlerts(ApiClient client) async {
           overrides: overrides,
           isMuted: (s, i) => Muted.instance.isMuted(s, i),
           isKindMuted: Muted.instance.isKindMuted,
-          newsLevel: newsLevel);
+          newsLevel: newsLevel,
+          holds: holds);
 
   await saveCursor(r.cursor);
   final suppressed = cursor == null ? 0 : r.alerts.length - deliver.length;

@@ -37,15 +37,21 @@ class PositionsPanel extends StatelessWidget {
     required this.entries,
     required this.short,
     this.livePrice,
+    this.taken = const {},
     this.onClose,
     this.onEdit,
+    this.onTakeThird,
   });
 
   final List<TradeEntry> entries;
   final String short;
   final double? livePrice;
+
+  /// The part already taken off each split position, by group id.
+  final Map<String, TradeEntry> taken;
   final void Function(TradeEntry)? onClose;
   final void Function(TradeEntry)? onEdit;
+  final void Function(TradeEntry)? onTakeThird;
 
   @override
   Widget build(BuildContext context) {
@@ -75,8 +81,10 @@ class PositionsPanel extends StatelessWidget {
               entry: t,
               livePrice: livePrice,
               short: short,
+              taken: t.groupId == null ? null : taken[t.groupId],
               onClose: onClose == null ? null : () => onClose!(t),
-              onEdit: onEdit == null ? null : () => onEdit!(t)),
+              onEdit: onEdit == null ? null : () => onEdit!(t),
+              onTakeThird: onTakeThird == null ? null : () => onTakeThird!(t)),
           const SizedBox(height: Obsidian.panelGap),
         ],
       ],
@@ -90,22 +98,30 @@ class PositionCard extends StatelessWidget {
     required this.entry,
     required this.short,
     this.livePrice,
+    this.taken,
     this.onClose,
     this.onEdit,
+    this.onTakeThird,
     this.showSymbol = false,
   });
 
   final TradeEntry entry;
   final String short;
   final double? livePrice;
+
+  /// The third already taken off this position, when it was split.
+  final TradeEntry? taken;
   final VoidCallback? onClose;
   final VoidCallback? onEdit;
+  final VoidCallback? onTakeThird;
   final bool showSymbol;
 
   @override
   Widget build(BuildContext context) {
-    final pct = entry.pnlPct(livePrice);
-    final abs = entry.pnl(livePrice);
+    // a split position reads as the whole trade: the third taken plus the rest
+    final g = groupPnl(entry, taken, livePrice);
+    final pct = g.pct;
+    final abs = g.abs;
     final up = (pct ?? 0) >= 0;
     final tone = pct == null
         ? Obsidian.outline
@@ -137,6 +153,10 @@ class PositionCard extends StatelessWidget {
                       : '${entry.size} $short',
                   style: Obsidian.dataTable(size: 13.5, w: FontWeight.w600)),
               const Spacer(),
+              if (entry.isPending)
+                _stateChip('LIMIT · WAITING', Obsidian.primary)
+              else if (taken != null)
+                _stateChip('A THIRD TAKEN', Obsidian.green),
               if (!entry.isOpen)
                 Container(
                   padding:
@@ -163,9 +183,12 @@ class PositionCard extends StatelessWidget {
                           size: 26, color: tone, w: FontWeight.w700)),
                   const SizedBox(height: 2),
                   Text(
-                      abs == null
-                          ? 'waiting for a price'
-                          : '${abs >= 0 ? '+' : ''}${money(abs, dp: 2)}',
+                      entry.isPending
+                          ? 'waiting to fill'
+                          : abs == null
+                              ? 'waiting for a price'
+                              : '${abs >= 0 ? '+' : ''}${money(abs, dp: 2)}'
+                                  '${taken != null ? ' overall' : ''}',
                       style: Obsidian.dataTable(size: 13, color: tone)),
                 ],
               ),
@@ -180,6 +203,14 @@ class PositionCard extends StatelessWidget {
               ),
             ],
           ),
+          if (entry.isPending) ...[
+            const SizedBox(height: 10),
+            PendingLine(entry: entry),
+          ],
+          if (taken != null) ...[
+            const SizedBox(height: 10),
+            TakenPartLine(rest: entry, taken: taken!),
+          ],
           if (entry.takeProfit != null || entry.stopLoss != null || onEdit != null) ...[
             const SizedBox(height: 14),
             if (entry.takeProfit != null || entry.stopLoss != null) ...[
@@ -231,6 +262,14 @@ class PositionCard extends StatelessWidget {
               ),
             ),
           ],
+          if (entry.trailed && entry.isOpen && !entry.isPending) ...[
+            const SizedBox(height: 12),
+            TrailPlan(entry: entry),
+          ],
+          if (onTakeThird != null && entry.canTakeThird) ...[
+            const SizedBox(height: 12),
+            TakeThirdButton(entry: entry, onTap: onTakeThird!),
+          ],
           if (onClose != null) ...[
             const SizedBox(height: 12),
             SizedBox(
@@ -242,7 +281,8 @@ class PositionCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(Obsidian.rMd)),
                 ),
                 onPressed: onClose,
-                child: Text('Close this position',
+                child: Text(
+                    entry.isPending ? 'Cancel this order' : 'Close this position',
                     style: Obsidian.body(size: 12.5)),
               ),
             ),
@@ -254,6 +294,17 @@ class PositionCard extends StatelessWidget {
 
   static String _short(String symbol) =>
       symbol.endsWith('USDT') ? symbol.substring(0, symbol.length - 4) : symbol;
+
+  static Widget _stateChip(String text, Color c) => Container(
+        margin: const EdgeInsets.only(left: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: c.withValues(alpha: 0.35)),
+        ),
+        child: Text(text, style: Obsidian.labelSm(color: c, size: 9.5)),
+      );
 
   Widget _kv(String k, String v) => Row(
         mainAxisSize: MainAxisSize.min,
@@ -326,6 +377,234 @@ Future<double?> askExitPrice(BuildContext context, TradeEntry t,
     ),
   );
 }
+
+
+/// THE WHOLE TRADE when a third came off: the part taken plus the rest, and
+/// the percentage on everything that was put in. Just the entry's own
+/// numbers when it was never split.
+({double? abs, double? pct}) groupPnl(
+    TradeEntry rest, TradeEntry? taken, double? live) {
+  if (taken == null) return (abs: rest.pnl(live), pct: rest.pnlPct(live));
+  final a = rest.pnl(live), b = taken.pnl(null);
+  if (a == null || b == null) return (abs: null, pct: null);
+  final cost = rest.entryPrice * (rest.size + taken.size);
+  final sum = a + b;
+  return (abs: sum, pct: cost <= 0 ? null : sum / cost * 100.0);
+}
+
+String _utcText(DateTime t) {
+  const d = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+             'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final u = t.toUtc();
+  return '${d[u.weekday - 1]} ${m[u.month - 1]} ${u.day}, '
+      '${u.hour.toString().padLeft(2, '0')}:${u.minute.toString().padLeft(2, '0')} UTC';
+}
+
+/// A logged limit order that has not filled: what it is waiting for.
+class PendingLine extends StatelessWidget {
+  const PendingLine({super.key, required this.entry});
+  final TradeEntry entry;
+
+  @override
+  Widget build(BuildContext context) => _note(
+        Icons.hourglass_top_rounded,
+        Obsidian.primary,
+        'A limit order, not a trade yet. It counts from when price reaches '
+        '${money(entry.entryPrice)}'
+        '${entry.pendingUntil == null ? '' : ', and closes as not filled if it has not by ${_utcText(entry.pendingUntil!)}'}.',
+      );
+}
+
+/// The third that came off, under the rest of the position.
+class TakenPartLine extends StatelessWidget {
+  const TakenPartLine({super.key, required this.rest, required this.taken});
+  final TradeEntry rest, taken;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = taken.pnl(null), pct = taken.pnlPct(null);
+    final c = (p ?? 0) >= 0 ? Obsidian.green : Obsidian.red;
+    final restAtEntry = rest.stopLoss != null &&
+        (rest.stopLoss! - rest.entryPrice).abs() <= rest.entryPrice * 1e-9;
+    return _note(
+      Icons.call_split_rounded,
+      c,
+      'A third (${TradeRow.trim(taken.size)} ${TradeRow.short(taken.symbol)}) '
+      'taken at ${money(taken.closePrice)}: '
+      '${p == null ? '—' : '${p >= 0 ? '+' : ''}${money(p)}'}'
+      '${pct == null ? '' : ' (${signedPct(pct)})'}. '
+      '${rest.isOpen ? 'The rest, ${TradeRow.trim(rest.size)}, runs to the target'
+          '${restAtEntry ? ' with its stop at the entry, so it can no longer lose' : ''}.' : 'The rest closed at ${money(rest.closePrice)}.'}',
+    );
+  }
+}
+
+/// HOW A DAILY TRADE ENDS. It has no target, so the progress bar has no
+/// right-hand end to reach and "100%" said nothing. This says what does
+/// end it: the stop, where it is, when it moves, and the next move if one
+/// is forming (from the server's trail, `nextStop`).
+class TrailPlan extends StatelessWidget {
+  const TrailPlan({super.key, required this.entry, this.now});
+  final TradeEntry entry;
+  final DateTime? now;
+
+  @override
+  Widget build(BuildContext context) {
+    final sl = entry.stopLoss;
+    final short = entry.isShort;
+    final lines = <String>[];
+    if (sl == null) {
+      lines.add('No target on 1d: a daily trade ends at its trailing stop, '
+          'and this one has none. Set one with EDIT.');
+    } else {
+      final lock = (short ? entry.entryPrice - sl : sl - entry.entryPrice) /
+          entry.entryPrice * 100.0;
+      lines.add('No target on 1d. You leave when price touches the stop at '
+          '${money(sl)} — '
+          '${lock >= 0 ? 'that locks in ${signedPct(lock)}' : '${lock.abs().toStringAsFixed(2)}% ${short ? 'above' : 'below'} your entry'}.');
+      lines.add('The stop moves ${short ? 'down' : 'up'} only after a '
+          '${short ? 'bounce' : 'pullback'}: a daily ${short ? 'high' : 'low'} '
+          'that the three days before and after it stay '
+          '${short ? 'under' : 'above'} becomes the new stop, and you get a '
+          'notification.');
+      lines.add(entry.stopMovedAt == null
+          ? 'It has not moved yet: no ${short ? 'bounce high' : 'pullback low'} '
+              'has formed since your entry.'
+          : 'Last moved ${_utcText(entry.stopMovedAt!)}.');
+      final nx = entry.nextStop, at = entry.nextStopAt;
+      if (nx != null && at != null && at.isAfter(now ?? DateTime.now())) {
+        lines.add('Next: ${money(nx)} on ${_utcText(at)}, if no daily '
+            '${short ? 'high goes above' : 'low goes below'} it before then.');
+      }
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('HOW THIS TRADE ENDS',
+            style: Obsidian.labelSm(color: Obsidian.outline, size: 9.5)),
+        const SizedBox(height: 5),
+        Text(lines.join(' '),
+            style: Obsidian.body(color: Obsidian.onSurfaceVariant, size: 11.5)),
+      ],
+    );
+  }
+}
+
+/// "Take the third". Lit up once price has been halfway to the target.
+class TakeThirdButton extends StatelessWidget {
+  const TakeThirdButton({super.key, required this.entry, required this.onTap});
+  final TradeEntry entry;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final h = entry.halfwayPrice;
+    final hit = entry.reachedHalfway;
+    final label = hit
+        ? 'Take the third — halfway ${money(h)} reached'
+        : 'Take the third · halfway is ${money(h)}';
+    final shape = RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Obsidian.rMd));
+    return SizedBox(
+      width: double.infinity,
+      height: 40,
+      child: hit
+          ? FilledButton.icon(
+              style: FilledButton.styleFrom(
+                  backgroundColor: Obsidian.green,
+                  foregroundColor: Colors.black,
+                  shape: shape),
+              onPressed: onTap,
+              icon: const Icon(Icons.call_split_rounded, size: 16),
+              label: Text(label,
+                  style: Obsidian.labelSm(color: Colors.black, size: 11.5)))
+          : OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Obsidian.green.withValues(alpha: 0.4)),
+                  shape: shape),
+              onPressed: onTap,
+              icon: const Icon(Icons.call_split_rounded,
+                  size: 16, color: Obsidian.green),
+              label: Text(label,
+                  style: Obsidian.labelSm(color: Obsidian.green, size: 11.5))),
+    );
+  }
+}
+
+/// Ask the price the third came off at. Prefilled with the halfway price
+/// once price has been there (where the order for it sits), else the live
+/// price; editable, because the fill is the exchange's, not ours.
+Future<double?> askTakeThird(BuildContext context, TradeEntry t,
+    {double? livePrice}) {
+  final start = t.reachedHalfway ? t.halfwayPrice : (livePrice ?? t.halfwayPrice);
+  final c = TextEditingController(text: priceInput(start));
+  final third = t.size / 3, rest = t.size - third;
+  final sym = TradeRow.short(t.symbol);
+  return showDialog<double>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: Obsidian.surfaceContainer,
+      title: Text('Take the third', style: Obsidian.headlineMd()),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+              'Closes a third (${TradeRow.trim(third)} $sym) at the price below '
+              'and keeps ${TradeRow.trim(rest)} $sym open, with the stop moved '
+              'to your entry ${money(t.entryPrice)} — from there the rest can '
+              'no longer lose. The target stays ${money(t.takeProfit)}.',
+              style: Obsidian.body(color: Obsidian.onSurfaceVariant, size: 12)),
+          const SizedBox(height: 8),
+          Text(
+              'Do the same on your exchange: ${t.isShort ? 'buy back' : 'sell'} '
+              'a third and move the stop. Vanth places nothing. The two parts '
+              'stay together in Profile as one trade.',
+              style: Obsidian.body(color: Obsidian.outline, size: 11)),
+          const SizedBox(height: 12),
+          Text('PRICE THE THIRD CAME OFF AT',
+              style: Obsidian.labelSm(color: Obsidian.outline, size: 9.5)),
+          TextField(
+            controller: c,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: Obsidian.dataTable(size: 16),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel', style: Obsidian.body())),
+        TextButton(
+            onPressed: () => Navigator.of(ctx)
+                .pop(double.tryParse(c.text.replaceAll(',', ''))),
+            child: Text('Take it',
+                style: Obsidian.body(color: Obsidian.green))),
+      ],
+    ),
+  );
+}
+
+Widget _note(IconData icon, Color c, String text) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(Obsidian.rSm + 2),
+        border: Border.all(color: c.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 14, color: c),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(text,
+                  style: Obsidian.body(color: Obsidian.onSurfaceVariant, size: 11.5))),
+        ],
+      ),
+    );
 
 
 /// Edit an open entry's target and stop, in a sheet drawn like the rest of
@@ -714,6 +993,8 @@ class TradeRow extends StatelessWidget {
                             'take_profit' => 'HIT TP',
                             'stop_loss' => 'HIT SL',
                             'time_limit' => 'TIME LIMIT',
+                            'scale_out' => 'THIRD TAKEN',
+                            'unfilled' => 'NOT FILLED',
                             _ => 'CLOSED',
                           },
                           style: Obsidian.labelSm(
@@ -721,6 +1002,7 @@ class TradeRow extends StatelessWidget {
                                 'take_profit' => Obsidian.greenDim,
                                 'stop_loss' => Obsidian.redSoft,
                                 'time_limit' => Obsidian.amber,
+                                'scale_out' => Obsidian.greenDim,
                                 _ => Obsidian.outline,
                               },
                               size: 9.5)),
@@ -804,11 +1086,18 @@ class JournalCard extends StatelessWidget {
     this.onDelete,
     this.onOpen,
     this.onEdit,
+    this.taken,
+    this.onTakeThird,
   });
 
   final TradeEntry entry;
   final double? livePrice;
-  final VoidCallback? onClose, onDelete, onEdit;
+  final VoidCallback? onClose, onDelete, onEdit, onTakeThird;
+
+  /// THE OTHER HALF OF A SPLIT TRADE: the third taken off. The card then
+  /// stands for the whole trade -- its profit is both parts together -- so
+  /// the two do not drift apart in the list among other entries.
+  final TradeEntry? taken;
 
   /// Tap anywhere on the card that is not a button: open this pair's
   /// dashboard, on the timeframe it was logged from.
@@ -825,8 +1114,9 @@ class JournalCard extends StatelessWidget {
     final short = TradeRow.short(entry.symbol);
     final tint = _medallion[short] ?? Obsidian.primary;
     final sideTone = entry.isShort ? Obsidian.red : Obsidian.green;
-    final pct = entry.pnlPct(livePrice);
-    final abs = entry.pnl(livePrice);
+    final g = groupPnl(entry, taken, livePrice);
+    final pct = g.pct;
+    final abs = g.abs;
     final tone = pct == null
         ? Obsidian.outline
         : (pct >= 0 ? Obsidian.green : Obsidian.red);
@@ -930,6 +1220,22 @@ class JournalCard extends StatelessWidget {
             const SizedBox(height: 11),
             BarrierBar(entry: entry, livePrice: livePrice),
           ],
+          if (entry.isPending) ...[
+            const SizedBox(height: 10),
+            PendingLine(entry: entry),
+          ],
+          if (taken != null) ...[
+            const SizedBox(height: 10),
+            TakenPartLine(rest: entry, taken: taken!),
+          ],
+          if (entry.trailed && entry.isOpen && !entry.isPending) ...[
+            const SizedBox(height: 10),
+            TrailPlan(entry: entry),
+          ],
+          if (onTakeThird != null && entry.canTakeThird) ...[
+            const SizedBox(height: 10),
+            TakeThirdButton(entry: entry, onTap: onTakeThird!),
+          ],
           if (onClose != null || onDelete != null) ...[
             const SizedBox(height: 11),
             Row(
@@ -949,7 +1255,7 @@ class JournalCard extends StatelessWidget {
                         onPressed: onClose,
                         icon: const Icon(Icons.check_circle_outline_rounded,
                             size: 15, color: Obsidian.primary),
-                        label: Text('Close log',
+                        label: Text(entry.isPending ? 'Cancel order' : 'Close log',
                             style: Obsidian.body(
                                 color: Obsidian.primary, size: 12)),
                       ),
@@ -1021,7 +1327,20 @@ class JournalCard extends StatelessWidget {
   }
 
   Widget _statusChip() {
-    if (entry.isOpen) return _chip('ACTIVE', Obsidian.green, filled: true);
+    if (entry.isPending) return _chip('LIMIT · WAITING', Obsidian.primary, filled: true);
+    if (entry.isOpen) {
+      return _chip(taken != null ? 'ACTIVE · THIRD TAKEN' : 'ACTIVE',
+          Obsidian.green, filled: true);
+    }
+    if (entry.unfilled) return _chip('NOT FILLED', Obsidian.outline);
+    if (entry.isTakenPart) return _chip('THIRD TAKEN', Obsidian.greenDim);
+    // the rest of a split trade stopped at its entry: break-even on the
+    // rest, and the trade as a whole kept the third's gain
+    if (entry.isRestPart && entry.closedBy == 'stop_loss' &&
+        entry.stopLoss != null &&
+        (entry.stopLoss! - entry.entryPrice).abs() <= entry.entryPrice * 1e-9) {
+      return _chip('THIRD TAKEN · REST AT ENTRY', Obsidian.greenDim);
+    }
     if (entry.closedBy == 'take_profit') {
       return _chip('CLOSED TP', Obsidian.greenDim);
     }
@@ -1094,7 +1413,8 @@ class JournalCard extends StatelessWidget {
     final hhmm = '${t.hour.toString().padLeft(2, '0')}:'
         '${t.minute.toString().padLeft(2, '0')}';
     final when = sameDay ? 'Today, $hhmm' : '${months[t.month - 1]} ${t.day}, $hhmm';
-    return '$when  ·  Size: ${TradeRow.trim(entry.size)} '
+    final size = taken == null ? entry.size : entry.size + taken!.size;
+    return '$when  ·  Size: ${TradeRow.trim(size)} '
         '${TradeRow.short(entry.symbol)}';
   }
 }
@@ -1146,11 +1466,20 @@ class BarrierBar extends StatelessWidget {
         ? JournalCard.timeLeftText(entry, DateTime.now())
         : null;
     final pct = pos == null ? null : (pos.abs() * 100).round();
+    // A DAILY TRADE HAS NO TARGET: the right half is measured in multiples
+    // of the risk (see `barrierPosition`), and the caption says where price
+    // is, not how far to a take profit that does not exist. It read "100%
+    // to TP" on every daily entry that had gone as far up as its stop was
+    // down, with no target anywhere.
+    final noTarget = entry.takeProfit == null && entry.trailed;
+    final move = entry.pnlPct(livePrice);
     final caption = pct == null
         ? '\u2014'
         : pos! < 0
             ? '$pct% to SL'
-            : '$pct% to TP';
+            : noTarget
+                ? '${signedPct(move)} · no target, the stop trails'
+                : '$pct% to TP';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1217,7 +1546,7 @@ class BarrierBar extends StatelessWidget {
             const Spacer(),
             Text(
               entry.takeProfit == null
-                  ? 'TP \u2014'
+                  ? (noTarget ? 'TRAILED' : 'TP \u2014')
                   : 'TP ${priceText(entry.takeProfit)}',
               style: Obsidian.dataTable(size: 9.5, color: Obsidian.green),
             ),

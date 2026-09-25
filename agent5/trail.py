@@ -134,3 +134,47 @@ def trailing_stop(bars: pd.DataFrame, opened_at, side: str,
             moved_at = idx[t]
     return TrailState(side=side, stop=stop, initial_stop=float(initial_stop),
                       moved_at=moved_at, moves=len(swings) - 1, swings=swings)
+
+
+def next_trail_step(bars: pd.DataFrame, st: TrailState,
+                    span: int = PIVOT_SPAN) -> Optional[dict]:
+    """The move the trail is WAITING ON, if one is forming: a swing low
+    (high, for a short) among the last `span` closed bars that would be
+    confirmed -- and taken as the new stop -- once `span` bars have closed
+    after it without trading through it.
+
+    Returned as {"stop", "at", "swing_at"}: the price the stop would move to,
+    the close of the bar that would confirm it, and the bar that printed it.
+    None when no such swing is forming, which is the ordinary state in a
+    clean run: the stop moves only after a pullback, and a straight run
+    has none.
+
+    The same rule as `trailing_stop` (strictly beyond the `span` bars before
+    it, at least as far as every bar after it so far, between the stop and
+    the last close), applied to the bars whose confirmation has not arrived.
+    The rule also needs it to sit below the close before the confirming
+    bar; the last close stands in for that, so the promise is conditional
+    and the app words it that way.
+    """
+    long = st.side.upper() == "LONG"
+    n = len(bars)
+    if n < 2 * span + 1:
+        return None
+    low = bars["low"].to_numpy(float)
+    high = bars["high"].to_numpy(float)
+    last = float(bars["close"].iloc[-1])
+    step = pd.Series(bars.index[-(2 * span):]).diff().median()
+    for i in range(max(span, n - span), n):
+        if long:
+            p = low[i]
+            ok = (p < low[i - span:i].min() and p <= low[i + 1:n].min(initial=np.inf)
+                  and st.stop < p < last)
+        else:
+            p = high[i]
+            ok = (p > high[i - span:i].max() and p >= high[i + 1:n].max(initial=-np.inf)
+                  and last < p < st.stop)
+        if ok:
+            at = bars.index[i] + span * step
+            return {"stop": float(p), "at": at.isoformat(), "swing_at": bars.index[i].isoformat()}
+    return None
+

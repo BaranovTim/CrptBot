@@ -284,7 +284,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  /// "Take the third": ask the price, split the entry, redraw.
+  Future<void> _takeThird(TradeEntry t) async {
+    final price = await askTakeThird(context, t, livePrice: _prices[t.symbol]);
+    if (price == null || price <= 0) return;
+    await Trades.instance.takeThird(t.id, price: price);
+    await _loadTrades();
+  }
+
   Future<void> _closeTrade(TradeEntry t) async {
+    if (t.isPending) {
+      await Trades.instance.cancelOrder(t.id);
+      await _loadTrades();
+      return;
+    }
     // Prefilled with the CURRENT price, which is a starting point and not a
     // record of your fill — `askExitPrice` says so, and the field is
     // editable because usually-close is not always-right.
@@ -417,6 +430,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
     if (ok != true) return;
+    // a split trade goes as one: both parts, or the card would come back as
+    // half a trade
+    if (t.groupId != null) {
+      for (final o in _trades.where((o) => o.groupId == t.groupId && o.id != t.id)) {
+        await Trades.instance.remove(o.id);
+      }
+    }
     await Trades.instance.remove(t.id);
     await _loadTrades();
   }
@@ -1292,7 +1312,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ------------------------------------------------------------- tab 0
   List<Widget> _entriesTab(JournalStats stats) {
     final pairs = _trades.map((t) => t.symbol).toSet().toList()..sort();
+    // THE PARTS OF A SPLIT TRADE STAY TOGETHER. The third taken off is drawn
+    // inside the card of the rest, never as a row of its own, so other
+    // entries cannot land between them. A third whose rest was deleted is
+    // shown alone rather than lost.
+    final takenBy = <String, TradeEntry>{
+      for (final t in _trades)
+        if (t.isTakenPart && t.groupId != null) t.groupId!: t,
+    };
+    final restIds = {
+      for (final t in _trades)
+        if (t.isRestPart) t.groupId,
+    };
     final shown = _trades.where((t) {
+      if (t.isTakenPart && restIds.contains(t.groupId)) return false;
       if (_pairFilter != null && t.symbol != _pairFilter) return false;
       return switch (_statusFilter) {
         _Status.all => true,
@@ -1300,8 +1333,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _Status.closed => !t.isOpen,
       };
     }).toList();
+    // counted as trades: a split trade is one, however many parts
     final openCount = _trades.where((t) => t.isOpen).length;
-    final closedCount = _trades.length - openCount;
+    final closedCount = _trades
+        .where((t) => !t.isOpen && !(t.isTakenPart && restIds.contains(t.groupId)))
+        .length;
     return [
       Row(
         children: [
@@ -1357,7 +1393,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ]),
               const SizedBox(height: 8),
               Text(
-                  'Log Market Entry sits at the bottom of any coin\u2019s '
+                  'Log Your Entry sits at the bottom of any coin\u2019s '
                   'dashboard. It records a trade you entered elsewhere — this '
                   'app holds no exchange key and places no orders.',
                   style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
@@ -1399,8 +1435,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           JournalCard(
             entry: t,
             livePrice: _prices[t.symbol],
+            taken: t.isRestPart ? takenBy[t.groupId] : null,
             onClose: t.isOpen ? () => _closeTrade(t) : null,
-            onEdit: t.isOpen ? () => _editTrade(t) : null,
+            onEdit: t.isOpen && !t.isPending ? () => _editTrade(t) : null,
+            onTakeThird: t.canTakeThird ? () => _takeThird(t) : null,
             onDelete: () => _deleteTrade(t),
             onOpen: widget.onOpenSymbol == null
                 ? null

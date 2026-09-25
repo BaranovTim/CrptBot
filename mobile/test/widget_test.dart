@@ -17,6 +17,7 @@ import 'package:tradingbot_app/widgets/analysis_panels.dart';
 import 'package:tradingbot_app/widgets/smart_money_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tradingbot_app/api/models.dart';
+import 'package:tradingbot_app/api/client.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -2966,4 +2967,406 @@ void main() {
       expect(back.displayName, 'Vanth_Tim');
     });
   });
+  // ---------------------------------------------------------------------
+  // 2026-09-25: the LIMIT button, "take the third", a split trade kept as
+  // one, trade steps only for the coins you hold, and how a daily trade ends.
+  group('take the third', () {
+    TradeEntry h4({double tp = 110, double sl = 95, String side = 'LONG'}) =>
+        TradeEntry(
+            id: 'e1', symbol: 'BTCUSDT', side: side, size: 3, entryPrice: 100,
+            openedAt: DateTime.utc(2026, 9, 24, 8), takeProfit: tp,
+            stopLoss: sl, interval: '4h');
+
+    test('splits into a third closed at the price and the rest at the entry', () {
+      final e = h4();
+      expect(e.canTakeThird, isTrue);
+      expect(e.halfwayPrice, 105);
+      final now = DateTime.utc(2026, 9, 24, 20);
+      final p = e.splitThird(105, now: now);
+      expect(p.taken.size, closeTo(1, 1e-12));
+      expect(p.taken.closePrice, 105);
+      expect(p.taken.closedBy, 'scale_out');
+      expect(p.taken.isTakenPart, isTrue);
+      expect(p.taken.id, isNot('e1'));
+      expect(p.rest.id, 'e1', reason: 'the open position keeps its id');
+      expect(p.rest.size, closeTo(2, 1e-12));
+      expect(p.rest.stopLoss, 100, reason: 'the stop moves to the entry');
+      expect(p.rest.takeProfit, 110);
+      expect(p.rest.entryPrice, 100);
+      expect(p.rest.stopMovedAt, now,
+          reason: 'the moved stop is judged from now, not from the entry');
+      expect(p.rest.isOpen, isTrue);
+      expect(p.taken.groupId, 'e1');
+      expect(p.rest.groupId, 'e1');
+      expect(p.rest.canTakeThird, isFalse, reason: 'once');
+      // the money: the third's +5 on 1 coin, the rest flat at its stop
+      expect(p.taken.pnl(null), closeTo(5, 1e-9));
+      expect(p.rest.pnl(100), closeTo(0, 1e-9));
+    });
+
+    test('not on a daily entry, an order not yet filled, or without a target', () {
+      final d = TradeEntry(
+          id: 'd', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+          openedAt: DateTime.now(), stopLoss: 90, interval: '1d');
+      expect(d.canTakeThird, isFalse);
+      final p = TradeEntry(
+          id: 'p', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+          openedAt: DateTime.now(), takeProfit: 110, stopLoss: 95,
+          interval: '4h', pendingUntil: DateTime.now().add(const Duration(hours: 5)));
+      expect(p.canTakeThird, isFalse);
+      final n = TradeEntry(
+          id: 'n', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 100,
+          openedAt: DateTime.now(), stopLoss: 95, interval: '4h');
+      expect(n.canTakeThird, isFalse);
+    });
+
+    test('halfway is reached on the furthest price, for a short too', () {
+      expect(h4().withExtremes(high: 104.9, low: 99).reachedHalfway, isFalse);
+      expect(h4().withExtremes(high: 105, low: 99).reachedHalfway, isTrue);
+      final s = h4(side: 'SHORT', tp: 90, sl: 105);
+      expect(s.halfwayPrice, 95);
+      expect(s.withExtremes(high: 101, low: 95).reachedHalfway, isTrue);
+    });
+
+    test('the store splits it once, and both parts survive storage', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(h4());
+      final r = await Trades.instance.takeThird('e1', price: 105);
+      expect(r, isNotNull);
+      expect(await Trades.instance.takeThird('e1', price: 106), isNull);
+      Trades.instance.resetForTest();
+      final all = await Trades.instance.load();
+      expect(all, hasLength(2));
+      final rest = all.firstWhere((t) => t.isOpen);
+      final taken = all.firstWhere((t) => !t.isOpen);
+      expect(rest.groupId, 'e1');
+      expect(taken.groupId, 'e1');
+      expect(taken.closedBy, 'scale_out');
+      expect(rest.stopLoss, 100);
+    });
+
+    test('a split trade counts once in the record, on both parts', () {
+      final p = h4().splitThird(105);
+      // the rest came back to its entry: the trade is a WIN, by the third
+      final restClosed = p.rest.closedAtPrice(100, by: 'stop_loss');
+      final s = JournalStats.of([p.taken, restClosed]);
+      expect(s.closed, 1);
+      expect(s.wins, 1);
+      expect(s.losses, 0);
+      expect(s.realised, closeTo(5, 1e-9));
+      // while the rest is open: the third's money is realised, no outcome yet
+      final open = JournalStats.of([p.taken, p.rest]);
+      expect(open.closed, 0);
+      expect(open.open, 1);
+      expect(open.realised, closeTo(5, 1e-9));
+      // beside another trade, still one each
+      final other = TradeEntry(
+          id: 'o', symbol: 'ETHUSDT', side: 'LONG', size: 1, entryPrice: 10,
+          openedAt: DateTime.now(), interval: '4h').closedAtPrice(9);
+      final mixed = JournalStats.of([p.taken, other, restClosed]);
+      expect(mixed.closed, 2);
+      expect(mixed.wins, 1);
+      expect(mixed.losses, 1);
+    });
+
+    testWidgets('the Profile card shows the two parts as one trade', (t) async {
+      final p = h4().splitThird(105);
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: JournalCard(
+                      entry: p.rest, livePrice: 107, taken: p.taken,
+                      onClose: () {}, onTakeThird: () {}))),
+      ));
+      expect(find.textContaining('taken at'), findsOneWidget);
+      expect(find.text('ACTIVE · THIRD TAKEN'), findsOneWidget);
+      // overall: +5 on the third, +14 on the two left = +19 on 300 put in
+      expect(find.text(signedPct(19 / 300 * 100)), findsOneWidget);
+      expect(find.textContaining('Take the third'), findsNothing,
+          reason: 'already taken');
+    });
+
+    testWidgets('the button lights up once halfway is reached', (t) async {
+      final e = h4().withExtremes(high: 106, low: 99);
+      var tapped = false;
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: PositionCard(
+                      entry: e, short: 'BTC', livePrice: 105.5,
+                      onTakeThird: () => tapped = true)))));
+      expect(find.textContaining('halfway ${money(105)} reached'), findsOneWidget);
+      await t.tap(find.textContaining('Take the third'));
+      expect(tapped, isTrue);
+    });
+  });
+
+  group('logging the call\'s limit order', () {
+    TradeEntry pending({String side = 'LONG', double? sl = 95, DateTime? until}) =>
+        TradeEntry(
+            id: 'p1', symbol: 'BTCUSDT', side: side, size: 1, entryPrice: 100,
+            openedAt: DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+            takeProfit: side == 'LONG' ? 110 : 90, stopLoss: sl, interval: '4h',
+            pendingUntil: until ?? DateTime.now().toUtc().add(const Duration(hours: 20)));
+
+    test('a waiting order has no profit, no window and no level hits', () {
+      final p = pending();
+      expect(p.isPending, isTrue);
+      expect(p.pnl(120), isNull);
+      expect(p.pnlPct(120), isNull);
+      expect(p.timeLimit, isNull);
+      expect(levelHitBy(p, high: 120, low: 80), isNull);
+      final back = TradeEntry.fromJson(json.decode(json.encode(p.toJson())));
+      expect(back.isPending, isTrue);
+      expect(back.pendingUntil, p.pendingUntil);
+    });
+
+    test('filled by price reaching the limit; through the stop is fill then stop', () {
+      final p = pending();
+      expect(pendingFillBy(p, high: 104, low: 100.5), isNull);
+      expect(pendingFillBy(p, high: 104, low: 100), 'fill');
+      expect(pendingFillBy(p, high: 104, low: 94), 'fill_stop');
+      final s = pending(side: 'SHORT', sl: 105);
+      expect(pendingFillBy(s, high: 99.9, low: 95), isNull);
+      expect(pendingFillBy(s, high: 100, low: 95), 'fill');
+      expect(pendingFillBy(s, high: 106, low: 95), 'fill_stop');
+    });
+
+    test('a live tick at the limit fills it, and the trade starts there', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(pending());
+      await Trades.instance.checkLive({'BTCUSDT': 101.0});
+      expect((await Trades.instance.load()).single.isPending, isTrue);
+      final r = await Trades.instance.checkLive({'BTCUSDT': 99.8});
+      expect(r.extremesMoved, isTrue, reason: 'the card redraws');
+      final t = (await Trades.instance.load()).single;
+      expect(t.isPending, isFalse);
+      expect(t.isOpen, isTrue);
+      expect(t.timeLimit, isNotNull, reason: 'the window runs from the fill');
+    });
+
+    test('settle fills at the minute it touched, or closes it unfilled', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      final touched = DateTime.utc(2026, 9, 25, 3, 17);
+      await Trades.instance.add(pending());
+      await Trades.instance.add(TradeEntry(
+          id: 'p2', symbol: 'ETHUSDT', side: 'LONG', size: 1, entryPrice: 10,
+          openedAt: DateTime.now().toUtc().subtract(const Duration(hours: 30)),
+          takeProfit: 11, stopLoss: 9.5, interval: '4h',
+          pendingUntil: DateTime.now().toUtc().subtract(const Duration(hours: 6))));
+      final client = _RangeClient({
+        'BTCUSDT': {'high': 103.0, 'low': 99.0, 'last': 101.0,
+                    'touched_at': touched.toIso8601String()},
+        'ETHUSDT': {'high': 10.8, 'low': 10.2, 'last': 10.5, 'touched_at': null},
+      });
+      await Trades.instance.settle(client);
+      final all = await Trades.instance.load();
+      final btc = all.firstWhere((t) => t.id == 'p1');
+      final eth = all.firstWhere((t) => t.id == 'p2');
+      expect(btc.isPending, isFalse);
+      expect(btc.openedAt, touched);
+      expect(btc.isOpen, isTrue);
+      expect(eth.isOpen, isFalse);
+      expect(eth.unfilled, isTrue);
+      expect(eth.pnl(null), isNull);
+      // the order that never filled is not a trade in the record
+      final s = JournalStats.of(all);
+      expect(s.closed, 0);
+      expect(s.open, 1);
+      // the range was asked for up to when the order stopped being good
+      expect(client.asked['ETHUSDT']!['touch'], 10);
+      expect(client.asked['ETHUSDT']!['until'], isNotNull);
+    });
+
+    test('an older server that cannot say when leaves it waiting', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(pending(
+          until: DateTime.now().toUtc().subtract(const Duration(hours: 1))));
+      await Trades.instance.settle(_RangeClient({
+        'BTCUSDT': {'high': 103.0, 'low': 99.0, 'last': 101.0},
+      }));
+      expect((await Trades.instance.load()).single.isPending, isTrue);
+    });
+
+    Widget card({bool resting = true, double live = 102.0}) => MaterialApp(
+        home: Scaffold(
+            body: SingleChildScrollView(
+                child: LogEntryCard(
+                    symbol: 'BTCUSDT', short: 'BTC', interval: '4h', livePrice: live,
+                    suggestedSide: 'LONG', suggestedTp: 111.0, suggestedSl: 96.0,
+                    suggestedEntry: 100.0, limitPrice: 100.0, limitResting: resting,
+                    limitUntil: DateTime.utc(2026, 9, 26, 4),
+                    limitTp: 110.0, limitSl: 95.0))));
+    String field(WidgetTester t, int i) =>
+        t.widget<TextField>(find.byType(TextField).at(i)).controller!.text;
+
+    testWidgets('LIMIT puts the call\'s order back in the form', (t) async {
+      SharedPreferences.setMockInitialValues({});
+      await t.pumpWidget(card());
+      await t.pumpAndSettle();
+      await t.tap(find.text('MARKET'));
+      await t.pump();
+      expect(field(t, 1), priceInput(102.0));
+      await t.tap(find.text('LIMIT'));
+      await t.pump();
+      expect(field(t, 1), priceInput(100.0));
+      expect(field(t, 2), priceInput(110.0));
+      expect(field(t, 3), priceInput(95.0));
+    });
+
+    testWidgets('logged before it fills, it is saved as a waiting order', (t) async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await t.pumpWidget(card());
+      await t.pumpAndSettle();
+      await t.tap(find.text('LIMIT'));
+      await t.enterText(find.byType(TextField).at(0), '1');
+      await t.pump();
+      expect(find.text('Log Limit Order'), findsOneWidget);
+      expect(find.textContaining('A limit order: the price is not there yet'),
+          findsOneWidget);
+      await t.ensureVisible(find.text('Log Limit Order'));
+      await t.tap(find.text('Log Limit Order'));
+      await t.pumpAndSettle();
+      final saved = (await Trades.instance.load()).single;
+      expect(saved.isPending, isTrue);
+      expect(saved.pendingUntil, DateTime.utc(2026, 9, 26, 4));
+      expect(saved.entryPrice, 100.0);
+    });
+
+    testWidgets('logged after it filled, it is an open trade', (t) async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await t.pumpWidget(card(resting: false));
+      await t.pumpAndSettle();
+      await t.enterText(find.byType(TextField).at(0), '1');
+      await t.pump();
+      expect(find.text('Log Trade Entry'), findsOneWidget);
+    });
+  });
+
+  group('trade steps go to the coins you hold', () {
+    Alert step(String order, {String sym = 'BTCUSDT', String iv = '4h',
+            String strength = 'small'}) =>
+        Alert.fromJson({
+          'id': '$order-$sym', 'kind': 'signal', 'title': 't', 'body': 'b',
+          'severity': 'high', 'symbol': sym, 'interval': iv,
+          'strength': strength, 'bias': '', 'impact': '', 'url': '',
+          'seq': 1, 'at': DateTime.now().toUtc().toIso8601String(),
+          'detected_at': DateTime.now().toUtc().toIso8601String(),
+          'extra': {'order': order, 'to': 'BUY'},
+        });
+    bool none(String s, String i) => false;
+
+    test('halfway, target, stop and time limit need an entry on the coin', () {
+      for (final o in ['partial', 'target', 'stop', 'timeout']) {
+        expect(step(o).managesTrade, isTrue);
+        expect(selectDeliverable([step(o)], sensitivity: 'small', isMuted: none),
+            isEmpty, reason: '$o with nothing held');
+        expect(selectDeliverable([step(o)], sensitivity: 'strong', isMuted: none,
+                holds: (s, i) => s == 'BTCUSDT' && i == '4h'),
+            hasLength(1), reason: '$o held: whatever the strength setting');
+        expect(selectDeliverable([step(o)], sensitivity: 'small', isMuted: none,
+                holds: (s, i) => s == 'BTCUSDT' && i == '1d'),
+            isEmpty, reason: '$o held on another timeframe');
+      }
+    });
+
+    test('a fill still goes to everyone the call reaches', () {
+      expect(step('filled').managesTrade, isFalse);
+      expect(selectDeliverable([step('filled', strength: 'strong')],
+              sensitivity: 'strong', isMuted: none),
+          hasLength(1));
+    });
+  });
+
+  group('how a daily trade ends', () {
+    TradeEntry daily({double sl = 95, double? next, DateTime? at, DateTime? moved}) =>
+        TradeEntry(
+            id: 'd', symbol: 'UNIUSDT', side: 'LONG', size: 1, entryPrice: 100,
+            openedAt: DateTime.utc(2026, 9, 24), stopLoss: sl, interval: '1d',
+            nextStop: next, nextStopAt: at, stopMovedAt: moved);
+
+    test('no target is not "100% to TP": the right end is three times the risk', () {
+      final d = daily();
+      // +6 on a risk of 5: 40% of the way to 3R, not pinned at 100%
+      expect(d.barrierPosition(106), closeTo(0.4, 1e-9));
+      final h4 = TradeEntry(
+          id: 'h', symbol: 'UNIUSDT', side: 'LONG', size: 1, entryPrice: 100,
+          openedAt: DateTime.now(), stopLoss: 95, interval: '4h');
+      expect(h4.barrierPosition(106), 1.0, reason: 'other timeframes unchanged');
+    });
+
+    testWidgets('the bar and the card say what ends it', (t) async {
+      final at = DateTime.now().toUtc().add(const Duration(days: 2));
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: PositionCard(
+                      entry: daily(next: 98, at: at), short: 'UNI', livePrice: 106)))));
+      expect(find.textContaining('no target, the stop trails'), findsOneWidget);
+      expect(find.textContaining('to TP'), findsNothing);
+      expect(find.text('TRAILED'), findsOneWidget);
+      expect(find.text('HOW THIS TRADE ENDS'), findsOneWidget);
+      expect(find.textContaining('touches the stop at ${money(95)}'), findsOneWidget);
+      expect(find.textContaining('It has not moved yet'), findsOneWidget);
+      expect(find.textContaining('Next: ${money(98)}'), findsOneWidget);
+    });
+
+    testWidgets('a stop above the entry says what it locks in', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: TrailPlan(entry: daily(sl: 103, moved: DateTime.utc(2026, 9, 27)))))));
+      expect(find.textContaining('locks in +3.00%'), findsOneWidget);
+      expect(find.textContaining('Last moved'), findsOneWidget);
+    });
+
+    test('a price tick keeps the time the trail last moved the stop', () {
+      // the bug: a tick dropped it, and the raised stop was then judged
+      // against lows from before it was raised
+      final at = DateTime.utc(2026, 9, 26);
+      final e = daily().withTrailedStop(97, at).withExtremes(high: 110, low: 96);
+      expect(e.stopMovedAt, at);
+      expect(e.closedAtPrice(97, by: 'stop_loss').stopMovedAt, at);
+    });
+
+    test('the next step round-trips and is replaced by identity only on change', () {
+      final at = DateTime.utc(2026, 9, 27);
+      final e = daily().withNextStop(98, at);
+      expect(identical(e.withNextStop(98, at), e), isTrue);
+      final back = TradeEntry.fromJson(json.decode(json.encode(e.toJson())));
+      expect(back.nextStop, 98);
+      expect(back.nextStopAt, at);
+    });
+  });
 }
+
+/// A client whose range answers come from a table, and which remembers what
+/// it was asked.
+class _RangeClient extends ApiClient {
+  _RangeClient(this.ranges) : super(base: 'http://test', token: 't');
+  final Map<String, Map<String, dynamic>> ranges;
+  final asked = <String, Map<String, Object?>>{};
+
+  @override
+  Future<Map<String, dynamic>> priceRange(String symbol,
+      {required DateTime since,
+      DateTime? until,
+      double? touch,
+      String? side,
+      String interval = '1m'}) async {
+    asked[symbol] = {'since': since, 'until': until, 'touch': touch, 'side': side};
+    return Map<String, dynamic>.from(ranges[symbol] ?? const {});
+  }
+
+  @override
+  Future<Map<String, dynamic>> trail(String symbol, String interval,
+          String side, DateTime openedAt, {double? stop}) async =>
+      const {};
+}
+

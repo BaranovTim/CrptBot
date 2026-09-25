@@ -592,6 +592,16 @@ class Alert {
   /// them, silently, because `clearsSensitivity('')` is false.
   bool get isExit => kind == 'signal' && extra['to'] == 'FLAT';
 
+  /// A step in a trade already running -- halfway (take a third off), the
+  /// target, the stop, the time limit. About a POSITION, so it goes only to
+  /// a phone with an entry logged on that coin and timeframe: someone with
+  /// nothing on the coin was being told a third of a trade they never had
+  /// "worked out". Mirrored by `MANAGED_ORDER_STEPS` in `api/push.py`.
+  bool get managesTrade =>
+      kind == 'signal' && managedOrderSteps.contains(extra['order']);
+
+  static const managedOrderSteps = {'partial', 'target', 'stop', 'timeout'};
+
   /// Did the server hand this to the push relay?
   ///
   /// KEPT FOR DIAGNOSIS, NOT USED TO SUPPRESS ANYTHING — and the difference

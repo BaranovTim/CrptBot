@@ -1219,7 +1219,10 @@ class TradingService:
 
     def price_range(self, symbol: Optional[str] = None,
                     interval: str = "1m",
-                    since: Optional[str] = None) -> Dict[str, Any]:
+                    since: Optional[str] = None,
+                    until: Optional[str] = None,
+                    touch: Optional[float] = None,
+                    side: str = "LONG") -> Dict[str, Any]:
         """The high and low since `since`, plus the latest close.
 
         WHY THE EXTREMES AND NOT THE CURRENT PRICE
@@ -1232,6 +1235,12 @@ class TradingService:
 
         1m by default, because resolution is the entire point. A touch that
         lasted ninety seconds is invisible on a 1h candle.
+
+        `until` ends the window (a limit order stops being good then), and
+        `touch` asks when price FIRST reached a level -- at or below it for
+        a LONG's buy limit, at or above it for a SHORT's -- as `touched_at`,
+        the close of that minute, or None. The app fills a logged limit
+        order at that minute, and judges its levels only on what came after.
         """
         sym, iv = self._pair(symbol, interval)
         bars = self._range_bars(sym, iv, since) if since else self._bars(sym, iv)
@@ -1250,14 +1259,27 @@ class TradingService:
                 window = bars[bars.index > cut]
             except (ValueError, TypeError):
                 pass
+        if until:
+            try:
+                end = pd.Timestamp(until)
+                end = end.tz_localize("UTC") if end.tzinfo is None else end
+                # the minute that CONTAINS `until` still counts: the order
+                # was good for part of it
+                window = window[window.index < end + pd.Timedelta(minutes=1)]
+            except (ValueError, TypeError):
+                pass
+        asked = touch is not None and np.isfinite(touch) and touch > 0
         if window.empty:
             # No bar has closed since the entry yet. Not an error — there is
             # simply nothing to judge against, and a caller must not read
             # that as "nothing was touched".
-            return {"symbol": sym, "interval": iv, "bars": 0,
-                    "high": None, "low": None,
-                    "last": _num(bars["close"].iloc[-1])}
-        return {
+            out = {"symbol": sym, "interval": iv, "bars": 0,
+                   "high": None, "low": None,
+                   "last": _num(bars["close"].iloc[-1])}
+            if asked:
+                out["touched_at"] = None
+            return out
+        out = {
             "symbol": sym,
             "interval": iv,
             "bars": int(len(window)),
@@ -1267,6 +1289,10 @@ class TradingService:
             "low": _num(window["low"].min()),
             "last": _num(window["close"].iloc[-1]),
         }
+        if asked:
+            hit = (window["high"] >= touch) if str(side).upper() == "SHORT" else (window["low"] <= touch)
+            out["touched_at"] = window.index[hit.to_numpy()][0].isoformat() if hit.any() else None
+        return out
 
     _RANGE_LOCK = threading.Lock()
 
@@ -1693,16 +1719,21 @@ class TradingService:
         the answer -- only ever in the trade's favour -- and notifies when
         it moved. The bars are the same closed daily bars the model reads.
         """
-        from agent5.trail import trailing_stop, trend_state
+        from agent5.trail import next_trail_step, trailing_stop, trend_state
         sym, iv = self._pair(symbol, interval)
         bars = self._bars(sym, iv)
         if bars.empty:
             return {"symbol": sym, "interval": iv, "trail": None,
                     "error": "no bars"}
         st = trailing_stop(bars, opened_at, side, initial_stop=initial_stop)
+        trail = st.to_json() if st else None
+        if st is not None:
+            # the step it is waiting on: the app shows it so "when do I get
+            # out?" has an answer between moves
+            trail["next"] = next_trail_step(bars, st)
         return {"symbol": sym, "interval": iv,
                 "last_closed_bar": bars.index[-1].isoformat(),
-                "trail": st.to_json() if st else None,
+                "trail": trail,
                 "trend": trend_state(bars) if iv in TREND_GATED else None}
 
     def smart_money(self, symbol: Optional[str] = None,

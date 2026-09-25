@@ -124,8 +124,9 @@ def test_a_fill_and_the_trades_end_are_announced_once_each():
     svc.action = "WAIT"
     state["order"].update(state="filled", fill=99.0)
     got = e.refresh()
-    assert len(got) == 1 and "order filled" in got[0].title, [a.title for a in got]
-    assert "Filled at 99.00" in got[0].body and "Take profit 104.00" in got[0].body
+    assert len(got) == 1 and "limit filled" in got[0].title, [a.title for a in got]
+    assert "limit filled at 99.00" in got[0].title, got[0].title
+    assert "log it on the coin page with LIMIT" in got[0].body and "Take profit 104.00" in got[0].body
     assert got[0].strength == "strong"
     assert e.refresh() == []                                   # still filled: silence
     svc.action = "FLAT"
@@ -158,7 +159,7 @@ def test_the_order_state_survives_a_restart():
     svc.action = "WAIT"
     state["order"].update(state="filled", fill=99.0)
     got = fresh.refresh()
-    assert any("order filled" in a.title for a in got), [a.title for a in got]
+    assert any("limit filled" in a.title for a in got), [a.title for a in got]
     return True
 
 
@@ -277,6 +278,22 @@ def test_the_range_since_an_entry_reads_only_its_months():
         assert got["last"] == float(want["close"].iloc[-1]) and got["bars"] == len(want)
         assert part.index.min() >= pd.Timestamp("2026-08-01", tz="UTC")      # July never read
         assert list(part.columns) == ["high", "low", "close"]
+
+        # A LOGGED LIMIT ORDER: the first minute price reached it, within the
+        # time it was good for -- and None when it never did
+        until = "2026-08-25T00:00:00Z"
+        w = want[want.index < pd.Timestamp(until) + pd.Timedelta(minutes=1)]
+        lvl = float(w["low"].iloc[len(w) // 2])
+        got = svc.price_range("TESTUSDT", "1m", since, until=until, touch=lvl, side="LONG")
+        first = w.index[(w["low"] <= lvl).to_numpy()][0]
+        assert got["touched_at"] == first.isoformat(), (got, first)
+        assert got["high"] == float(w["high"].max()) and got["bars"] == len(w)
+        hi = float(w["high"].max()) + 50
+        assert svc.price_range("TESTUSDT", "1m", since, until=until, touch=hi,
+                               side="LONG")["touched_at"] == w.index[0].isoformat()
+        assert svc.price_range("TESTUSDT", "1m", since, until=until, touch=hi,
+                               side="SHORT")["touched_at"] is None
+        assert "touched_at" not in svc.price_range("TESTUSDT", "1m", since)
     finally:
         livefeed.BarStore = real
     return True

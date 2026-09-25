@@ -713,11 +713,13 @@ class AlertEngine:
 
         part = _part(order.get("scale_part"))
         if what == "partial":
+            # only phones with an entry on this coin and timeframe get this
+            # (api/push.py MANAGED_ORDER_STEPS), so it can speak to the trade
             sp = order.get("scale_price")
             title = f"{sym}: {iv}; halfway, take {part} off"
-            lines = [f"Take {part} off at {_price_text(sp)}{pct(sp)}.",
-                     f"Move the stop on the rest to your entry {_price_text(fill)}.",
-                     "The trade can no longer lose.",
+            lines = [f"Price reached {_price_text(sp)}{pct(sp)}, halfway to the target.",
+                     f"Take {part} off, and move the stop on the rest to your entry.",
+                     f"In Vanth: tap \u201cTake the third\u201d on the entry.",
                      f"Take profit {_price_text(order.get('target'))} for the rest"]
             return Alert(
                 id=_hash("order", sym, iv, what, str(order.get("placed_at"))),
@@ -728,13 +730,18 @@ class AlertEngine:
                 extra={"bar": d["last_closed_bar"], "window_ends": str(rec.get("window_ends", "")),
                        "from": rec.get("action"), "to": rec.get("action"), "order": what})
         if what == "filled":
-            title = f"{sym}: {iv}; {word.lower()} order filled"
-            lines = [f"Filled at {_price_text(fill)}. In the trade.",
-                     (f"Halfway {_price_text(order.get('scale_price'))}: take {part} off, stop to entry"
+            # THE CALL'S limit order was reached. Whoever placed it is now in
+            # the trade; the lines say what to set, in the order it is set.
+            title = f"{sym}: {iv}; {word.lower()} limit filled at {_price_text(fill)}"
+            lines = [f"The call's {word.lower()} limit was reached. If you placed it, you are in: "
+                     f"log it on the coin page with LIMIT.",
+                     (f"Halfway {_price_text(order.get('scale_price'))}: take {part} off, "
+                      f"then move the stop to your entry"
                       if order.get("scale_price") else ""),
                      f"Take profit {_price_text(order.get('target'))}",
                      f"Stop loss {_price_text(order.get('stop'))}",
-                     f"Closes by {_hhmm(order.get('hold_until'))}" if order.get("hold_until") else ""]
+                     (f"Time limit {_hhmm(order.get('hold_until'))}: close at the market "
+                      f"if neither level is reached" if order.get("hold_until") else "")]
             return Alert(
                 id=_hash("order", sym, iv, what, str(order.get("placed_at"))),
                 kind="signal", severity="high", symbol=sym, interval=iv,

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import pandas as pd
 
-from agent5.trail import trailing_stop, trend_ok, trend_state
+from agent5.trail import next_trail_step, trailing_stop, trend_ok, trend_state
 from core import barriers_for, geometry_for, slot_side
 from tests.synthetic import make_bars
 
@@ -117,3 +117,47 @@ def test_the_trail_json_is_what_the_app_reads():
     assert j["swings"][0] == j["initial_stop"] and j["swings"][-1] == j["stop"]
     assert (j["moved_at"] is None) == (j["moves"] == 0)
     return True
+
+
+def test_the_next_step_is_the_swing_the_trail_is_waiting_for():
+    """What the app promises between moves: "the stop moves to X at T, if no
+    daily low goes below X before then". Walk the clock: every forming step
+    that was not traded through by T is a stop the trail took by T."""
+    bars = _daily(700, seed=4)
+    for side in ("LONG", "SHORT"):
+        long = side == "LONG"
+        i0, kept, seen, void = 150, 0, 0, 0
+        for k in range(i0 + 10, len(bars) - 5):
+            st = trailing_stop(bars.iloc[:k], bars.index[i0], side)
+            nx = next_trail_step(bars.iloc[:k], st)
+            if nx is None:
+                continue
+            seen += 1
+            assert (st.stop < nx["stop"]) if long else (nx["stop"] < st.stop), (side, k)
+            at = pd.Timestamp(nx["at"])
+            ahead = bars[(bars.index > bars.index[k - 1]) & (bars.index <= at)]
+            broke = (ahead["low"] < nx["stop"]).any() if long else (ahead["high"] > nx["stop"]).any()
+            if broke:
+                void += 1
+                continue
+            later = trailing_stop(bars[bars.index <= at], bars.index[i0], side)
+            assert any(abs(x - nx["stop"]) < 1e-9 for x in later.swings), (side, k, nx, later.swings)
+            kept += 1
+        assert seen > 10 and kept > 0, (side, seen, kept, void)
+    return True
+
+
+def test_no_step_is_promised_beyond_the_price():
+    """A swing above the last close (below it, for a short) is not a stop
+    the trail would take: it must not be promised."""
+    bars = _daily(400, seed=2)
+    for k in range(120, 400, 7):
+        b = bars.iloc[:k]
+        for side in ("LONG", "SHORT"):
+            st = trailing_stop(b, b.index[100], side)
+            nx = next_trail_step(b, st)
+            if nx:
+                last = float(b["close"].iloc[-1])
+                assert (nx["stop"] < last) if side == "LONG" else (nx["stop"] > last)
+    return True
+
