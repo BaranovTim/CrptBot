@@ -3238,6 +3238,20 @@ void main() {
       expect(saved.entryPrice, 100.0);
     });
 
+    testWidgets('a waiting order in Profile shows the price now and how far it is', (t) async {
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: JournalCard(
+                      entry: pending(), livePrice: 102.0, onClose: () {},
+                      onDelete: () {})))));
+      expect(find.text('NOW'), findsOneWidget);
+      expect(find.text(money(102.0)), findsOneWidget);
+      expect(find.text('${(2 / 102 * 100).toStringAsFixed(2)}% away'), findsOneWidget);
+      expect(find.text('LIMIT · WAITING'), findsOneWidget);
+      expect(find.text('Cancel order'), findsOneWidget);
+    });
+
     testWidgets('logged after it filled, it is an open trade', (t) async {
       SharedPreferences.setMockInitialValues({});
       Trades.instance.resetForTest();
@@ -3308,7 +3322,9 @@ void main() {
               body: SingleChildScrollView(
                   child: PositionCard(
                       entry: daily(next: 98, at: at), short: 'UNI', livePrice: 106)))));
-      expect(find.textContaining('no target, the stop trails'), findsOneWidget);
+      expect(find.text(signedPct(6)), findsOneWidget, reason: 'the profit, once');
+      expect(find.text('no target'), findsOneWidget);
+      expect(find.text('stop trails'), findsOneWidget);
       expect(find.textContaining('to TP'), findsNothing);
       expect(find.text('TRAILED'), findsOneWidget);
       expect(find.text('HOW THIS TRADE ENDS'), findsOneWidget);
@@ -3324,6 +3340,42 @@ void main() {
                   child: TrailPlan(entry: daily(sl: 103, moved: DateTime.utc(2026, 9, 27)))))));
       expect(find.textContaining('locks in +3.00%'), findsOneWidget);
       expect(find.textContaining('Last moved'), findsOneWidget);
+    });
+
+    testWidgets('in Profile the plan is behind the settings button, not on the card', (t) async {
+      final e = daily(next: 98, at: DateTime.now().toUtc().add(const Duration(days: 2)));
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: Builder(
+                  builder: (ctx) => SingleChildScrollView(
+                      child: JournalCard(
+                          entry: e, livePrice: 106, onClose: () {},
+                          onEdit: () => askLevels(ctx, e, livePrice: 106),
+                          onDelete: () {}))))));
+      expect(find.text('HOW THIS TRADE ENDS'), findsNothing);
+      await t.tap(find.byIcon(Icons.tune_rounded));
+      await t.pumpAndSettle();
+      expect(find.text('CHANGE THE LEVELS'), findsOneWidget);
+      expect(find.text('HOW THIS TRADE ENDS'), findsOneWidget);
+      expect(find.textContaining('Next: ${money(98)}'), findsOneWidget);
+    });
+
+    testWidgets('the bar row fits a narrow phone without running together', (t) async {
+      t.view.physicalSize = const Size(320, 800);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.reset);
+      final wide = TradeEntry(
+          id: 'w', symbol: 'BTCUSDT', side: 'LONG', size: 1, entryPrice: 84161.6,
+          openedAt: DateTime.utc(2026, 9, 24), stopLoss: 80600.123, interval: '1d');
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: JournalCard(entry: wide, livePrice: 99999.5, onDelete: () {})))));
+      // an overflow would have failed the pump; the three parts are apart
+      expect(t.takeException(), isNull);
+      expect(find.text('TRAILED'), findsOneWidget);
+      expect(find.text('no target'), findsOneWidget);
+      expect(find.text('stop trails'), findsOneWidget);
     });
 
     test('a price tick keeps the time the trail last moved the stop', () {

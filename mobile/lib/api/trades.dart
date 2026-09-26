@@ -164,6 +164,15 @@ class TradeEntry {
   final DateTime? pendingUntil;
   bool get isPending => pendingUntil != null && isOpen;
 
+  /// How far the market still has to move to fill a waiting limit, in
+  /// percent of the live price; 0 once it is at or through the limit. Null
+  /// when this is not a waiting order or the price is unknown.
+  double? toFillPct(double? live) {
+    if (!isPending || live == null || live <= 0) return null;
+    final gap = isShort ? entryPrice - live : live - entryPrice;
+    return gap <= 0 ? 0.0 : gap / live * 100.0;
+  }
+
   /// An order that expired without filling. Not a trade: no profit, not
   /// in the win rate.
   bool get unfilled => closedBy == 'unfilled';

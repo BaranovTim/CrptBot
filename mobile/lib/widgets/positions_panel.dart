@@ -178,9 +178,14 @@ class PositionCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(signedPct(pct),
+                  Text(
+                      entry.isPending
+                          ? _awayText(entry.toFillPct(livePrice))
+                          : signedPct(pct),
                       style: Obsidian.dataTable(
-                          size: 26, color: tone, w: FontWeight.w700)),
+                          size: entry.isPending ? 20 : 26,
+                          color: entry.isPending ? Obsidian.primary : tone,
+                          w: FontWeight.w700)),
                   const SizedBox(height: 2),
                   Text(
                       entry.isPending
@@ -198,7 +203,10 @@ class PositionCard extends StatelessWidget {
                 children: [
                   _kv('Entry', money(entry.entryPrice)),
                   const SizedBox(height: 3),
-                  _kv(entry.isOpen ? 'Now' : 'Exit', money(mark)),
+                  // a waiting order has no profit, but the price it is
+                  // waiting on is exactly what you want to see
+                  _kv(entry.isOpen ? 'Now' : 'Exit',
+                      money(entry.isPending ? livePrice : mark)),
                 ],
               ),
             ],
@@ -390,6 +398,13 @@ Future<double?> askExitPrice(BuildContext context, TradeEntry t,
   final cost = rest.entryPrice * (rest.size + taken.size);
   final sum = a + b;
   return (abs: sum, pct: cost <= 0 ? null : sum / cost * 100.0);
+}
+
+/// "1.24% away" / "at the limit" / "—": a waiting order's distance.
+String _awayText(double? pct) {
+  if (pct == null) return '—';
+  if (pct <= 0) return 'at the limit';
+  return '${pct.toStringAsFixed(2)}% away';
 }
 
 String _utcText(DateTime t) {
@@ -713,9 +728,12 @@ class _LevelsSheetState extends State<_LevelsSheet> {
     final tone = e.isShort ? Obsidian.red : Obsidian.green;
     final bottom = MediaQuery.of(context).viewInsets.bottom;
 
+    // scrolls: with the daily plan above the fields and the keyboard up,
+    // a small phone runs out of height
     return SafeArea(
       top: false,
-      child: Padding(
+      child: SingleChildScrollView(
+       child: Padding(
         padding: EdgeInsets.fromLTRB(Obsidian.containerPadding, 0,
             Obsidian.containerPadding, Obsidian.containerPadding + bottom),
         child: GlassPanel(
@@ -759,6 +777,12 @@ class _LevelsSheetState extends State<_LevelsSheet> {
                   Expanded(child: _fact('Timeframe', e.interval ?? '—')),
                 ],
               ),
+              // A DAILY ENTRY'S EXIT, next to the stop that is its exit: the
+              // stop, when it moves, the next move if one is forming.
+              if (e.trailed && e.isOpen && !e.isPending) ...[
+                const SizedBox(height: 14),
+                TrailPlan(entry: e),
+              ],
               const SizedBox(height: 16),
               _field(
                 controller: _tp,
@@ -845,6 +869,7 @@ class _LevelsSheetState extends State<_LevelsSheet> {
             ],
           ),
         ),
+       ),
       ),
     );
   }
@@ -1179,16 +1204,25 @@ class JournalCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(signedPct(pct),
+                  Text(
+                      entry.isPending
+                          ? _awayText(entry.toFillPct(livePrice))
+                          : signedPct(pct),
                       style: Obsidian.dataTable(
-                          size: 13, color: tone, w: FontWeight.w700)),
+                          size: 13,
+                          color: entry.isPending ? Obsidian.primary : tone,
+                          w: FontWeight.w700)),
                   const SizedBox(height: 2),
                   Text(
-                      abs == null
-                          ? '—'
-                          : '${abs >= 0 ? '+' : ''}${money(abs, dp: 2)}',
+                      entry.isPending
+                          ? 'to the limit'
+                          : abs == null
+                              ? '—'
+                              : '${abs >= 0 ? '+' : ''}${money(abs, dp: 2)}',
                       style: Obsidian.dataTable(
-                          size: 11.5, color: tone, w: FontWeight.w600)),
+                          size: 11.5,
+                          color: entry.isPending ? Obsidian.outline : tone,
+                          w: FontWeight.w600)),
                 ],
               ),
             ],
@@ -1204,8 +1238,10 @@ class JournalCard extends StatelessWidget {
               // things you already knew and nothing about where price
               // actually is.
               Expanded(
-                  child: _level(entry.isOpen ? 'NOW' : 'EXIT',
-                      entry.markPrice(livePrice), tone)),
+                  child: _level(
+                      entry.isOpen ? 'NOW' : 'EXIT',
+                      entry.isPending ? livePrice : entry.markPrice(livePrice),
+                      entry.isPending ? Obsidian.onSurface : tone)),
               Expanded(
                   child: _level('TAKE PROFIT', entry.takeProfit,
                       Obsidian.green)),
@@ -1228,10 +1264,9 @@ class JournalCard extends StatelessWidget {
             const SizedBox(height: 10),
             TakenPartLine(rest: entry, taken: taken!),
           ],
-          if (entry.trailed && entry.isOpen && !entry.isPending) ...[
-            const SizedBox(height: 10),
-            TrailPlan(entry: entry),
-          ],
+          // "How this trade ends" is not drawn here: on a list of entries it
+          // was a paragraph under every daily card. It is in the sheet the
+          // settings button opens (`askLevels`), beside the stop it explains.
           if (onTakeThird != null && entry.canTakeThird) ...[
             const SizedBox(height: 10),
             TakeThirdButton(entry: entry, onTap: onTakeThird!),
@@ -1472,14 +1507,18 @@ class BarrierBar extends StatelessWidget {
     // to TP" on every daily entry that had gone as far up as its stop was
     // down, with no target anywhere.
     final noTarget = entry.takeProfit == null && entry.trailed;
-    final move = entry.pnlPct(livePrice);
+    // the profit is already the big number on the card: the caption says
+    // where price sits between the levels instead
     final caption = pct == null
         ? '\u2014'
         : pos! < 0
             ? '$pct% to SL'
             : noTarget
-                ? '${signedPct(move)} · no target, the stop trails'
+                ? 'no target'
                 : '$pct% to TP';
+    // the second line under the caption: the clock, or on a daily entry
+    // what stands in for a target
+    final under = noTarget ? 'stop trails' : timeLeft;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1525,25 +1564,39 @@ class BarrierBar extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 4),
+        // THREE COLUMNS THAT CANNOT RUN INTO EACH OTHER: the ends keep
+        // their width and the middle takes what is left, centred, on up to
+        // two lines of its own. With two Spacers the middle had no width
+        // of its own, and on a narrow card "SL $X", the caption and the
+        // right-hand label ran together into one line.
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               entry.stopLoss == null ? 'SL \u2014' : 'SL ${priceText(entry.stopLoss)}',
               style: Obsidian.dataTable(size: 9.5, color: Obsidian.red),
             ),
-            const Spacer(),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(caption,
-                    style: Obsidian.dataTable(size: 10, color: tone)),
-                if (timeLeft != null)
-                  Text(timeLeft,
-                      style: Obsidian.dataTable(
-                          size: 9, color: Obsidian.outline)),
-              ],
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Column(
+                  children: [
+                    Text(caption,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Obsidian.dataTable(size: 10, color: tone)),
+                    if (under != null)
+                      Text(under,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Obsidian.dataTable(
+                              size: 9, color: Obsidian.outline)),
+                  ],
+                ),
+              ),
             ),
-            const Spacer(),
             Text(
               entry.takeProfit == null
                   ? (noTarget ? 'TRAILED' : 'TP \u2014')
