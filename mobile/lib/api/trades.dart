@@ -211,6 +211,36 @@ class TradeEntry {
     return isShort ? ext <= h : ext >= h;
   }
 
+  /// Halfway reached, by the furthest price since the entry or by the price
+  /// now. The button waits for this: a third comes off at halfway.
+  bool reachedHalfwayAt(double? live) {
+    if (reachedHalfway) return true;
+    final h = halfwayPrice;
+    if (h == null || live == null) return false;
+    return isShort ? live <= h : live >= h;
+  }
+
+  /// Is `price` on the winning side of the entry? A third "taken" anywhere
+  /// else is not the scale-out, it is a loss with the stop then moved to an
+  /// entry the price is already past -- which closed the rest at once.
+  bool inProfitAt(double price) =>
+      isShort ? price < entryPrice : price > entryPrice;
+
+  /// THE SPLIT, UNDONE: the rest with the third put back -- the whole size,
+  /// the stop it had before the split (the taken part kept it), open again,
+  /// and no group. Its levels are then judged against the whole history
+  /// since the entry again, so a stop or target reached meanwhile still
+  /// closes it where it would have.
+  TradeEntry mergedWith(TradeEntry taken) => _with(
+        size: size + taken.size,
+        stopLoss: taken.stopLoss,
+        stopMovedAt: taken.stopMovedAt,
+        groupId: null,
+        closedAt: null,
+        closePrice: null,
+        closedBy: '',
+      );
+
   /// THE NEXT STEP OF A DAILY TRAIL, from the server: the swing low (high,
   /// for a short) the stop moves up to at `nextStopAt` if price does not
   /// trade below it before then. Null when no such swing is forming.
@@ -1049,12 +1079,26 @@ class Trades extends ChangeNotifier {
     if (!price.isFinite || price <= 0) return null;
     final all = List<TradeEntry>.from(await load());
     final i = all.indexWhere((t) => t.id == id);
-    if (i < 0 || !all[i].canTakeThird) return null;
+    if (i < 0 || !all[i].canTakeThird || !all[i].inProfitAt(price)) return null;
     final parts = all[i].splitThird(price);
     all[i] = parts.rest;
     all.add(parts.taken);
     await _save(all);
     return parts;
+  }
+
+  /// Undo "Take the third": the two parts become the one entry they were.
+  /// Returns it, or null when the group is not a split with both parts.
+  Future<TradeEntry?> undoThird(String groupId) async {
+    final all = List<TradeEntry>.from(await load());
+    final ri = all.indexWhere((t) => t.groupId == groupId && t.isRestPart);
+    final ti = all.indexWhere((t) => t.groupId == groupId && t.isTakenPart);
+    if (ri < 0 || ti < 0) return null;
+    final merged = all[ri].mergedWith(all[ti]);
+    all[ri] = merged;
+    all.removeAt(ti);
+    await _save(all);
+    return merged;
   }
 
   /// Move every open trailed entry's stop to where the server's trail puts

@@ -3087,6 +3087,101 @@ void main() {
           reason: 'already taken');
     });
 
+    // BNB, 2026-09-27: a short at 775.9537, halfway 771.49, price at 780.265
+    // against it. The button took "a third" there -- a loss -- and moved the
+    // stop to an entry the price was already past, closing the rest at once.
+    TradeEntry bnb() => TradeEntry(
+        id: 'bnb', symbol: 'BNBUSDT', side: 'SHORT', size: 0.128874,
+        entryPrice: 775.9537, openedAt: DateTime.utc(2026, 9, 27, 8),
+        takeProfit: 767.03, stopLoss: 786.5873, interval: '4h',
+        highSince: 780.4, lowSince: 775.9537);
+
+    test('a third is never taken on the losing side of the entry', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(bnb());
+      expect(bnb().reachedHalfwayAt(780.265), isFalse);
+      expect(await Trades.instance.takeThird('bnb', price: 780.265), isNull);
+      expect(await Trades.instance.takeThird('bnb', price: 775.9537), isNull,
+          reason: 'at the entry is not in profit either');
+      final left = await Trades.instance.load();
+      expect(left.single.isOpen, isTrue);
+      expect(left.single.stopLoss, 786.5873);
+      expect(left.single.groupId, isNull);
+    });
+
+    testWidgets('before halfway the button waits; the dialog refuses a losing price', (t) async {
+      var tapped = false;
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: PositionCard(
+                      entry: bnb(), short: 'BNB', livePrice: 780.265,
+                      onTakeThird: () => tapped = true)))));
+      expect(find.textContaining('halfway, not reached yet'), findsOneWidget);
+      await t.tap(find.textContaining('Take the third'));
+      expect(tapped, isFalse);
+
+      double? got = -1;
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: Builder(
+                  builder: (ctx) => TextButton(
+                      onPressed: () async =>
+                          got = await askTakeThird(ctx, bnb(), livePrice: 780.265),
+                      child: const Text('open'))))));
+      await t.tap(find.text('open'));
+      await t.pumpAndSettle();
+      // prefilled with halfway, not with the losing live price
+      expect(t.widget<TextField>(find.byType(TextField)).controller!.text,
+          priceInput(bnb().halfwayPrice));
+      await t.enterText(find.byType(TextField), '780.265');
+      await t.tap(find.text('Take it'));
+      await t.pumpAndSettle();
+      expect(find.textContaining('A third comes off in profit'), findsOneWidget);
+      expect(got, -1, reason: 'still open, nothing returned');
+      await t.enterText(find.byType(TextField), '771.49');
+      await t.tap(find.text('Take it'));
+      await t.pumpAndSettle();
+      expect(got, 771.49);
+    });
+
+    test('undo puts the third back: one open entry, its old stop', () async {
+      SharedPreferences.setMockInitialValues({});
+      Trades.instance.resetForTest();
+      await Trades.instance.add(h4());
+      await Trades.instance.takeThird('e1', price: 105);
+      // the rest then closed at its stop, the entry
+      final rest = (await Trades.instance.load()).firstWhere((t) => t.isOpen);
+      await Trades.instance.autoClose(rest.id, 'stop_loss');
+      final back = await Trades.instance.undoThird('e1');
+      expect(back, isNotNull);
+      final all = await Trades.instance.load();
+      expect(all, hasLength(1));
+      final e = all.single;
+      expect(e.id, 'e1');
+      expect(e.isOpen, isTrue);
+      expect(e.size, closeTo(3, 1e-12));
+      expect(e.stopLoss, 95, reason: 'the stop from before the split');
+      expect(e.groupId, isNull);
+      expect(e.closedBy, '');
+      expect(e.canTakeThird, isTrue);
+      expect(await Trades.instance.undoThird('e1'), isNull);
+    });
+
+    testWidgets('the split card offers the undo', (t) async {
+      final p = h4().splitThird(105);
+      var undone = false;
+      await t.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: SingleChildScrollView(
+                  child: JournalCard(
+                      entry: p.rest, livePrice: 104, taken: p.taken,
+                      onUndoThird: () => undone = true)))));
+      await t.tap(find.text('Undo take the third'));
+      expect(undone, isTrue);
+    });
+
     testWidgets('the button lights up once halfway is reached', (t) async {
       final e = h4().withExtremes(high: 106, low: 99);
       var tapped = false;

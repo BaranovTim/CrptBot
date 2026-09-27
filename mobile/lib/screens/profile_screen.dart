@@ -292,6 +292,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await _loadTrades();
   }
 
+  /// Undo "Take the third" on a split trade: one entry again.
+  Future<void> _undoThird(TradeEntry rest, TradeEntry? taken) async {
+    if (rest.groupId == null) return;
+    if (!await confirmUndoThird(context, rest, taken)) return;
+    await Trades.instance.undoThird(rest.groupId!);
+    await _loadTrades();
+  }
+
   Future<void> _closeTrade(TradeEntry t) async {
     if (t.isPending) {
       await Trades.instance.cancelOrder(t.id);
@@ -1439,6 +1447,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onClose: t.isOpen ? () => _closeTrade(t) : null,
             onEdit: t.isOpen && !t.isPending ? () => _editTrade(t) : null,
             onTakeThird: t.canTakeThird ? () => _takeThird(t) : null,
+            onUndoThird: t.isRestPart && takenBy[t.groupId] != null
+                ? () => _undoThird(t, takenBy[t.groupId])
+                : null,
             onDelete: () => _deleteTrade(t),
             onOpen: widget.onOpenSymbol == null
                 ? null

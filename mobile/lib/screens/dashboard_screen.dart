@@ -518,6 +518,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await _loadPositions();
   }
 
+  Future<void> _undoThird(TradeEntry t) async {
+    if (t.groupId == null) return;
+    if (!await confirmUndoThird(context, t, _taken[t.groupId])) return;
+    await Trades.instance.undoThird(t.groupId!);
+    await _loadPositions();
+  }
+
   Future<void> _editPosition(TradeEntry t) async {
     final r = await askLevels(context, t, livePrice: _livePrice);
     if (r == null) return;
@@ -721,6 +728,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onClose: _closePosition,
               onEdit: _editPosition,
               onTakeThird: _takeThird,
+              onUndoThird: _undoThird,
             ),
             const SizedBox(height: Obsidian.gutter),
           ],

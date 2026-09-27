@@ -41,6 +41,7 @@ class PositionsPanel extends StatelessWidget {
     this.onClose,
     this.onEdit,
     this.onTakeThird,
+    this.onUndoThird,
   });
 
   final List<TradeEntry> entries;
@@ -52,6 +53,7 @@ class PositionsPanel extends StatelessWidget {
   final void Function(TradeEntry)? onClose;
   final void Function(TradeEntry)? onEdit;
   final void Function(TradeEntry)? onTakeThird;
+  final void Function(TradeEntry)? onUndoThird;
 
   @override
   Widget build(BuildContext context) {
@@ -84,7 +86,8 @@ class PositionsPanel extends StatelessWidget {
               taken: t.groupId == null ? null : taken[t.groupId],
               onClose: onClose == null ? null : () => onClose!(t),
               onEdit: onEdit == null ? null : () => onEdit!(t),
-              onTakeThird: onTakeThird == null ? null : () => onTakeThird!(t)),
+              onTakeThird: onTakeThird == null ? null : () => onTakeThird!(t),
+              onUndoThird: onUndoThird == null ? null : () => onUndoThird!(t)),
           const SizedBox(height: Obsidian.panelGap),
         ],
       ],
@@ -102,6 +105,7 @@ class PositionCard extends StatelessWidget {
     this.onClose,
     this.onEdit,
     this.onTakeThird,
+    this.onUndoThird,
     this.showSymbol = false,
   });
 
@@ -114,6 +118,7 @@ class PositionCard extends StatelessWidget {
   final VoidCallback? onClose;
   final VoidCallback? onEdit;
   final VoidCallback? onTakeThird;
+  final VoidCallback? onUndoThird;
   final bool showSymbol;
 
   @override
@@ -217,7 +222,7 @@ class PositionCard extends StatelessWidget {
           ],
           if (taken != null) ...[
             const SizedBox(height: 10),
-            TakenPartLine(rest: entry, taken: taken!),
+            TakenPartLine(rest: entry, taken: taken!, onUndo: onUndoThird),
           ],
           if (entry.takeProfit != null || entry.stopLoss != null || onEdit != null) ...[
             const SizedBox(height: 14),
@@ -276,7 +281,8 @@ class PositionCard extends StatelessWidget {
           ],
           if (onTakeThird != null && entry.canTakeThird) ...[
             const SizedBox(height: 12),
-            TakeThirdButton(entry: entry, onTap: onTakeThird!),
+            TakeThirdButton(
+                entry: entry, onTap: onTakeThird!, livePrice: livePrice),
           ],
           if (onClose != null) ...[
             const SizedBox(height: 12),
@@ -433,8 +439,12 @@ class PendingLine extends StatelessWidget {
 
 /// The third that came off, under the rest of the position.
 class TakenPartLine extends StatelessWidget {
-  const TakenPartLine({super.key, required this.rest, required this.taken});
+  const TakenPartLine(
+      {super.key, required this.rest, required this.taken, this.onUndo});
   final TradeEntry rest, taken;
+
+  /// Put the third back: the split was a mistake.
+  final VoidCallback? onUndo;
 
   @override
   Widget build(BuildContext context) {
@@ -442,7 +452,7 @@ class TakenPartLine extends StatelessWidget {
     final c = (p ?? 0) >= 0 ? Obsidian.green : Obsidian.red;
     final restAtEntry = rest.stopLoss != null &&
         (rest.stopLoss! - rest.entryPrice).abs() <= rest.entryPrice * 1e-9;
-    return _note(
+    final note = _note(
       Icons.call_split_rounded,
       c,
       'A third (${TradeRow.trim(taken.size)} ${TradeRow.short(taken.symbol)}) '
@@ -451,6 +461,23 @@ class TakenPartLine extends StatelessWidget {
       '${pct == null ? '' : ' (${signedPct(pct)})'}. '
       '${rest.isOpen ? 'The rest, ${TradeRow.trim(rest.size)}, runs to the target'
           '${restAtEntry ? ' with its stop at the entry, so it can no longer lose' : ''}.' : 'The rest closed at ${money(rest.closePrice)}.'}',
+    );
+    if (onUndo == null) return note;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        note,
+        TextButton.icon(
+          style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 30),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          onPressed: onUndo,
+          icon: const Icon(Icons.undo_rounded, size: 14, color: Obsidian.outline),
+          label: Text('Undo take the third',
+              style: Obsidian.body(color: Obsidian.outline, size: 11.5)),
+        ),
+      ],
     );
   }
 }
@@ -508,17 +535,23 @@ class TrailPlan extends StatelessWidget {
 
 /// "Take the third". Lit up once price has been halfway to the target.
 class TakeThirdButton extends StatelessWidget {
-  const TakeThirdButton({super.key, required this.entry, required this.onTap});
+  const TakeThirdButton(
+      {super.key, required this.entry, required this.onTap, this.livePrice});
   final TradeEntry entry;
   final VoidCallback onTap;
+  final double? livePrice;
 
   @override
   Widget build(BuildContext context) {
     final h = entry.halfwayPrice;
-    final hit = entry.reachedHalfway;
+    // NOT BEFORE HALFWAY. It used to be pressable at any price, and a third
+    // "taken" on the losing side of the entry, with the stop then moved to
+    // an entry the price was already past, closed the rest at once and
+    // turned a running trade into a recorded loss (BNB, 2026-09-27).
+    final hit = entry.reachedHalfwayAt(livePrice);
     final label = hit
         ? 'Take the third — halfway ${money(h)} reached'
-        : 'Take the third · halfway is ${money(h)}';
+        : 'Take the third at ${money(h)} · halfway, not reached yet';
     final shape = RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(Obsidian.rMd));
     return SizedBox(
@@ -536,13 +569,13 @@ class TakeThirdButton extends StatelessWidget {
                   style: Obsidian.labelSm(color: Colors.black, size: 11.5)))
           : OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Obsidian.green.withValues(alpha: 0.4)),
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.10)),
                   shape: shape),
-              onPressed: onTap,
+              onPressed: null,
               icon: const Icon(Icons.call_split_rounded,
-                  size: 16, color: Obsidian.green),
+                  size: 16, color: Obsidian.outline),
               label: Text(label,
-                  style: Obsidian.labelSm(color: Obsidian.green, size: 11.5))),
+                  style: Obsidian.labelSm(color: Obsidian.outline, size: 11))),
     );
   }
 }
@@ -552,54 +585,111 @@ class TakeThirdButton extends StatelessWidget {
 /// price; editable, because the fill is the exchange's, not ours.
 Future<double?> askTakeThird(BuildContext context, TradeEntry t,
     {double? livePrice}) {
-  final start = t.reachedHalfway ? t.halfwayPrice : (livePrice ?? t.halfwayPrice);
+  // the halfway price once price has been there -- where the order for the
+  // third sits -- else the live price, if that is in profit
+  final start = t.reachedHalfway || livePrice == null || !t.inProfitAt(livePrice)
+      ? t.halfwayPrice
+      : livePrice;
   final c = TextEditingController(text: priceInput(start));
   final third = t.size / 3, rest = t.size - third;
   final sym = TradeRow.short(t.symbol);
+  String? problem;
   return showDialog<double>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => AlertDialog(
+        backgroundColor: Obsidian.surfaceContainer,
+        title: Text('Take the third', style: Obsidian.headlineMd()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+                'Closes a third (${TradeRow.trim(third)} $sym) at the price below '
+                'and keeps ${TradeRow.trim(rest)} $sym open, with the stop moved '
+                'to your entry ${money(t.entryPrice)} — from there the rest can '
+                'no longer lose. The target stays ${money(t.takeProfit)}.',
+                style: Obsidian.body(color: Obsidian.onSurfaceVariant, size: 12)),
+            const SizedBox(height: 8),
+            Text(
+                'Do the same on your exchange: ${t.isShort ? 'buy back' : 'sell'} '
+                'a third and move the stop. Vanth places nothing. The two parts '
+                'stay together in Profile as one trade.',
+                style: Obsidian.body(color: Obsidian.outline, size: 11)),
+            const SizedBox(height: 12),
+            Text('PRICE THE THIRD CAME OFF AT',
+                style: Obsidian.labelSm(color: Obsidian.outline, size: 9.5)),
+            TextField(
+              controller: c,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: Obsidian.dataTable(size: 16),
+              onChanged: (_) => setState(() => problem = null),
+            ),
+            if (problem != null) ...[
+              const SizedBox(height: 8),
+              Text(problem!,
+                  style: Obsidian.body(color: Obsidian.error, size: 11.5)),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('Cancel', style: Obsidian.body())),
+          TextButton(
+              onPressed: () {
+                final v = double.tryParse(c.text.replaceAll(',', ''));
+                if (v == null || v <= 0) {
+                  setState(() => problem = 'That is not a price.');
+                  return;
+                }
+                // a third comes off IN PROFIT: anywhere else it is a loss,
+                // and the stop at the entry would already be behind the price
+                if (!t.inProfitAt(v)) {
+                  setState(() => problem =
+                      'A third comes off in profit: ${t.isShort ? 'below' : 'above'} '
+                      'your entry ${money(t.entryPrice)} on a '
+                      '${t.isShort ? 'short' : 'long'}. Halfway is '
+                      '${money(t.halfwayPrice)}.');
+                  return;
+                }
+                Navigator.of(ctx).pop(v);
+              },
+              child: Text('Take it',
+                  style: Obsidian.body(color: Obsidian.green))),
+        ],
+      ),
+    ),
+  );
+}
+
+/// "Put the third back?" -- the confirmation before `Trades.undoThird`.
+Future<bool> confirmUndoThird(BuildContext context, TradeEntry rest,
+    TradeEntry? taken) async {
+  final stop = taken?.stopLoss;
+  final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
       backgroundColor: Obsidian.surfaceContainer,
-      title: Text('Take the third', style: Obsidian.headlineMd()),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-              'Closes a third (${TradeRow.trim(third)} $sym) at the price below '
-              'and keeps ${TradeRow.trim(rest)} $sym open, with the stop moved '
-              'to your entry ${money(t.entryPrice)} — from there the rest can '
-              'no longer lose. The target stays ${money(t.takeProfit)}.',
-              style: Obsidian.body(color: Obsidian.onSurfaceVariant, size: 12)),
-          const SizedBox(height: 8),
-          Text(
-              'Do the same on your exchange: ${t.isShort ? 'buy back' : 'sell'} '
-              'a third and move the stop. Vanth places nothing. The two parts '
-              'stay together in Profile as one trade.',
-              style: Obsidian.body(color: Obsidian.outline, size: 11)),
-          const SizedBox(height: 12),
-          Text('PRICE THE THIRD CAME OFF AT',
-              style: Obsidian.labelSm(color: Obsidian.outline, size: 9.5)),
-          TextField(
-            controller: c,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            style: Obsidian.dataTable(size: 16),
-          ),
-        ],
-      ),
+      title: Text('Undo take the third?', style: Obsidian.headlineMd()),
+      content: Text(
+          'The two parts become one entry again: the whole size, open, with '
+          'the stop it had before${stop == null ? '' : ' (${money(stop)})'}. '
+          'If price has reached that stop or the target since your entry, the '
+          'log closes it there on its next check.',
+          style: Obsidian.body(color: Obsidian.onSurfaceVariant, size: 12)),
       actions: [
         TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('Cancel', style: Obsidian.body())),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Keep it', style: Obsidian.body())),
         TextButton(
-            onPressed: () => Navigator.of(ctx)
-                .pop(double.tryParse(c.text.replaceAll(',', ''))),
-            child: Text('Take it',
-                style: Obsidian.body(color: Obsidian.green))),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Undo', style: Obsidian.body(color: Obsidian.primary))),
       ],
     ),
   );
+  return ok == true;
 }
 
 Widget _note(IconData icon, Color c, String text) => Container(
@@ -1113,11 +1203,12 @@ class JournalCard extends StatelessWidget {
     this.onEdit,
     this.taken,
     this.onTakeThird,
+    this.onUndoThird,
   });
 
   final TradeEntry entry;
   final double? livePrice;
-  final VoidCallback? onClose, onDelete, onEdit, onTakeThird;
+  final VoidCallback? onClose, onDelete, onEdit, onTakeThird, onUndoThird;
 
   /// THE OTHER HALF OF A SPLIT TRADE: the third taken off. The card then
   /// stands for the whole trade -- its profit is both parts together -- so
@@ -1262,14 +1353,15 @@ class JournalCard extends StatelessWidget {
           ],
           if (taken != null) ...[
             const SizedBox(height: 10),
-            TakenPartLine(rest: entry, taken: taken!),
+            TakenPartLine(rest: entry, taken: taken!, onUndo: onUndoThird),
           ],
           // "How this trade ends" is not drawn here: on a list of entries it
           // was a paragraph under every daily card. It is in the sheet the
           // settings button opens (`askLevels`), beside the stop it explains.
           if (onTakeThird != null && entry.canTakeThird) ...[
             const SizedBox(height: 10),
-            TakeThirdButton(entry: entry, onTap: onTakeThird!),
+            TakeThirdButton(
+                entry: entry, onTap: onTakeThird!, livePrice: livePrice),
           ],
           if (onClose != null || onDelete != null) ...[
             const SizedBox(height: 11),
